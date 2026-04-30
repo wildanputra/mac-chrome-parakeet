@@ -147,7 +147,7 @@ The deferred-VPIO-engagement design below (under "Edge case") is an audio-qualit
 
 - `AudioRecorder` becomes a thin client. On `start()` it subscribes with `wantsVPIO: false` and stores the token. The handler writes to `audioFile` and updates `atomicAudioLevel`. On `stop()` it unsubscribes. The current ephemeral-engine pattern goes away — engine lifetime is the shared stream's concern.
 - `MicrophoneCapture` becomes a thin client. On `start()` it subscribes with `wantsVPIO: true` and stores the token. The handler does what the current tap callback does (delegates to the meeting's `bufferHandler`, marks first buffer, runs the watchdog). On `stop()` it unsubscribes. The current ephemeral-engine pattern goes away.
-- Buffer fan-out: `SharedMicrophoneStream`'s tap callback iterates subscribers and dispatches. Each subscriber gets its own buffer copy (or, if buffers are immutable post-tap, the same reference). Confirm immutability before deciding.
+- Buffer fan-out: `SharedMicrophoneStream`'s tap callback iterates subscribers and dispatches a shared reference. The consumer contract is: **the buffer is valid only for the duration of the synchronous handler call; if a subscriber needs to retain or mutate it, copy first.** This sidesteps any question of whether `AVAudioPCMBuffer` memory is reused by the engine post-callback. Today's `AudioRecorder.audioFile.write(from:)` is synchronous and obeys this trivially; the meeting consumer needs to obey the same rule, copying before any cross-thread hand-off.
 
 ### VPIO arbitration
 
