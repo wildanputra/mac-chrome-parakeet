@@ -19,13 +19,13 @@
 
 ## Implementation summary
 
-The committed work delivers the architecture described below, enabled by default through `AppFeatures.useSharedMicEngine = true` on the PR branch:
+The committed work delivers the architecture described below as the only microphone-capture path:
 
 - `Sources/MacParakeetCore/Audio/SharedMicrophoneStream.swift` — one mic engine per process, fan-out to N subscribers, sticky VPIO with deferred engagement, `onEngineDeath` callback for promotion failures that invalidates dead-engine subscriptions, and bounded render-thread fan-out.
 - `Sources/MacParakeetCore/Audio/MicrophoneEnginePlatform.swift` — `AVAudioEngineMicrophonePlatform` adapter with optional `DeviceAttemptsBuilder` (selected→default→builtIn fallback chain, recreates engine per failed attempt, same shape as the legacy code).
-- `Sources/MacParakeetCore/Audio/MicrophoneCapture.swift` — accepts optional `sharedStream:` + `permissionProvider:`. When non-nil, `start()` (now `async`) subscribes with `wantsVPIO` derived from processing mode; vpioPreferred→raw fallback retried at this layer. Sync `stop()` does fire-and-forget unsubscribe so deinit cleanup still works.
-- `Sources/MacParakeetCore/Audio/AudioRecorder.swift` — same shape: optional `sharedStream:`, `start()` becomes async, tap buffers are copied for async processing, `extractChannelZero(from:)` runs off the shared tap so dictation always reads the post-AEC mono regardless of VPIO state, and file writes stay off the render thread. Actor-reentrancy guard cleans up orphan tokens if `stop()` runs during the subscribe await.
-- `Sources/MacParakeet/App/AppEnvironment.swift` — constructs the singleton when the flag is on, threads it through to both `AudioProcessor` (dictation) and `MeetingAudioCaptureService` (meeting mic). The flag is now default-on; flag-off keeps the legacy private-engine paths available as a one-release rollback option.
+- `Sources/MacParakeetCore/Audio/MicrophoneCapture.swift` — requires `sharedStream:` + `permissionProvider:`. `start()` subscribes with `wantsVPIO` derived from processing mode; vpioPreferred→raw fallback is retried at this layer. Sync `stop()` does fire-and-forget unsubscribe so deinit cleanup still works.
+- `Sources/MacParakeetCore/Audio/AudioRecorder.swift` — requires `sharedStream:`, copies tap buffers for async processing, runs `extractChannelZero(from:)` off the shared tap so dictation always reads the post-AEC mono regardless of VPIO state, and keeps file writes off the render thread. Actor-reentrancy guard cleans up orphan tokens if `stop()` runs during the subscribe await.
+- `Sources/MacParakeet/App/AppEnvironment.swift` — constructs the singleton and threads it through to both `AudioProcessor` (dictation) and `MeetingAudioCaptureService` (meeting mic). The `AppFeatures.useSharedMicEngine` flag and legacy private-engine paths are deleted.
 
 Test totals after merge-readiness review: 2052 XCTest pass, 0 failures, 16 Swift Testing pass.
 
@@ -35,7 +35,7 @@ Test totals after merge-readiness review: 2052 XCTest pass, 0 failures, 16 Swift
 - **`RecordingDeviceInfo` is `nil` in shared mode.** Device info now lives on the platform behind the stream; surfacing it through to the dictation history requires a small shim. UI handles `nil` today.
 - **Buffer fanout is bounded** on the render thread (cached snapshot), but the lock-based read does an atomic refcount-inc on Array's COW buffer. Worth profiling once both flows are running concurrently in production.
 - **Deferral counter semantics:** increments per VPIO-request-deferred. Two VPIO subs joining during one non-VPIO blocker count as 2 increments. Defensible but worth a comment when wiring telemetry.
-- **Edge cases not yet exercised on real hardware:** Bluetooth/HFP devices, AirPods → wired mid-session switching, USB hot-plug, sleep/wake, multi-day soak. The one-DMG default-on rollback window is meant to flush these out before deleting legacy paths.
+- **Edge cases not yet exercised on real hardware:** Bluetooth/HFP devices, AirPods → wired mid-session switching, USB hot-plug, sleep/wake, multi-day soak. These are hardware-soak items for follow-up validation now that the legacy rollback path is deleted.
 
 ---
 

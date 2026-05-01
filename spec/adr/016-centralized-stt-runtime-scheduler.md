@@ -59,15 +59,15 @@ That runtime is the sole owner of:
 No feature service (`DictationService`, `MeetingRecordingService`, `TranscriptionService`) owns its own STT runtime.
 Multiple internal managers/executors may exist behind the runtime owner, but that multiplicity remains hidden behind one shared lifecycle boundary.
 
-### 3. Independent audio capture remains unchanged
+### 3. Audio capture remains owned outside the STT scheduler
 
-This ADR does **not** change the audio architecture from ADR-014 / ADR-015:
+This ADR does **not** make the STT scheduler own audio capture. Audio topology is defined by ADR-014 and amended ADR-015:
 
-- Dictation keeps its own `AVAudioEngine`
-- Meeting microphone capture keeps its own `AVAudioEngine`
+- Dictation and meeting microphone capture subscribe to one process-wide `SharedMicrophoneStream`
+- The shared stream owns the single microphone `AVAudioEngine`, VPIO arbitration, and buffer fan-out
 - Meeting system audio uses ScreenCaptureKit audio as defined in ADR-014
 
-Concurrency at the audio layer remains independent. This ADR only centralizes ownership of the STT layer.
+Feature pipelines remain independent after audio buffers are copied. This ADR only centralizes ownership of the STT layer.
 
 ### 4. The default architecture has two execution slots
 

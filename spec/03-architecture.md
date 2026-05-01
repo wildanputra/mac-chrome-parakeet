@@ -95,16 +95,21 @@
 
 ### Concurrency Model (ADR-015 + ADR-016)
 
-The diagram below shows the ADR-016 architecture. Dictation and meeting recording run concurrently as independent audio pipelines, while STT routes through one scheduler and one shared runtime owner:
+The diagram below shows the ADR-015/ADR-016 architecture. Dictation and meeting recording run concurrently as independent feature pipelines, while microphone capture fans out from one shared engine and STT routes through one scheduler/runtime owner:
 
 ```
+┌─ Shared Microphone Capture ───────────────┐
+│ SharedMicrophoneStream (one AVAudioEngine)│
+│ → AudioRecorder + MicrophoneCapture       │
+└───────────────────────────────────────────┘
+
 ┌─ Dictation Pipeline ──────────────────────┐
-│ AudioRecorder (own AVAudioEngine)         │
+│ AudioRecorder subscriber                  │
 │ → DictationService                        │
 └───────────────────────────────────────────┘
 
 ┌─ Meeting Pipeline ────────────────────────┐
-│ MicrophoneCapture (own AVAudioEngine)     │
+│ MicrophoneCapture subscriber              │
 │ + SystemAudioStream (ScreenCaptureKit)    │
 │ → MeetingRecordingService                 │
 └───────────────────────────────────────────┘
@@ -124,8 +129,8 @@ The diagram below shows the ADR-016 architecture. Dictation and meeting recordin
      STT Runtime (Parakeet AsrManagers + optional WhisperEngine)
 ```
 
-- **No shared audio engine** — dictation and meeting capture remain independent. macOS HAL multiplexes mic access.
-- **Meeting mic processing** — meeting mic capture prefers macOS VPIO for hardware echo cancellation; dictation capture remains raw on its own engine.
+- **Shared microphone engine** — dictation and meeting mic capture subscribe to one process-wide `SharedMicrophoneStream`; downstream feature pipelines stay independent after copying buffers.
+- **Meeting mic processing** — meeting mic capture prefers macOS VPIO for hardware echo cancellation; dictation subscribes as non-VPIO and extracts channel 0 so VPIO duplex layouts still produce the post-AEC mono stream.
 - **No mutual exclusion** — dictation and meeting recording can both be active.
 - **Centralized STT ownership** — one runtime owner manages lifecycle, warm-up, shutdown, and Parakeet/Whisper dispatch.
 - **Explicit scheduling** — the STT stack uses a reserved dictation slot plus a shared background slot; within the background slot, finalize beats live preview, and file transcription waits.

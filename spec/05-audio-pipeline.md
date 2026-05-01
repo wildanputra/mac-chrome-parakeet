@@ -11,12 +11,14 @@ The audio pipeline handles all audio input for MacParakeet: microphone recording
 ### Capture Chain
 
 ```
-Mic Input → AVAudioEngine tap → temp WAV → selected local STT engine
+Mic Input → SharedMicrophoneStream tap → temp WAV → selected local STT engine
 ```
 
-- **AVAudioEngine** with tap on input node
+- **Shared mic engine**: `AudioRecorder` subscribes to the process-wide `SharedMicrophoneStream` with `wantsVPIO: false`
+- The stream owns the underlying `AVAudioEngine` input-node tap and handles device fallback centrally
 - **Output format**: temporary WAV, 16kHz mono Float32
 - **Minimum sample threshold**: 16,000 samples required before sending to STT. Header-only and near-empty recordings are rejected before they reach the speech engine.
+- Dictation always extracts channel 0 before conversion so VPIO duplex layouts produce the post-AEC mono stream instead of channel-mixed reference audio.
 - Dictation does not use the meeting crash-recovery lock-file pipeline. The current implementation writes a temp WAV and either moves it into retained storage or deletes it after processing.
 
 ### Storage
@@ -33,8 +35,8 @@ Mic Input → AVAudioEngine tap → temp WAV → selected local STT engine
 ```
 User triggers dictation
     → Check microphone permission
-    → Start AVAudioEngine
-    → Install tap on input node
+    → Subscribe to SharedMicrophoneStream
+    → Shared stream starts the mic engine if needed
     → Convert samples to 16kHz mono Float32
     → Write to temp WAV
     → User stops dictation (or release-to-stop)
@@ -126,9 +128,9 @@ User pastes YouTube URL
 ### Dual-Stream Capture
 
 ```
-System Audio → ScreenCaptureKit SCStream audio → PCM adapter ────────┐
-                                                                      ├→ MeetingAudioCaptureService
-Mic Input    → AVAudioEngine + Voice Processing I/O → Input Tap ─────┘   (AsyncStream<MeetingAudioCaptureEvent>)
+System Audio → ScreenCaptureKit SCStream audio → PCM adapter ─────────────┐
+                                                                          ├→ MeetingAudioCaptureService
+Mic Input    → SharedMicrophoneStream (+ Voice Processing I/O when active)┘   (AsyncStream<MeetingAudioCaptureEvent>)
                                                           │
                                                           ▼
                                               MeetingAudioStorageWriter
@@ -154,7 +156,7 @@ Mic Input    → AVAudioEngine + Voice Processing I/O → Input Tap ────
 ```
 
 - **System audio** is captured via ScreenCaptureKit `SCStream` audio (`SCStreamConfiguration.capturesAudio = true`), which avoids owning or clocking a HAL aggregate output device.
-- **Mic audio** is captured via `AVAudioEngine` input node tap with a typed policy (`MeetingMicProcessingMode`): `vpioPreferred` (default), `vpioRequired`, or `raw`.
+- **Mic audio** is captured by subscribing to `SharedMicrophoneStream` with a typed policy (`MeetingMicProcessingMode`): `vpioPreferred` (default), `vpioRequired`, or `raw`.
 - MacParakeet ships meeting capture with VPIO preferred for the mic path and ScreenCaptureKit for system audio. The older Core Audio process-tap path was removed from production because it does not reliably coexist with VPIO in-process. See `docs/research/vpio-process-tap-conflict.md`.
 - Both streams are captured within the same meeting session and aligned by host time. `CaptureOrchestrator` owns join + offset + chunk boundaries via `MeetingAudioPairJoiner` + `AudioChunker`.
 - Mic conditioning is pass-through. When VPIO engages, macOS has already applied AEC/noise suppression/AGC before buffers reach `MeetingRecordingService`; if VPIO falls back to raw, the service logs the degraded mode and keeps transcript-layer system-dominance suppression.
@@ -170,7 +172,8 @@ Mic Input    → AVAudioEngine + Voice Processing I/O → Input Tap ────
 | Component | Purpose |
 |-----------|---------|
 | `SystemAudioStream` | ScreenCaptureKit system-audio wrapper - creates an audio-only `SCStream`, adapts `CMSampleBuffer` to `AVAudioPCMBuffer`, and emits stall diagnostics |
-| `MicrophoneCapture` | AVAudioEngine mic wrapper with explicit mic-processing policy + effective-mode reporting |
+| `SharedMicrophoneStream` | Process-wide microphone engine owner, VPIO arbiter, and synchronous buffer fan-out |
+| `MicrophoneCapture` | Meeting mic subscriber with explicit mic-processing policy, effective-mode reporting, and stall diagnostics |
 | `MeetingAudioCaptureService` | Actor combining both streams into `AsyncStream<MeetingAudioCaptureEvent>` with `.bufferingNewest(2048)` and runtime error emission where available |
 | `CaptureOrchestrator` | Owns ingest/join/offset/chunk flow for live preview |
 | `MicConditioner` | Pass-through seam for mic samples after upstream VPIO processing |

@@ -4,7 +4,7 @@ import os
 
 /// Single mic engine shared across dictation and meeting recording.
 ///
-/// Plan: `plans/active/shared-mic-engine.md` (PROPOSAL → in implementation).
+/// Completed plan: `plans/completed/shared-mic-engine.md`.
 /// The real-world bug this addresses: enabling VPIO anywhere in the process
 /// makes coreaudiod hand every other `AVAudioEngine` a multi-channel duplex
 /// layout. Two independent engines look isolated in code but aren't isolated

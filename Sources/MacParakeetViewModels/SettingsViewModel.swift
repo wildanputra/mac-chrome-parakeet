@@ -784,6 +784,12 @@ public final class SettingsViewModel {
             )
             let capture = MicrophoneCapture(sharedStream: stream)
             do {
+                // `.raw` is load-bearing here. This test owns its own
+                // SharedMicrophoneStream + AVAudioEngine alongside the app's
+                // main one. Requesting VPIO would let coreaudiod attach a
+                // second VPAU aggregate to the process and could disturb an
+                // in-flight VPIO session on the main engine. Raw avoids that
+                // path entirely.
                 _ = try await capture.start(processingMode: .raw) { buffer, _ in
                     levelBox.record(buffer.rmsLevel)
                 }

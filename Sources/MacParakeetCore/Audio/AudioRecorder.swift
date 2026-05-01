@@ -5,8 +5,10 @@ import os
 import OSLog
 
 /// Snapshot of the audio input device used for a recording. Currently always
-/// `nil` in the shared-mic-stream architecture — device info now lives on the
-/// platform behind the stream and is not yet plumbed through to the recorder.
+/// `nil` for shared-stream recordings — `AVAudioEngineMicrophonePlatform`
+/// exposes the active attempt as `lastSucceededAttempt`, but the stream does
+/// not surface it through to subscribers yet. Wiring it into dictation
+/// telemetry is deferred work, not blocked work.
 public struct RecordingDeviceInfo: Sendable, Equatable {
     public let deviceName: String
     public let transport: String
@@ -92,8 +94,10 @@ public actor AudioRecorder {
     }
 
     /// Device info from the most recent recording. Always `nil` today —
-    /// surfacing platform device info through the shared stream is tracked as
-    /// follow-up work; dictation telemetry treats `nil` as "device unknown".
+    /// `AVAudioEngineMicrophonePlatform.lastSucceededAttempt` already tracks
+    /// the resolved device; surfacing it through the shared stream into
+    /// dictation telemetry is a small wiring task, deferred. Dictation
+    /// telemetry treats `nil` as "device unknown".
     public var deviceInfo: RecordingDeviceInfo? {
         nil
     }
