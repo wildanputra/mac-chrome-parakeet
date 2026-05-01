@@ -283,6 +283,33 @@ final class MeetingAudioCaptureServiceTests: XCTestCase {
         }
     }
 
+    func testEmitsRuntimeErrorEventWhenNonInterleavedMicrophoneBufferCopyFails() async throws {
+        let microphone = MockMeetingMicrophoneCapture()
+        let service = MeetingAudioCaptureService(
+            microphoneCapture: microphone,
+            systemAudioCaptureFactory: { MockMeetingSystemAudioCapture() }
+        )
+
+        let events = await service.events
+        _ = try await service.start()
+        defer { Task { await service.stop() } }
+
+        let invalidBuffer = try XCTUnwrap(makeNonInterleavedFloat64MonoBuffer(frames: 4))
+        microphone.emit(buffer: invalidBuffer, time: AVAudioTime(hostTime: 1))
+
+        var iterator = events.makeAsyncIterator()
+        let emitted = await iterator.next()
+        guard case let .error(error)? = emitted else {
+            XCTFail("Expected runtime error event, got \(String(describing: emitted))")
+            return
+        }
+
+        guard case .captureRuntimeFailure = error else {
+            XCTFail("Expected captureRuntimeFailure, got \(error)")
+            return
+        }
+    }
+
     func testEmitsRuntimeErrorEventWhenSystemCaptureStallsMidSession() async throws {
         let microphone = MockMeetingMicrophoneCapture()
         let systemCapture = MockMeetingSystemAudioCapture()
@@ -358,6 +385,20 @@ final class MeetingAudioCaptureServiceTests: XCTestCase {
             guard let baseAddress = pointer.baseAddress else { return }
             destination.update(from: baseAddress, count: samples.count)
         }
+        return buffer
+    }
+
+    private func makeNonInterleavedFloat64MonoBuffer(frames: AVAudioFrameCount) -> AVAudioPCMBuffer? {
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat64,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ), let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
+            return nil
+        }
+
+        buffer.frameLength = frames
         return buffer
     }
 }

@@ -300,7 +300,7 @@ public final class MicrophoneCapture: @unchecked Sendable {
             self.dispatchBuffer(
                 buffer,
                 time: time,
-                extractVPIOChannelZero: sharedStream.diagnostics.vpioEngaged
+                extractVPIOChannelZero: sharedStream.isVPIOEngaged
             )
         }
         let deathDispatch: SharedMicrophoneStream.EngineDeathHandler = { [weak self] in

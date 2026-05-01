@@ -27,6 +27,7 @@ final class SharedMicrophoneStreamTests: XCTestCase {
         XCTAssertEqual(diag.subscriberCount, 1)
         XCTAssertTrue(diag.engineRunning)
         XCTAssertFalse(diag.vpioEngaged)
+        XCTAssertFalse(stream.isVPIOEngaged)
         XCTAssertEqual(platform.configureAndStartCalls.count, 1)
         XCTAssertEqual(platform.configureAndStartCalls.first?.vpioEnabled, false)
         XCTAssertEqual(platform.stopEngineCallCount, 0)
@@ -71,6 +72,7 @@ final class SharedMicrophoneStreamTests: XCTestCase {
         XCTAssertEqual(platform.configureAndStartCalls.count, 1)
         XCTAssertEqual(platform.configureAndStartCalls.first?.vpioEnabled, true)
         XCTAssertTrue(stream.diagnostics.vpioEngaged)
+        XCTAssertTrue(stream.isVPIOEngaged)
 
         await stream.unsubscribe(token)
     }
@@ -267,14 +269,15 @@ final class SharedMicrophoneStreamTests: XCTestCase {
         await stream.unsubscribe(t2)
     }
 
-    func testDeferredVPIOPromotionFailureMarksEngineDead() async throws {
+    func testDeferredVPIOPromotionFailureInvalidatesSubscribers() async throws {
         // The reconfigure-to-VPIO action is reachable only via the
         // unsubscribe path: a deferred VPIO subscriber gets promoted when
         // the last non-VPIO subscriber leaves. If the platform's
         // reconfigure fails, the engine has already been torn down inside
         // `configureAndStart` before the VPIO start failed — so it's
-        // *stopped*, not running. State must reflect that so subscribers
-        // can detect the dead-engine condition via diagnostics.
+        // *stopped*, not running. Remaining subscriptions are invalidated
+        // after their engine-death callbacks are captured so stale handlers
+        // cannot be resurrected by a later subscribe.
         let t1 = try await stream.subscribe(wantsVPIO: false) { _, _ in }
         let t2 = try await stream.subscribe(wantsVPIO: true) { _, _ in }
         XCTAssertTrue(stream.diagnostics.vpioDeferred)
@@ -288,10 +291,34 @@ final class SharedMicrophoneStreamTests: XCTestCase {
         let diag = stream.diagnostics
         XCTAssertFalse(diag.vpioEngaged, "vpioEngaged must roll back when reconfigure fails")
         XCTAssertFalse(diag.engineRunning, "Engine is stopped after configureAndStart tore it down before throwing")
-        XCTAssertEqual(diag.subscriberCount, 1, "Remaining VPIO subscriber is still tracked")
-        XCTAssertTrue(diag.vpioDeferred, "Deferral persists since the VPIO sub still wants engagement")
+        XCTAssertEqual(diag.subscriberCount, 0, "Dead-engine subscribers are invalidated")
+        XCTAssertFalse(diag.vpioDeferred, "No deferral remains after subscriptions are invalidated")
 
         await stream.unsubscribe(t2)
+    }
+
+    func testSubscribeAfterDeferredPromotionFailureStartsFreshEngine() async throws {
+        let t1 = try await stream.subscribe(wantsVPIO: false) { _, _ in }
+        _ = try await stream.subscribe(wantsVPIO: true) { _, _ in }
+        XCTAssertTrue(stream.diagnostics.vpioDeferred)
+
+        platform.configureAndStartError = MockError.simulatedFailure
+        await stream.unsubscribe(t1)
+
+        XCTAssertFalse(stream.diagnostics.engineRunning)
+        XCTAssertEqual(stream.diagnostics.subscriberCount, 0)
+
+        platform.configureAndStartError = nil
+        let token = try await stream.subscribe(wantsVPIO: false) { _, _ in }
+
+        let diag = stream.diagnostics
+        XCTAssertEqual(diag.subscriberCount, 1)
+        XCTAssertTrue(diag.engineRunning)
+        XCTAssertFalse(diag.vpioEngaged)
+        XCTAssertEqual(platform.configureAndStartCalls.count, 3, "Fresh subscribe must restart the dead engine")
+        XCTAssertEqual(platform.configureAndStartCalls.last?.vpioEnabled, false)
+
+        await stream.unsubscribe(token)
     }
 
     func testRecoveryAfterFirstSubscribeFailure() async throws {

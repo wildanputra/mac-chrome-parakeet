@@ -19,29 +19,29 @@
 
 ## Implementation summary
 
-The committed work delivers the architecture described below, gated behind `AppFeatures.useSharedMicEngine` (default `false` on the merged branch):
+The committed work delivers the architecture described below, enabled by default through `AppFeatures.useSharedMicEngine = true` on the PR branch:
 
-- `Sources/MacParakeetCore/Audio/SharedMicrophoneStream.swift` — one mic engine per process, fan-out to N subscribers, sticky VPIO with deferred engagement, `onEngineDeath` callback for promotion failures, allocation-free render-thread tap.
+- `Sources/MacParakeetCore/Audio/SharedMicrophoneStream.swift` — one mic engine per process, fan-out to N subscribers, sticky VPIO with deferred engagement, `onEngineDeath` callback for promotion failures that invalidates dead-engine subscriptions, and bounded render-thread fan-out.
 - `Sources/MacParakeetCore/Audio/MicrophoneEnginePlatform.swift` — `AVAudioEngineMicrophonePlatform` adapter with optional `DeviceAttemptsBuilder` (selected→default→builtIn fallback chain, recreates engine per failed attempt, same shape as the legacy code).
 - `Sources/MacParakeetCore/Audio/MicrophoneCapture.swift` — accepts optional `sharedStream:` + `permissionProvider:`. When non-nil, `start()` (now `async`) subscribes with `wantsVPIO` derived from processing mode; vpioPreferred→raw fallback retried at this layer. Sync `stop()` does fire-and-forget unsubscribe so deinit cleanup still works.
-- `Sources/MacParakeetCore/Audio/AudioRecorder.swift` — same shape: optional `sharedStream:`, `start()` becomes async, `extractChannelZero(from:)` runs on every incoming buffer so dictation always reads the post-AEC mono regardless of VPIO state. Actor-reentrancy guard cleans up orphan tokens if `stop()` runs during the subscribe await.
-- `Sources/MacParakeet/App/AppEnvironment.swift` — constructs the singleton when the flag is on, threads it through to both `AudioProcessor` (dictation) and `MeetingAudioCaptureService` (meeting mic). Default off → both consumers fall back to their legacy private-engine paths bit-identical to today.
+- `Sources/MacParakeetCore/Audio/AudioRecorder.swift` — same shape: optional `sharedStream:`, `start()` becomes async, tap buffers are copied for async processing, `extractChannelZero(from:)` runs off the shared tap so dictation always reads the post-AEC mono regardless of VPIO state, and file writes stay off the render thread. Actor-reentrancy guard cleans up orphan tokens if `stop()` runs during the subscribe await.
+- `Sources/MacParakeet/App/AppEnvironment.swift` — constructs the singleton when the flag is on, threads it through to both `AudioProcessor` (dictation) and `MeetingAudioCaptureService` (meeting mic). The flag is now default-on; flag-off keeps the legacy private-engine paths available as a one-release rollback option.
 
-Test totals: 2045 XCTest pass, 0 failures, 16 Swift Testing pass.
+Test totals after merge-readiness review: 2050 XCTest pass, 0 failures, 16 Swift Testing pass.
 
-## Carry-forward notes for step 6
+## Post-merge carry-forward notes
 
-- **Diagnostic-trail fidelity gap.** `AudioCaptureDiagnostics` events for per-device-attempt outcomes appear only as OSLog (`shared_mic_engine_input_device_*`) in shared mode — the meeting forensic ring buffer no longer captures attempt detail. Acceptable for current soak; revisit before flag-flip if a fallback case shows up in field telemetry.
+- **Diagnostic-trail fidelity gap.** `AudioCaptureDiagnostics` events for per-device-attempt outcomes appear only as OSLog (`shared_mic_engine_input_device_*`) in shared mode — the meeting forensic ring buffer no longer captures attempt detail. Acceptable for the default-on PR; revisit if a fallback case shows up in field telemetry.
 - **`RecordingDeviceInfo` is `nil` in shared mode.** Device info now lives on the platform behind the stream; surfacing it through to the dictation history requires a small shim. UI handles `nil` today.
-- **Buffer fanout is allocation-free** on the render thread (cached snapshot), but the lock-based read does an atomic refcount-inc on Array's COW buffer. Bounded, render-thread-safe; worth profiling once both flows are running concurrently in production.
+- **Buffer fanout is bounded** on the render thread (cached snapshot), but the lock-based read does an atomic refcount-inc on Array's COW buffer. Worth profiling once both flows are running concurrently in production.
 - **Deferral counter semantics:** increments per VPIO-request-deferred. Two VPIO subs joining during one non-VPIO blocker count as 2 increments. Defensible but worth a comment when wiring telemetry.
-- **Edge cases not yet exercised on real hardware:** Bluetooth/HFP devices, AirPods → wired mid-session switching, USB hot-plug, sleep/wake, multi-day soak. The 1-day soak window is meant to flush these out before the step-6 flag flip.
+- **Edge cases not yet exercised on real hardware:** Bluetooth/HFP devices, AirPods → wired mid-session switching, USB hot-plug, sleep/wake, multi-day soak. The one-DMG default-on rollback window is meant to flush these out before deleting legacy paths.
 
 ---
 
 ## TL;DR
 
-Replace the two independent `AVAudioEngine` instances (`AudioRecorder` for dictation, `MicrophoneCapture` for meeting mic) with a single `SharedMicrophoneStream` actor that owns one mic engine and fans out buffers to subscribers. Fixes the concurrent-dictation-during-meeting gap that PR #186 ships with as a documented known-issue.
+Replace the two independent `AVAudioEngine` instances (`AudioRecorder` for dictation, `MicrophoneCapture` for meeting mic) with a single `SharedMicrophoneStream` owner that drives one mic engine and fans out buffers to subscribers. Fixes the concurrent-dictation-during-meeting gap that PR #186 ships with as a documented known-issue.
 
 ---
 
@@ -162,28 +162,28 @@ public final class SharedMicrophoneStream: @unchecked Sendable {
 
 **Concurrency model:** not an actor. The tap callback runs on the AVAudioEngine render thread, which cannot `await`. Internal state (subscriber map, VPIO/engine flags) is protected by an `OSAllocatedUnfairLock`. The render-thread tap callback acquires the lock, snapshots the handler array into a local, releases, then iterates the snapshot calling handlers — standard real-time-safe Core Audio fan-out. Public `subscribe`/`unsubscribe` are `async` for API consistency with the rest of the codebase but their bodies are synchronous lock-takes; the engine start/stop work they trigger may dispatch off the caller.
 
-### Design decision: dictation consumer extracts ch[0] mono
+### Design decision: VPIO consumers extract ch[0] mono
 
 When VPIO is engaged anywhere in the process, the input node delivers a multi-channel duplex format (ch=9, channel 0 = post-AEC processed mono). With one shared engine and one tap, every subscriber sees that format regardless of the `wantsVPIO` flag they registered with — `wantsVPIO` controls whether VPIO is *enabled*, not which buffer they receive.
 
-The dictation subscriber therefore must always read channel 0 from the buffer:
+Dictation must always read channel 0 from the buffer, and the meeting mic does the same when VPIO is engaged:
 
 - buffer ch=1 → passthrough
 - buffer ch≥2 → extract ch[0] as mono
 
-This is ~5 lines in `AudioRecorder`'s subscriber callback and makes dictation correct under every state transition, including ones we don't currently anticipate. It also gives dictation free AEC during meetings as a side effect (clean voice, no speaker bleed).
+This keeps dictation and meeting mic capture on the post-AEC mono stream under every VPIO state transition. It also gives dictation free AEC during meetings as a side effect (clean voice, no speaker bleed).
 
 The deferred-VPIO-engagement design below (under "Edge case") is an audio-quality optimization on top of this rule, not a substitute for it.
 
 ### Consumer migration
 
-- `AudioRecorder` becomes a thin client. On `start()` it subscribes with `wantsVPIO: false` and stores the token. The handler writes to `audioFile` and updates `atomicAudioLevel`. On `stop()` it unsubscribes. The current ephemeral-engine pattern goes away — engine lifetime is the shared stream's concern.
+- `AudioRecorder` becomes a thin client. On `start()` it subscribes with `wantsVPIO: false` and stores the token. The shared tap handler copies the buffer, then a serial processing queue performs channel extraction, conversion, metrics, and file writes. On `stop()` it unsubscribes and drains accepted work. The current ephemeral-engine pattern goes away — engine lifetime is the shared stream's concern.
 - `MicrophoneCapture` becomes a thin client. On `start()` it subscribes with `wantsVPIO: true` and stores the token. The handler does what the current tap callback does (delegates to the meeting's `bufferHandler`, marks first buffer, runs the watchdog). On `stop()` it unsubscribes. The current ephemeral-engine pattern goes away.
-- Buffer fan-out: `SharedMicrophoneStream`'s tap callback iterates subscribers and dispatches a shared reference. The consumer contract is: **the buffer is valid only for the duration of the synchronous handler call; if a subscriber needs to retain or mutate it, copy first.** This sidesteps any question of whether `AVAudioPCMBuffer` memory is reused by the engine post-callback. Today's `AudioRecorder.audioFile.write(from:)` is synchronous and obeys this trivially; the meeting consumer needs to obey the same rule, copying before any cross-thread hand-off.
+- Buffer fan-out: `SharedMicrophoneStream`'s tap callback iterates subscribers and dispatches a shared reference. The consumer contract is: **the buffer is valid only for the duration of the synchronous handler call; if a subscriber needs to retain or mutate it, copy first.** This sidesteps any question of whether `AVAudioPCMBuffer` memory is reused by the engine post-callback. Dictation copies before async processing; the meeting consumer copies before any cross-thread hand-off.
 
 ### VPIO arbitration
 
-VPIO is engaged whenever any subscriber has `wantsVPIO: true`. A meeting subscriber joining flips the engine into VPIO mode; leaving flips it back. Dictation never owns the VPIO decision — it just reads whatever stream the engine is currently producing.
+VPIO is engaged whenever any subscriber has `wantsVPIO: true`, subject to deferred engagement while a non-VPIO subscriber is already in flight. Once engaged, VPIO stays sticky until the last subscriber leaves and the engine stops. Dictation never owns the VPIO decision — it just reads whatever stream the engine is currently producing.
 
 This gives dictation **free AEC during meetings** as a side effect — the dictation transcript won't pick up speaker bleed during a meeting recording. That's an intentional improvement, not a workaround.
 

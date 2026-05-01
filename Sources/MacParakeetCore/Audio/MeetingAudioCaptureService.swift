@@ -302,6 +302,8 @@ public actor MeetingAudioCaptureService {
             for channel in 0..<channelCount {
                 dst[channel].update(from: src[channel], count: frameCount)
             }
+        } else {
+            return nil
         }
 
         return copy
