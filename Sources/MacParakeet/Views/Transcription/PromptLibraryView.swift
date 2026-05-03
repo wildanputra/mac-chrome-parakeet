@@ -99,7 +99,7 @@ struct PromptLibraryView: View {
         }
         .background {
             ZStack {
-                DesignSystem.Colors.background
+                Rectangle().fill(.thickMaterial)
                 VStack {
                     Spacer()
                     HStack {
@@ -559,7 +559,7 @@ struct PromptLibraryView: View {
             .background(DesignSystem.Colors.surfaceElevated.opacity(0.3))
         }
         .frame(width: 540, height: 500)
-        .background(DesignSystem.Colors.surface)
+        .background(.thickMaterial)
     }
 }
 

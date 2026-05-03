@@ -23,7 +23,7 @@ struct VocabularyImportPreviewSheet: View {
             actionRow
         }
         .padding(DesignSystem.Spacing.lg)
-        .background(DesignSystem.Colors.background)
+        .background(.thickMaterial)
     }
 
     // MARK: - Header

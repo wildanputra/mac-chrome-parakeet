@@ -18,7 +18,7 @@ struct CustomWordsView: View {
             }
             .padding(DesignSystem.Spacing.lg)
         }
-        .background(DesignSystem.Colors.background)
+        .background(.thickMaterial)
         .alert(
             "Delete Word?",
             isPresented: Binding(

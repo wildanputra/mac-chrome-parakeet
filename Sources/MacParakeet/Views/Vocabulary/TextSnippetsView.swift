@@ -19,7 +19,7 @@ struct TextSnippetsView: View {
             }
             .padding(DesignSystem.Spacing.lg)
         }
-        .background(DesignSystem.Colors.background)
+        .background(.thickMaterial)
         .alert(
             "Delete Snippet?",
             isPresented: Binding(

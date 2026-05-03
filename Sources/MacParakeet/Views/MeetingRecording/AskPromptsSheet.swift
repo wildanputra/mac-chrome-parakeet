@@ -68,7 +68,7 @@ struct AskPromptsSheet: View {
                 .padding(DesignSystem.Spacing.xl)
             }
         }
-        .background(DesignSystem.Colors.background)
+        .background(.thickMaterial)
         .frame(minWidth: 720, minHeight: 640)
         .alert(
             "Delete prompt?",
@@ -524,7 +524,7 @@ private struct EditPromptSheet: View {
             }
         }
         .frame(minWidth: 560, minHeight: 480)
-        .background(DesignSystem.Colors.background)
+        .background(.thickMaterial)
         .alert("Discard changes?", isPresented: $showingDiscardConfirm) {
             Button("Discard", role: .destructive) {
                 onCancel()
@@ -697,7 +697,7 @@ private struct CreatePromptSheet: View {
             }
         }
         .frame(minWidth: 560, minHeight: 480)
-        .background(DesignSystem.Colors.background)
+        .background(.thickMaterial)
         .alert("Discard new prompt?", isPresented: $showingDiscardConfirm) {
             Button("Discard", role: .destructive) {
                 viewModel.cancelCreating()
