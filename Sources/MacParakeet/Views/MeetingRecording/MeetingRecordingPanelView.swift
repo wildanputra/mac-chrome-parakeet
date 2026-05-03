@@ -486,7 +486,11 @@ private struct FooterIconButton: View {
                 Image(systemName: icon)
                     .font(.system(size: 14))
                     .foregroundStyle(foregroundColor)
-                    .contentTransition(.symbolEffect(.replace))
+                    // `.replace.byLayer` fades each SF Symbol layer separately
+                    // — for fill ↔ outline pairs (like chevron.down.circle vs
+                    // chevron.down.circle.fill) this reads softer than the
+                    // default `.replace`, which fades the whole glyph at once.
+                    .contentTransition(.symbolEffect(.replace.byLayer))
 
                 if isHovered {
                     Text(tooltip)
@@ -510,6 +514,12 @@ private struct FooterIconButton: View {
             // must keep `tooltip` stable across state for this to hold; let
             // the icon fill + activeColor carry the state instead.
             .animation(.easeInOut(duration: 0.45), value: isHovered)
+            // Animate the foreground color in lockstep with the icon swap.
+            // `icon` is a String that changes only on toggle, so it's a clean
+            // animation key — without this the color hard-snaps while
+            // `.symbolEffect(.replace.byLayer)` runs its own fade, and the
+            // mismatch reads as jagged.
+            .animation(.easeInOut(duration: 0.3), value: icon)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
