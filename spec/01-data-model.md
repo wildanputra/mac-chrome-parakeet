@@ -35,7 +35,7 @@ MacParakeet uses **SQLite via GRDB** for all persistent storage. Single database
 └──────────────────┘
 
 ┌──────────────────┐
-│  quick_prompts   │   v0.10 — Live Ask tab shortcut pills
+│  quick_prompts   │   v0.6 — Live Ask tab shortcut pills
 └──────────────────┘
 ```
 
@@ -278,7 +278,7 @@ CREATE INDEX idx_summaries_transcription_id ON summaries(transcriptionId);
 
 ---
 
-### `quick_prompts` (v0.10)
+### `quick_prompts` (v0.6)
 
 Stores user-customizable live meeting Ask tab shortcut pills. These are separate from `prompts`: prompt library rows generate persistent transcript results, while quick prompts are lightweight chat shortcuts with a visible chip label and a richer LLM instruction body.
 
@@ -807,7 +807,7 @@ migrator.registerMigration("v0.7-prompts-and-summaries") { db in
 // v0.7.6 — drop legacy transcriptions.summary
 // v0.7.7 — transcriptions.isTranscriptEdited
 // v0.8 — transcriptions.userNotes and summaries.userNotesSnapshot
-// v0.10 — quick_prompts
+// v0.6 — quick_prompts
 ```
 
 ### Migration Rules
@@ -848,7 +848,7 @@ migrator.registerMigration("v0.7-prompts-and-summaries") { db in
 | `transcriptions.isTranscriptEdited` | v0.7.7 | User-edited transcript marker |
 | `transcriptions.userNotes` | v0.8 | Free-form notes captured during meeting recording |
 | `summaries.userNotesSnapshot` | v0.8 | Snapshot of notes used for prompt generation |
-| `quick_prompts` | v0.10 | User-customizable live Ask tab shortcut pills |
+| `quick_prompts` | v0.6 | User-customizable live Ask tab shortcut pills |
 
 ### Tables NOT Planned (YAGNI)
 

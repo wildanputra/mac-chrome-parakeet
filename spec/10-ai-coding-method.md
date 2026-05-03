@@ -83,9 +83,9 @@ Maintain the artifacts that currently provide value:
 
 `requirements.yaml` is a compact feature/status index. Each top-level key is the stable requirement ID. Each entry should include:
 
-- `status`
 - `description`
 - `version` or release/train marker
+- `status`
 
 Allowed `status` values:
 
@@ -132,6 +132,9 @@ Create `spec/kernel/contracts/*.yaml` only when a stable interface needs machine
 - Telemetry/privacy event schemas
 - External-process invocation boundaries
 
+Each contract should include:
+
+- `name`
 - `input`
 - `output`
 - `errors` (stable error codes)
@@ -169,6 +172,8 @@ Create `spec/kernel/state_machines/*.yaml` only for flows where explicit transit
 
 Each state machine should include:
 
+- `name`
+- `initial`
 - `states`
 - `events`
 - `transitions`
