@@ -190,7 +190,9 @@ struct MeetingRecordingPillView: View {
                     Text(viewModel.formattedElapsed)
                         .font(.system(size: 11, weight: .semibold).monospacedDigit())
                         .foregroundStyle(.white.opacity(0.92))
+                        .lineLimit(1)
                 }
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(
