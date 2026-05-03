@@ -378,6 +378,13 @@ public final class QuickPromptRepository: QuickPromptRepositoryProtocol {
         if normalized.kind == .followUp {
             normalized.groupLabel = nil
         }
+        // Empty / whitespace-only group strings collapse to nil so the GUI never
+        // renders an empty capsule and equality checks match canonical seeds
+        // whose groupLabel is genuinely nil.
+        if let trimmed = normalized.groupLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+           trimmed.isEmpty {
+            normalized.groupLabel = nil
+        }
         return normalized
     }
 }

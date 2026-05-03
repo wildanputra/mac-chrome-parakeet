@@ -97,6 +97,17 @@ final class QuickPromptRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.fetch(id: custom.id)?.label, "ELI5")
     }
 
+    func testSaveCollapsesWhitespaceOnlyGroupLabelToNil() throws {
+        let custom = QuickPrompt(
+            kind: .starter,
+            label: "Custom",
+            prompt: "body",
+            groupLabel: "   "
+        )
+        try repo.save(custom)
+        XCTAssertNil(try repo.fetch(id: custom.id)?.groupLabel)
+    }
+
     func testDeleteBuiltInRejected() throws {
         let builtIn = try repo.fetchAll(kind: .starter).first!
         let deleted = try repo.delete(id: builtIn.id)

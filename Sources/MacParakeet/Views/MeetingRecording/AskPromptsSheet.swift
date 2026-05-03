@@ -13,6 +13,10 @@ struct AskPromptsSheet: View {
     @State private var hoveredID: UUID?
     @State private var pendingDelete: QuickPrompt?
     @State private var pendingResetKind: QuickPrompt.Kind?
+    /// Tracks which row currently owns keyboard focus so we can mirror the
+    /// hover-revealed icon brightening for keyboard-only users. Set by
+    /// `.focused($focusedRowID, equals: prompt.id)` on each row's controls.
+    @FocusState private var focusedRowID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -75,7 +79,7 @@ struct AskPromptsSheet: View {
             }
             Button("Cancel", role: .cancel) { pendingResetKind = nil }
         } message: {
-            Text("Built-in labels, prompt text, and ordering for this section will return to defaults. Custom pills stay untouched.")
+            Text("Built-in pills return to their default labels and prompt text. Your custom pills stay untouched.")
         }
         .sheet(
             isPresented: Binding(
@@ -125,6 +129,9 @@ struct AskPromptsSheet: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            // Esc dismisses (Apple HIG default for sheets). `.cancelAction`
+            // is Esc + Cmd-. on macOS — both reach the close intent.
+            .keyboardShortcut(.cancelAction)
         }
         .padding(DesignSystem.Spacing.xl)
         .background(DesignSystem.Colors.surface)
@@ -165,6 +172,8 @@ struct AskPromptsSheet: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .frame(width: 28, height: 28)
+                .help("\(title) options")
+                .accessibilityLabel("\(title) options")
             }
 
             cardGroup {
@@ -212,7 +221,10 @@ struct AskPromptsSheet: View {
     // MARK: - Row
 
     private func promptRow(_ prompt: QuickPrompt, kind: QuickPrompt.Kind, rows: [QuickPrompt], index: Int) -> some View {
-        let isHovered = hoveredID == prompt.id
+        // Treat keyboard focus the same as hover so a Tab-only user gets the
+        // same icon brightening + row highlight that a mouse user does.
+        let isActive = hoveredID == prompt.id || focusedRowID == prompt.id
+        let kindNoun = kind == .starter ? "starter" : "follow-up"
 
         return HStack(alignment: .top, spacing: DesignSystem.Spacing.md) {
             Toggle("", isOn: Binding(
@@ -223,6 +235,8 @@ struct AskPromptsSheet: View {
             .controlSize(.small)
             .tint(DesignSystem.Colors.accent)
             .padding(.top, 2)
+            .focused($focusedRowID, equals: prompt.id)
+            .accessibilityLabel("Show \(prompt.label)")
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
@@ -231,6 +245,8 @@ struct AskPromptsSheet: View {
                         .foregroundStyle(prompt.isVisible
                                          ? DesignSystem.Colors.textPrimary
                                          : DesignSystem.Colors.textTertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
 
                     if let group = prompt.groupLabel, !group.isEmpty {
                         Text(group)
@@ -273,54 +289,64 @@ struct AskPromptsSheet: View {
                 Button {
                     movePrompt(prompt, by: -1, in: rows, kind: kind)
                 } label: {
-                    rowIcon("chevron.up", isHovered: isHovered)
+                    rowIcon("chevron.up", isHovered: isActive)
                 }
                 .buttonStyle(.plain)
                 .disabled(index == 0)
                 .opacity(index == 0 ? 0.25 : 1)
+                .focused($focusedRowID, equals: prompt.id)
                 .help("Move up")
+                .accessibilityLabel("Move \(prompt.label) up")
 
                 Button {
                     movePrompt(prompt, by: 1, in: rows, kind: kind)
                 } label: {
-                    rowIcon("chevron.down", isHovered: isHovered)
+                    rowIcon("chevron.down", isHovered: isActive)
                 }
                 .buttonStyle(.plain)
                 .disabled(index >= rows.count - 1)
                 .opacity(index >= rows.count - 1 ? 0.25 : 1)
+                .focused($focusedRowID, equals: prompt.id)
                 .help("Move down")
+                .accessibilityLabel("Move \(prompt.label) down")
 
                 Button {
                     viewModel.editingPrompt = prompt
                 } label: {
-                    rowIcon("pencil", isHovered: isHovered)
+                    rowIcon("pencil", isHovered: isActive)
                 }
                 .buttonStyle(.plain)
+                .focused($focusedRowID, equals: prompt.id)
                 .help("Edit")
+                .accessibilityLabel("Edit \(kindNoun) \(prompt.label)")
 
                 if prompt.isBuiltIn {
                     Button {
                         withAnimation { viewModel.restoreSingleDefault(prompt) }
                     } label: {
-                        rowIcon("arrow.uturn.backward", isHovered: isHovered)
+                        rowIcon("arrow.uturn.backward", isHovered: isActive)
                     }
                     .buttonStyle(.plain)
+                    .focused($focusedRowID, equals: prompt.id)
                     .help("Restore default")
+                    .accessibilityLabel("Restore \(prompt.label) to default")
                 } else {
                     Button {
                         pendingDelete = prompt
                     } label: {
-                        rowIcon("trash", isHovered: isHovered, destructive: true)
+                        rowIcon("trash", isHovered: isActive, destructive: true)
                     }
                     .buttonStyle(.plain)
+                    .focused($focusedRowID, equals: prompt.id)
                     .help("Delete")
+                    .accessibilityLabel("Delete \(kindNoun) \(prompt.label)")
                 }
             }
-            .opacity(isHovered ? 1.0 : 0.4)
-            .animation(.easeInOut(duration: 0.18), value: isHovered)
+            .opacity(isActive ? 1.0 : 0.4)
+            .animation(.easeInOut(duration: 0.18), value: isActive)
         }
         .padding(DesignSystem.Spacing.lg)
-        .background(isHovered ? DesignSystem.Colors.surfaceElevated.opacity(0.5) : Color.clear)
+        .background(isActive ? DesignSystem.Colors.surfaceElevated.opacity(0.5) : Color.clear)
         .contentShape(Rectangle())
         .onHover { hovering in
             withAnimation(DesignSystem.Animation.hoverTransition) {
@@ -392,6 +418,7 @@ private struct EditPromptSheet: View {
     @State private var label: String
     @State private var promptBody: String
     @State private var groupLabel: String
+    @State private var showingDiscardConfirm = false
 
     init(prompt: QuickPrompt, onSave: @escaping (QuickPrompt) -> Bool, onCancel: @escaping () -> Void) {
         self.initial = prompt
@@ -402,6 +429,19 @@ private struct EditPromptSheet: View {
         self._groupLabel = State(initialValue: prompt.groupLabel ?? "")
     }
 
+    /// True when the form's user-visible content differs from the row that was
+    /// opened. Drives the discard-confirm prompt: a no-op Cancel is silent;
+    /// a Cancel after real edits asks before throwing the work away (Apple's
+    /// document-close pattern). Trim the group string before comparing so a
+    /// trailing space added to "CATCH UP" doesn't trigger a phantom prompt.
+    private var hasChanges: Bool {
+        let normalizedGroup = groupLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let initialGroup = initial.groupLabel ?? ""
+        return label != initial.label
+            || promptBody != initial.prompt
+            || normalizedGroup != initialGroup
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -409,7 +449,8 @@ private struct EditPromptSheet: View {
                     .font(DesignSystem.Typography.sectionTitle)
                     .foregroundStyle(DesignSystem.Colors.textPrimary)
                 Spacer()
-                Button("Cancel") { onCancel(); dismiss() }
+                Button("Cancel") { attemptCancel() }
+                    .keyboardShortcut(.cancelAction)
                 Button("Save") { commit() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
@@ -434,6 +475,24 @@ private struct EditPromptSheet: View {
         }
         .frame(minWidth: 560, minHeight: 480)
         .background(DesignSystem.Colors.background)
+        .alert("Discard changes?", isPresented: $showingDiscardConfirm) {
+            Button("Discard", role: .destructive) {
+                onCancel()
+                dismiss()
+            }
+            Button("Keep editing", role: .cancel) { }
+        } message: {
+            Text("Your edits to '\(initial.label)' will be lost.")
+        }
+    }
+
+    private func attemptCancel() {
+        if hasChanges {
+            showingDiscardConfirm = true
+        } else {
+            onCancel()
+            dismiss()
+        }
     }
 
     private func field(title: String, text: Binding<String>, placeholder: String) -> some View {
@@ -499,6 +558,17 @@ private struct CreatePromptSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var viewModel: QuickPromptsViewModel
 
+    @State private var showingDiscardConfirm = false
+
+    /// True when any draft field has content. A clean Cancel from a blank
+    /// form is silent; otherwise we prompt before throwing the work away.
+    private var hasContent: Bool {
+        guard let draft = viewModel.creating else { return false }
+        return !draft.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !draft.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !draft.groupLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -508,7 +578,8 @@ private struct CreatePromptSheet: View {
                         .foregroundStyle(DesignSystem.Colors.textPrimary)
                 }
                 Spacer()
-                Button("Cancel") { viewModel.cancelCreating(); dismiss() }
+                Button("Cancel") { attemptCancel() }
+                    .keyboardShortcut(.cancelAction)
                 Button("Add") {
                     if viewModel.commitCreating() {
                         dismiss()
@@ -549,6 +620,24 @@ private struct CreatePromptSheet: View {
         }
         .frame(minWidth: 560, minHeight: 480)
         .background(DesignSystem.Colors.background)
+        .alert("Discard new pill?", isPresented: $showingDiscardConfirm) {
+            Button("Discard", role: .destructive) {
+                viewModel.cancelCreating()
+                dismiss()
+            }
+            Button("Keep editing", role: .cancel) { }
+        } message: {
+            Text("Your draft will be lost.")
+        }
+    }
+
+    private func attemptCancel() {
+        if hasContent {
+            showingDiscardConfirm = true
+        } else {
+            viewModel.cancelCreating()
+            dismiss()
+        }
     }
 
     private func field(title: String, binding: Binding<String>, placeholder: String) -> some View {
