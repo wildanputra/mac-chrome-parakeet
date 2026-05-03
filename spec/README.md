@@ -193,6 +193,7 @@ Dictation + transcription + history + settings. Get audio in, text out, pasted i
 - [x] Centralized STT runtime + two-slot scheduler (ADR-016)
 - [x] Live panel tabs: Transcript / Ask (ADR-018; Insights dropped per amendment 2026-04-24)
 - [x] Live Ask chat with thinking-partner starter pills + persistent follow-up pills + persist-on-finalize handoff
+- [x] Customizable Ask quick prompts: GRDB-backed starter/follow-up pills, Ask Prompts sheet, and `macparakeet-cli quick-prompts` import/export
 - [x] Calendar-driven reminders (ADR-017 Phase 1): EventKit integration + onboarding + settings + per-calendar include list
 - [x] Pre-meeting macOS notifications at configurable lead time (off / 1 / 5 / 10 min)
 - [x] Auto-start countdown toast (ADR-017 Phase 2): 5s cancellable, top-center, non-activating
@@ -226,7 +227,7 @@ Dictation + transcription + history + settings. Get audio in, text out, pasted i
 4. **Never lose user data.** Graceful degradation over silent failure.
 5. **Local-first.** Audio stays on-device for STT. Optional AI sends transcript text only to the user-configured provider or CLI tool. Telemetry is opt-out and self-hosted.
 6. **`swift test` is the gate.** All tests must pass before and after changes.
-8. **Kernel has precedence for implementation.** When present, `spec/kernel/*` artifacts define executable requirements and contracts.
+7. **Kernel is supporting context.** `spec/kernel/requirements.yaml` is a compact feature/status index, and `spec/kernel/traceability.md` maps features to source and tests. ADRs and narrative specs stay higher precedence.
 
 ### Where to Start
 

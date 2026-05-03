@@ -1418,7 +1418,7 @@ Internal data model improvements, reliability fixes, and open-source release. No
 
 ---
 
-## v0.6 Features (Video Player & UI Revamp)
+## v0.5 Features (Video Player & UI Revamp)
 
 > Status: **IMPLEMENTED**
 
@@ -1584,6 +1584,21 @@ Meeting transcription uses the current speech engine captured at recording start
 - [x] `statusTitle` for `.error` is "Meeting interrupted" (was "Recording Error" — overclaims since the same state is reached from both `startFailed` and `transcriptionFailed`)
 - [x] `statusMessage` for `.error` reads `<technical detail>\n\nIf any audio was captured it's in your Library, where you can retry transcription or export the audio.`
 - [x] Empty/whitespace-only error strings fall back to "An unexpected error occurred." instead of producing a leading newline
+
+### F41: Ask Quick Prompts
+
+> Status: **IMPLEMENTED**
+
+**What:** Live meeting Ask tab starter and follow-up pills are backed by the `quick_prompts` table instead of hardcoded enums. Users can tune the visible chip label separately from the full LLM instruction, reorder pills, hide built-ins, reset built-ins, and create/delete custom pills from the Ask Prompts sheet. The CLI exposes the same surface for backup, sharing, and agent automation.
+
+**Acceptance criteria:**
+- [x] `quick_prompts` table stores `starter` and `follow_up` rows with label, prompt body, optional starter group, sort order, visibility, and built-in marker
+- [x] Built-ins are editable, hideable, reorderable, and resettable, but not deletable
+- [x] Reset built-ins restores canonical kind/label/prompt/group/order while preserving visibility and leaving custom pills untouched
+- [x] Follow-up prompts are flat; import/save paths drop `groupLabel` for follow-ups
+- [x] Live Ask reads visible starters/follow-ups from `QuickPromptsViewModel`, preserving starter group order by first occurrence
+- [x] `macparakeet-cli quick-prompts` supports list/show/add/set/delete/restore-defaults/export/import with JSON success/failure envelopes
+- [x] Quick-prompt import/export uses stable `schema: "macparakeet.quick_prompts"` and `version: 1`; duplicate ids and malformed bundles fail with `errorType: "import_schema"`
 
 ---
 

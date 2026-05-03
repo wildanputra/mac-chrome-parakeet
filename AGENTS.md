@@ -116,8 +116,8 @@ Full spec is in [`spec/`](./spec/). Architectural decisions (locked) are in
 
 - **Coding-agent context for this repo:** [`CLAUDE.md`](./CLAUDE.md) for deep
   project context; [`spec/10-ai-coding-method.md`](./spec/10-ai-coding-method.md)
-  for the kernel workflow; ADRs in [`spec/adr/`](./spec/adr/) for locked
-  decisions.
+  for spec precedence and lightweight kernel usage; ADRs in
+  [`spec/adr/`](./spec/adr/) for locked decisions.
 - **Calling macparakeet-cli from another agent (OpenClaw / Hermes / etc.):**
   [`integrations/README.md`](./integrations/README.md) and the CLI changelog
   at [`Sources/CLI/CHANGELOG.md`](./Sources/CLI/CHANGELOG.md).

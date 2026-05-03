@@ -127,6 +127,22 @@ macparakeet-cli prompts run "Action items" \
 case-insensitive name. Ambiguous prefixes return a `.ambiguous` error so the
 agent can re-prompt the user.
 
+### Manage live Ask quick prompts
+
+Ask quick prompts are the starter and follow-up pills shown in the live meeting
+Ask tab. They are lightweight chat shortcuts, not persistent transcript result
+templates.
+
+```bash
+macparakeet-cli quick-prompts list --json
+macparakeet-cli quick-prompts set "Tell me more" --prompt "Expand with more detail from the meeting." --json
+macparakeet-cli quick-prompts export --out ask-prompts.json --include-builtins --json
+macparakeet-cli quick-prompts import ask-prompts.json --mode merge --dry-run --json
+```
+
+The bundle envelope is stable within the CLI major version:
+`schema: "macparakeet.quick_prompts"`, `version: 1`.
+
 ### Inspect meeting recordings
 
 Meeting commands are deterministic local database operations. They do not
