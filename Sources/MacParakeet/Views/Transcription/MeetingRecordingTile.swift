@@ -5,29 +5,19 @@ import SwiftUI
 /// Capture tile for meeting recording, rendered below the YouTube + File
 /// drop cards on the Transcribe tab. Mirrors the floating recording pill's
 /// visual language (flower-of-life rosette + stem + leaves) at a larger
-/// scale, on a light surface. Tap toggles recording; the same callback the
-/// menu bar uses.
+/// scale, on a light surface. The tile body is informational; only the
+/// Start / Stop buttons fire the action. Mirrors the sibling YouTube
+/// card's "click the button, not the body" pattern, and gives Start and
+/// Stop symmetric tap targets so users learn one rule.
 struct MeetingRecordingTile: View {
     @Bindable var viewModel: MeetingRecordingPillViewModel
     var onTap: () -> Void
 
-    @State private var isHovered = false
-
-    @ViewBuilder
     var body: some View {
-        if interactive {
-            Button(action: onTap) {
-                tileSurface
-            }
-            .buttonStyle(.plain)
+        tileSurface
+            .accessibilityElement(children: .contain)
             .accessibilityLabel(accessibilityLabel)
             .accessibilityHint(accessibilityHint)
-        } else {
-            tileSurface
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(accessibilityLabel)
-                .accessibilityHint(accessibilityHint)
-        }
     }
 
     private var tileSurface: some View {
@@ -39,10 +29,6 @@ struct MeetingRecordingTile: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 96)
-        .contentShape(RoundedRectangle(cornerRadius: DesignSystem.Layout.dropZoneCornerRadius))
-        .onHover { isHovered = $0 }
-        .scaleEffect(isHovered && interactive ? 1.005 : 1.0)
-        .animation(DesignSystem.Animation.hoverTransition, value: isHovered)
     }
 
     // MARK: - Background
@@ -54,8 +40,7 @@ struct MeetingRecordingTile: View {
                 RoundedRectangle(cornerRadius: DesignSystem.Layout.dropZoneCornerRadius)
                     .strokeBorder(borderColor, lineWidth: 0.6)
             )
-            .cardShadow(isHovered && interactive ? DesignSystem.Shadows.cardHover : DesignSystem.Shadows.cardRest)
-            .animation(DesignSystem.Animation.hoverTransition, value: isHovered)
+            .cardShadow(DesignSystem.Shadows.cardRest)
     }
 
     private var borderColor: Color {
@@ -219,51 +204,53 @@ struct MeetingRecordingTile: View {
     // MARK: - Action Buttons
 
     private var startButton: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(DesignSystem.Colors.recordingRed)
-                .frame(width: 8, height: 8)
-            Text("Start")
-                .font(DesignSystem.Typography.caption.weight(.semibold))
+        Button(action: onTap) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(DesignSystem.Colors.recordingRed)
+                    .frame(width: 8, height: 8)
+                Text("Start")
+                    .font(DesignSystem.Typography.caption.weight(.semibold))
+            }
+            .foregroundStyle(DesignSystem.Colors.recordingRed)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                Capsule()
+                    .fill(DesignSystem.Colors.recordingRed.opacity(0.10))
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(DesignSystem.Colors.recordingRed.opacity(0.22), lineWidth: 0.8)
+            )
         }
-        .foregroundStyle(DesignSystem.Colors.recordingRed)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(
-            Capsule()
-                .fill(DesignSystem.Colors.recordingRed.opacity(isHovered ? 0.16 : 0.10))
-        )
-        .overlay(
-            Capsule()
-                .strokeBorder(DesignSystem.Colors.recordingRed.opacity(isHovered ? 0.34 : 0.22), lineWidth: 0.8)
-        )
-        .animation(DesignSystem.Animation.hoverTransition, value: isHovered)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Start recording")
+        .accessibilityHint("Captures system audio and microphone, then transcribes locally.")
     }
 
     private var stopButton: some View {
-        HStack(spacing: 6) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(.white)
-                .frame(width: 8, height: 8)
-            Text("Stop")
-                .font(DesignSystem.Typography.caption.weight(.semibold))
-                .foregroundStyle(.white)
+        Button(action: onTap) {
+            HStack(spacing: 6) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(.white)
+                    .frame(width: 8, height: 8)
+                Text("Stop")
+                    .font(DesignSystem.Typography.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                Capsule().fill(DesignSystem.Colors.recordingRed)
+            )
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(
-            Capsule().fill(DesignSystem.Colors.recordingRed)
-        )
+        .buttonStyle(.plain)
+        .accessibilityLabel("Stop recording")
+        .accessibilityHint("Ends the recording and starts transcription.")
     }
 
-    // MARK: - Interactivity
-
-    private var interactive: Bool {
-        switch viewModel.state {
-        case .idle, .recording: return true
-        case .completing, .transcribing, .completed, .error: return false
-        }
-    }
+    // MARK: - Accessibility
 
     private var accessibilityLabel: String {
         switch viewModel.state {
@@ -281,11 +268,9 @@ struct MeetingRecordingTile: View {
     }
 
     private var accessibilityHint: String {
-        switch viewModel.state {
-        case .idle: return "Captures system audio and microphone, then transcribes locally."
-        case .recording: return "Stops the active recording and starts transcription."
-        default: return ""
-        }
+        // Tile body is informational; Start / Stop buttons carry the
+        // action hints themselves.
+        ""
     }
 }
 

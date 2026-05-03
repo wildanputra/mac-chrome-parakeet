@@ -106,7 +106,7 @@ States, all bound to the long-lived `MeetingRecordingPillViewModel` shared with 
 - **Completed**: green checkmark + "Saved to Library"; auto-reverts to idle.
 - **Error**: amber triangle + recovery message; auto-dismisses through the recording flow coordinator.
 
-The tile is a real SwiftUI `Button` only in actionable states: idle starts recording, and recording stops it through the same `toggleRecording` path the menu bar uses. Completing, transcribing, completed, and error states render as inert status surfaces and must not expose button traits or no-op accessibility actions. The floating pill stays visible during recording so users who hide the main window keep an active control surface.
+The tile body is informational. In idle, the red Start control is a real SwiftUI `Button`; while recording, the red Stop control is the only tile-local action and ends the session through the same `toggleRecording` path the menu bar uses. Completing, transcribing, completed, and error states render as inert status surfaces and must not expose button traits or no-op accessibility actions. The floating pill stays visible during recording so users who hide the main window keep an active control surface.
 
 ### Library Meetings Filter
 
