@@ -30,7 +30,6 @@ struct MeetingRowCard<MenuContent: View>: View {
         .animation(DesignSystem.Animation.hoverTransition, value: hovered)
         .contextMenu { menuContent() }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(displayedTitle)
         .accessibilityHint(hoverTooltip)
     }
 

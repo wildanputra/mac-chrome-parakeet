@@ -110,7 +110,7 @@ struct MeetingRecordingPanelView: View {
         }
         .help(tabTooltip(title: tab.title, badge: badge, isStreaming: isStreaming, shortcut: shortcutDisplay))
         .accessibilityLabel(tab.title)
-        .accessibilityValue(isActive ? "selected" : "")
+        .accessibilityAddTraits(isActive ? .isSelected : [])
         .accessibilityHint(isStreaming ? "Responding" : "Switches to the \(tab.title) tab")
     }
 

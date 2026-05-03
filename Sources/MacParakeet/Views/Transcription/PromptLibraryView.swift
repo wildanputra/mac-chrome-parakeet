@@ -252,6 +252,7 @@ struct PromptLibraryView: View {
                         AutoRunBadge(isAutoRun: true) {
                             withAnimation { viewModel.toggleAutoRun(prompt) }
                         }
+                        .focused($focusedPromptId, equals: prompt.id)
                         .accessibilityLabel("Auto-Run")
                         .accessibilityValue("on")
                         .accessibilityHint("Toggles whether \(prompt.name) auto-runs on new transcripts")
