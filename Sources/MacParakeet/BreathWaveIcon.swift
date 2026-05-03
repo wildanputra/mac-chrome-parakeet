@@ -108,6 +108,82 @@ enum BreathWaveIcon {
         return image
     }
 
+    /// Render the bare Cursive P brand mark as a transparent template NSImage,
+    /// suitable for inline tinting in SwiftUI views (assistant avatars, status
+    /// chips, etc.). No background, no padding — just the alpha-channel
+    /// silhouette — so callers control color via `.renderingMode(.template)` +
+    /// `.foregroundStyle()`.
+    ///
+    /// Uses the canonical 128-viewBox geometry from `docs/brand-identity.md`
+    /// with the small-size stroke/dot spec (10 / radius 8) for legibility at
+    /// 16-32pt display sizes. Rendered at 4× the logical point size so SwiftUI
+    /// can downscale crisply at retina without anti-aliasing fuzz that runtime
+    /// vector strokes show at sub-2pt widths.
+    ///
+    /// The visual content (~96×116 inside the 128 viewBox) is centered into
+    /// the pixel canvas — the canonical glyph is biased upper-right within
+    /// 128, so a naïve `size/128` scale would push the mark off-center in
+    /// any tight inline frame.
+    static func brandMark(pointSize: CGFloat = 18) -> NSImage {
+        let scaleFactor: CGFloat = 4
+        let pixel = pointSize * scaleFactor
+        let image = NSImage(size: NSSize(width: pixel, height: pixel), flipped: true) { _ in
+            let visualW: CGFloat = 96
+            let visualH: CGFloat = 116
+            let visualMinX: CGFloat = 3
+            let visualMinY: CGFloat = 3
+            let fit = min(pixel / visualW, pixel / visualH)
+            let offsetX = (pixel - visualW * fit) / 2 - visualMinX * fit
+            let offsetY = (pixel - visualH * fit) / 2 - visualMinY * fit
+
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            ctx.translateBy(x: offsetX, y: offsetY)
+            ctx.scaleBy(x: fit, y: fit)
+
+            // Template image — only the alpha channel matters; tint flows
+            // through SwiftUI's `.foregroundStyle` on the consuming view.
+            NSColor.black.setStroke()
+            NSColor.black.setFill()
+
+            // Bowl
+            let bowl = NSBezierPath(ovalIn: NSRect(x: 42, y: 8, width: 52, height: 52))
+            bowl.lineWidth = 10
+            bowl.stroke()
+
+            // Stem + cursive loop tail
+            let tail = NSBezierPath()
+            tail.move(to: NSPoint(x: 42, y: 34))
+            tail.line(to: NSPoint(x: 42, y: 82))
+            tail.curve(
+                to: NSPoint(x: 18, y: 112),
+                controlPoint1: NSPoint(x: 42, y: 100),
+                controlPoint2: NSPoint(x: 30, y: 110)
+            )
+            tail.curve(
+                to: NSPoint(x: 8, y: 98),
+                controlPoint1: NSPoint(x: 6, y: 114),
+                controlPoint2: NSPoint(x: 2, y: 106)
+            )
+            tail.curve(
+                to: NSPoint(x: 42, y: 92),
+                controlPoint1: NSPoint(x: 14, y: 90),
+                controlPoint2: NSPoint(x: 30, y: 88)
+            )
+            tail.lineWidth = 10
+            tail.lineCapStyle = .round
+            tail.lineJoinStyle = .round
+            tail.stroke()
+
+            // Dot
+            NSBezierPath(ovalIn: NSRect(x: 60, y: 26, width: 16, height: 16)).fill()
+
+            return true
+        }
+        image.size = NSSize(width: pointSize, height: pointSize)
+        image.isTemplate = true
+        return image
+    }
+
     /// Create the Cursive P logo as a filled NSImage for app icon / dock use.
     /// Uses white on a colored background.
     static func appIcon(size: CGFloat = 512) -> NSImage {

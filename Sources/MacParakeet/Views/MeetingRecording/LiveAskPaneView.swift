@@ -625,7 +625,7 @@ private struct AssistantTurnView: View {
                         .transition(.opacity)
                 }
             }
-            .frame(width: 16)
+            .frame(width: 18)
 
             if isEmptyStreaming {
                 ThinkingDots()
@@ -799,11 +799,11 @@ private struct AssistantHead: View {
                 SpinnerRingView(size: 14, revolutionDuration: 2.0, tintColor: DesignSystem.Colors.accent)
                     .transition(.opacity)
             } else {
-                BreathWaveLogo(size: 16, tint: DesignSystem.Colors.accent, opacity: 0.85)
+                BreathWaveLogo(size: 18, tint: DesignSystem.Colors.accent, opacity: 0.9)
                     .transition(.opacity)
             }
         }
-        .frame(width: 16, height: 16)
+        .frame(width: 18, height: 18)
         .animation(.easeInOut(duration: 0.2), value: isStreaming)
         .accessibilityHidden(true)
     }
