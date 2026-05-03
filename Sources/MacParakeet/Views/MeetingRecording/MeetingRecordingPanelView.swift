@@ -307,7 +307,7 @@ struct MeetingRecordingPanelView: View {
             FooterIconButton(
                 icon: autoScroll ? "chevron.down.circle.fill" : "chevron.down.circle",
                 activeColor: autoScroll ? DesignSystem.Colors.accent : nil,
-                tooltip: autoScroll ? "Auto-scroll on" : "Auto-scroll paused"
+                tooltip: "Auto-scroll"
             ) {
                 autoScroll.toggle()
             }
@@ -504,13 +504,12 @@ private struct FooterIconButton: View {
                         : .clear
                     )
             )
-            // Hover expand/contract is ambient — gentler tempo. Toggle (icon /
-            // tooltip / color flip) is keyed on `tooltip` so the layout tween
-            // wraps the SF Symbol replace effect; without it the HStack snaps
-            // to the new text width while `.symbolEffect(.replace)` runs its
-            // own scale-bounce, which reads as the icon jittering off-capsule.
+            // Hover expand/contract is the only layout change this button
+            // makes. Click only swaps the icon + foreground color in place —
+            // no width change, no horizontal movement, no layout jank. Callers
+            // must keep `tooltip` stable across state for this to hold; let
+            // the icon fill + activeColor carry the state instead.
             .animation(.easeInOut(duration: 0.45), value: isHovered)
-            .animation(.easeInOut(duration: 0.3), value: tooltip)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
