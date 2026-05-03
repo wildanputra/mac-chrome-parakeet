@@ -143,36 +143,36 @@ REQ-DATA-004:
   version: v0.5
   status: implemented
 
-# --- v0.6 Video Player & UI Revamp ---
+# --- v0.5 Video Player & UI Revamp ---
 
 REQ-PLAY-001:
   description: HLS streaming for YouTube video playback
-  version: v0.6
+  version: v0.5
   status: implemented
 
 REQ-PLAY-002:
   description: Audio scrubber bar for audio-only files
-  version: v0.6
+  version: v0.5
   status: implemented
 
 REQ-PLAY-003:
   description: Synced transcript highlighting with clickable timestamp seeking
-  version: v0.6
+  version: v0.5
   status: implemented
 
 REQ-UI-004:
   description: Split-pane detail view (video left, content right)
-  version: v0.6
+  version: v0.5
   status: implemented
 
 REQ-LIB-001:
   description: Transcription library with thumbnail grid, filters, search
-  version: v0.6
+  version: v0.5
   status: implemented
 
 REQ-UI-005:
   description: Two side-by-side input cards on home page
-  version: v0.6
+  version: v0.5
   status: implemented
 
 # --- v0.6 Meeting Recording Hardening ---
@@ -214,6 +214,11 @@ REQ-MEET-008:
 
 REQ-MEET-009:
   description: User-authored meeting notes persist through crash recovery, final transcription metadata, notes.md sidecar export, LLM chat context, and custom prompt template substitution without shipping the reverted built-in memo-steered prompt
+  version: v0.6
+  status: implemented
+
+REQ-MEET-010:
+  description: Live meeting Ask quick prompts are user-customizable, persisted in quick_prompts, and exposed through the Ask Prompts sheet plus CLI import/export
   version: v0.6
   status: implemented
 

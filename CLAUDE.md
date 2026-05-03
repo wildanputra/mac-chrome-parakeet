@@ -124,7 +124,7 @@ All ADRs are in `spec/adr/`. These are locked decisions -- don't second-guess th
 - **v0.3** YouTube & Export -- YouTube URL transcription, DOCX/PDF/JSON export, drag-and-drop enhancements
 - **v0.4** Polish + Launch -- Diarization, custom hotkeys, Sparkle updates, LLM providers, voice stats, distribution
 - **v0.5** Data, UI & Prompts -- Private dictation, multi-conversation chat, favorites, video player, split-pane detail, library grid, prompt library, multi-summary, open-source release
-- **v0.6** Meeting Recording (main branch, unreleased) -- ScreenCaptureKit system audio + AVAudioEngine mic capture with VPIO preferred, fragmented MP4 source files + crash recovery (ADR-019), transcript-layer suppression, concurrent with dictation (ADR-015), centralized STT runtime + scheduler (ADR-016), sacred-geometry recording pill + Notes/Transcript/Ask meeting panel, library integration, prompt/result/chat support (ADR-014), live notepad + memo-steered summaries with `{{userNotes}}` template variable + slash commands (ADR-020)
+- **v0.6** Meeting Recording (main branch, unreleased) -- ScreenCaptureKit system audio + AVAudioEngine mic capture with VPIO preferred, fragmented MP4 source files + crash recovery (ADR-019), transcript-layer suppression, concurrent with dictation (ADR-015), centralized STT runtime + scheduler (ADR-016), sacred-geometry recording pill + Notes/Transcript/Ask meeting panel, customizable Ask quick prompts, library integration, prompt/result/chat support (ADR-014), live notepad + memo-steered summaries with `{{userNotes}}` template variable + slash commands (ADR-020)
 - **v0.7** Multilingual STT (main branch, unreleased) -- WhisperKit engine option for non-Parakeet languages, persisted speech-engine preference, Whisper language picker/default, CLI `transcribe --engine parakeet|whisper --language`, Whisper model download path, engine pinning for active meeting sessions and crash recovery (ADR-021)
 
 ## Key Patterns
@@ -323,14 +323,14 @@ In-app feedback creates GitHub Issues via a Cloudflare Pages Function. User emai
 
 ## Implementation Guidelines
 
-1. **Specs are the source of truth** -- Follow `spec/10-ai-coding-method.md` precedence: kernel artifacts (`spec/kernel/*`) first, then ADRs, then narrative docs. If code and spec disagree, update code to match the highest-precedence spec (or update the spec if it is wrong).
+1. **Specs are the source of truth** -- Follow `spec/10-ai-coding-method.md` precedence: ADRs first, then narrative specs, then active plans, with `spec/kernel/*` as supporting feature/status and traceability context. If code and spec disagree, update code to match the highest-precedence spec (or update the spec if it is wrong).
 2. **ADRs are locked** -- Don't second-guess architectural decisions in `spec/adr/`.
 3. **Never lose user data** -- Graceful degradation for dictation history and transcriptions.
 4. **UI philosophy** -- Minimal during dictation, rich for transcription results.
 5. **Local-first** -- Speech recognition stays on-device by default. Optional provider and media-download flows are user-triggered; model/update flows and self-hosted telemetry/crash reporting are product-managed surfaces. Retained purchase activation endpoints remain in code but current public builds are free/GPL-3.0 and always unlocked. That licensing plumbing is intentionally retained as future-option code for GPL-compatible official paid distribution/support, not cleanup fodder. Telemetry is opt-out in Settings and never includes audio or transcript content.
 6. **Simplicity is the product** -- Resist feature creep. MacParakeet does three things well.
 7. **Fast feedback loops for agents** -- Design everything so the agent can verify its own work: tests for logic, CLI for headless smoke-testing, build errors that surface immediately.
-8. **Bounded agent discretion** -- Agents should choose the simplest process that works, but behavior changes must follow `spec/10-ai-coding-method.md` kernel workflow.
+8. **Bounded agent discretion** -- Agents should choose the simplest process that preserves correctness, traceability, and ADR constraints. Kernel updates should be proportional to risk and user visibility.
 9. **Protect the context zone** -- For behavior changes, explicitly define in-scope requirements, out-of-scope behavior, and invariants before coding.
 
 ## Documentation Hygiene
@@ -341,7 +341,7 @@ After completing work: update spec progress in `spec/README.md` and `spec/02-fea
 
 Document status headers: `**ACTIVE**` (authoritative), `**IMPLEMENTED**` (done, still accurate), `**HISTORICAL**` (superseded), `**PROPOSAL**` (under discussion).
 
-Source-of-truth precedence: kernel > ADR > narrative spec > code/comments.
+Source-of-truth precedence: ADR > narrative spec > active plan > kernel index/traceability > code/comments.
 
 ## Working with Plans
 
@@ -352,11 +352,11 @@ Plans live in `plans/` and are version-controlled. Create a plan for multi-file 
 ### Add a new feature
 
 1. Read relevant spec (e.g., `spec/02-features.md`) and `spec/10-ai-coding-method.md`
-2. Identify requirement IDs (or add them in `spec/kernel/requirements.yaml`)
+2. Identify existing requirement IDs, or add one in `spec/kernel/requirements.yaml` for notable user-visible/public behavior
 3. Create a plan in `plans/active/` if multi-file
 4. Implement in `Sources/MacParakeetCore/` (logic) and `Sources/MacParakeet/` (UI)
-5. Add/update tests in `Tests/MacParakeetTests/` mapped to requirement IDs
-6. Update `spec/kernel/traceability.md`
+5. Add/update tests in `Tests/MacParakeetTests/`
+6. Update `spec/kernel/traceability.md` if source/test mappings changed
 7. Run focused tests, then `swift test` before merge
 8. Update spec progress markers
 
@@ -552,9 +552,9 @@ This project uses **rich commit messages** with `## What Changed`, `## Root Inte
 ### Before Starting Work
 
 - [ ] Read this file (CLAUDE.md)
-- [ ] Read `spec/10-ai-coding-method.md` for kernel workflow and precedence
+- [ ] Read `spec/10-ai-coding-method.md` for spec precedence and lightweight kernel usage
 - [ ] Check `spec/README.md` for current version progress
-- [ ] Identify requirement IDs for the change (`spec/kernel/requirements.yaml`)
+- [ ] Identify requirement IDs for notable feature/public behavior changes (`spec/kernel/requirements.yaml`)
 - [ ] Define the context zone: in-scope behavior, must-not-change invariants, and out-of-scope behavior
 - [ ] Check `plans/active/` for any in-progress plans
 - [ ] Run `swift test` to establish baseline
@@ -562,7 +562,7 @@ This project uses **rich commit messages** with `## What Changed`, `## Root Inte
 ### After Completing Work
 
 - [ ] Run required focused tests and `swift test` -- all tests should pass
-- [ ] Update `spec/kernel/traceability.md` for changed requirement mappings
+- [ ] Update `spec/kernel/traceability.md` when source/test mappings changed
 - [ ] Update docs if behavior changed (specs, README, this file)
 - [ ] Archive completed plans to `plans/completed/`
 - [ ] Commit with rich message (see `docs/commit-guidelines.md`)

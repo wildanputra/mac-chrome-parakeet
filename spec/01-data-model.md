@@ -33,6 +33,10 @@ MacParakeet uses **SQLite via GRDB** for all persistent storage. Single database
 ┌──────────────────┐
 │     prompts      │   v0.7 — Reusable prompt templates
 └──────────────────┘
+
+┌──────────────────┐
+│  quick_prompts   │   v0.6 — Live Ask tab shortcut pills
+└──────────────────┘
 ```
 
 Tables are self-contained domains with two exceptions: `chat_conversations` and `summaries` have foreign keys to `transcriptions` with cascading delete. The Swift model for `summaries` is `PromptResult`; the table name is retained for migration compatibility.
@@ -271,6 +275,36 @@ CREATE INDEX idx_summaries_transcription_id ON summaries(transcriptionId);
 - `promptName` and `promptContent` are snapshots, not references to the `prompts` table. Editing or deleting a prompt after generation doesn't change the result's metadata.
 - `userNotesSnapshot` captures `Transcription.userNotes` at generation time so later note edits do not rewrite historical prompt results.
 - Migration from existing data: legacy `transcriptions.summary` values migrate into `summaries` with classic "Summary" prompt metadata, then the legacy column is dropped by `v0.7.6-drop-legacy-transcription-summary`.
+
+---
+
+### `quick_prompts` (v0.6)
+
+Stores user-customizable live meeting Ask tab shortcut pills. These are separate from `prompts`: prompt library rows generate persistent transcript results, while quick prompts are lightweight chat shortcuts with a visible chip label and a richer LLM instruction body.
+
+```sql
+CREATE TABLE quick_prompts (
+    id        TEXT PRIMARY KEY,                          -- UUID string
+    kind      TEXT NOT NULL,                              -- 'starter' or 'follow_up'
+    label     TEXT NOT NULL,                              -- Chip / chat bubble text
+    prompt    TEXT NOT NULL,                              -- Full instruction sent to the LLM
+    groupLabel TEXT,                                      -- Optional starter grouping; nil for follow-ups
+    sortOrder INTEGER NOT NULL DEFAULT 0,                 -- Display ordering within kind
+    isVisible INTEGER NOT NULL DEFAULT 1,                 -- false = hidden from Ask UI
+    isBuiltIn INTEGER NOT NULL DEFAULT 0,                 -- Shipped seed row; editable/resettable, not deletable
+    createdAt TEXT NOT NULL,                              -- ISO 8601 timestamp
+    updatedAt TEXT NOT NULL                               -- ISO 8601 timestamp
+);
+
+CREATE INDEX idx_quick_prompts_kind_sort ON quick_prompts(kind, sortOrder);
+```
+
+**Notes:**
+- Built-ins are seeded from `QuickPrompt.builtInPrompts()` by `QuickPromptRepository.seedIfNeeded()` after migrations complete. The reconciler inserts missing built-ins and retires removed built-ins, but never overwrites an existing user's edited row.
+- Built-ins are editable, hideable, reorderable, and resettable. They cannot be deleted. Reset restores canonical kind/label/prompt/group/order while preserving visibility.
+- Custom rows can be created, edited, reordered, hidden, deleted, exported, and imported.
+- Follow-up prompts are intentionally flat: repository writes normalize follow-up `groupLabel` to `NULL`.
+- The CLI backup/share format is `QuickPromptBundle` with `schema: "macparakeet.quick_prompts"` and `version: 1`.
 
 ---
 
@@ -541,6 +575,35 @@ extension PromptResult: FetchableRecord, PersistableRecord {
 }
 ```
 
+### QuickPrompt
+
+```swift
+import Foundation
+import GRDB
+
+struct QuickPrompt: Codable, Identifiable, Sendable {
+    var id: UUID
+    var kind: Kind
+    var label: String
+    var prompt: String
+    var groupLabel: String?
+    var sortOrder: Int
+    var isVisible: Bool
+    var isBuiltIn: Bool
+    var createdAt: Date
+    var updatedAt: Date
+
+    enum Kind: String, Codable, Sendable {
+        case starter
+        case followUp = "follow_up"
+    }
+}
+
+extension QuickPrompt: FetchableRecord, PersistableRecord {
+    static let databaseTableName = "quick_prompts"
+}
+```
+
 ---
 
 ## Migration Strategy
@@ -744,6 +807,7 @@ migrator.registerMigration("v0.7-prompts-and-summaries") { db in
 // v0.7.6 — drop legacy transcriptions.summary
 // v0.7.7 — transcriptions.isTranscriptEdited
 // v0.8 — transcriptions.userNotes and summaries.userNotesSnapshot
+// v0.6 — quick_prompts
 ```
 
 ### Migration Rules
@@ -784,6 +848,7 @@ migrator.registerMigration("v0.7-prompts-and-summaries") { db in
 | `transcriptions.isTranscriptEdited` | v0.7.7 | User-edited transcript marker |
 | `transcriptions.userNotes` | v0.8 | Free-form notes captured during meeting recording |
 | `summaries.userNotesSnapshot` | v0.8 | Snapshot of notes used for prompt generation |
+| `quick_prompts` | v0.6 | User-customizable live Ask tab shortcut pills |
 
 ### Tables NOT Planned (YAGNI)
 

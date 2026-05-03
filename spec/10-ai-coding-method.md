@@ -10,25 +10,26 @@ Goal: reduce ambiguity, prevent drift, and make generated code maintainable over
 
 ## Philosophy
 
-1. Specs are executable intent, not long-form notes.
-2. Prose explains why; machine-readable artifacts define what.
-3. Every behavior change must be traceable from requirement -> code -> test.
-4. Determinism beats cleverness for core product flows.
+1. ADRs record locked decisions; do not second-guess them without a new ADR.
+2. Narrative specs explain product behavior, architecture, and rationale.
+3. Plans capture active implementation work and should be reconciled back into specs before merge.
+4. The kernel is a lightweight feature/status index plus a source/test map, not a parallel contract system.
+5. Determinism beats cleverness for core product flows.
 
 ## Context Zone (Probability Control)
 
 Coding agents sample actions from context. In practice: weak context spreads probability mass across many plausible edits; strong context concentrates probability mass on valid edits.
 
-The "context zone" is the bounded set of behaviors allowed by current requirements and contracts.
+The "context zone" is the bounded set of behavior allowed by current ADRs, specs, active plans, and tests.
 
 For every behavior change, define zone boundaries up front:
 
-1. Target requirement IDs in `requirements.yaml`.
-2. "Must not change" invariants in contracts/state machines.
-3. Allowed transition/path updates (if flow logic changes).
-4. Mapped tests that verify in-zone behavior and reject out-of-zone drift.
+1. Governing ADRs and spec sections.
+2. Target requirement IDs in `spec/kernel/requirements.yaml`, if the change maps to an existing or new notable feature.
+3. "Must not change" invariants for public interfaces, persistence formats, privacy boundaries, and stateful/concurrent flows.
+4. Focused tests that verify in-zone behavior and reject out-of-zone drift.
 
-Any out-of-zone behavior change must be explicitly called out and added to kernel artifacts before implementation.
+Any out-of-zone behavior change must be explicitly called out and reflected in the highest-precedence artifact it affects.
 
 ## External Evidence (Rationale)
 
@@ -46,78 +47,94 @@ The context-zone model is consistent with current research and vendor guidance:
    - https://openai.com/index/introducing-swe-bench-verified/
    - https://arxiv.org/abs/2506.12286
 
-Inference: strong boundary artifacts (requirements/contracts/state machines/tests) improve the probability that agent actions remain in-zone.
+Inference: strong boundary artifacts improve the probability that agent actions remain in-zone. Use heavier artifacts only where they materially reduce ambiguity.
 
 ## Decision
 
-Adopt a two-layer spec model:
+Adopt a pragmatic spec model:
 
-1. **Narrative layer (existing):** `00-09` docs and ADRs for product context and rationale.
-2. **Kernel layer (new, minimal):** structured requirements/contracts/state machines for implementation.
+1. **Decision layer:** accepted ADRs in `spec/adr/` for locked architectural and product decisions.
+2. **Narrative layer:** `spec/00-*` docs for product behavior, architecture, data model, UI, testing, and release status.
+3. **Plan layer:** `plans/active/` for in-flight implementation details; completed plans are historical records.
+4. **Kernel support layer:** `spec/kernel/requirements.yaml` as a compact feature/status index and `spec/kernel/traceability.md` as a manual feature -> source -> test map.
 
-The kernel layer is optimized for coding agents and review automation.
+Optional contracts and state machines may be added for high-risk seams, but they are not required repo-wide.
 
 ## Source-of-Truth Order
 
 When artifacts conflict, precedence is:
 
-1. `spec/kernel/requirements.yaml`
-2. `spec/kernel/contracts/*.yaml`
-3. `spec/kernel/state_machines/*.yaml`
-4. Accepted ADRs in `spec/adr/`
-5. Narrative docs `spec/00-09`
-6. Existing code/comments
+1. Accepted ADRs in `spec/adr/`
+2. Narrative specs in `spec/00-*`
+3. Active implementation plans in `plans/active/`
+4. Kernel index and traceability files in `spec/kernel/`
+5. Existing code/comments
 
-If conflict is found, update lower-precedence artifacts in the same change.
+If conflict is found, update the lower-precedence artifact in the same change. If the higher-precedence artifact is wrong, update it deliberately and explain why.
 
-## Kernel Schema (Minimal)
+## Kernel Artifacts
 
-Create and maintain:
+Maintain the artifacts that currently provide value:
 
 - `spec/kernel/requirements.yaml`
-- `spec/kernel/contracts/*.yaml`
-- `spec/kernel/state_machines/*.yaml`
 - `spec/kernel/traceability.md`
 
-### Requirement Shape
+### Requirement Index
 
-Each requirement must include:
+`requirements.yaml` is a compact feature/status index. Each top-level key is the stable requirement ID. Each entry should include:
 
-- `id` (stable, e.g. `REQ-F11-001`)
-- `title`
-- `source` (feature/ADR reference)
-- `priority`
+- `description`
+- `version` or release/train marker
 - `status`
-- `acceptance` (testable, explicit)
 
-Allowed values:
+Allowed `status` values:
 
-- `priority`: `p0 | p1 | p2 | p3`
 - `status`: `proposed | active | implemented | deprecated | historical`
 
 Requirement ID format:
 
-- `REQ-<feature>-<nnn>` where `<feature>` is stable (e.g. `F11`) and `<nnn>` is zero-padded (`001`, `002`, ...).
+- `REQ-<area>-<nnn>` where `<area>` is stable (`DICT`, `TRANS`, `MEET`, `CLI`, etc.) and `<nnn>` is zero-padded when practical.
 
 Example:
 
 ```yaml
-version: 1
-requirements:
-  - id: REQ-F11-001
-    title: YouTube URL transcription succeeds for valid YouTube URLs
-    source: spec/02-features.md#F11
-    priority: p0
-    status: active
-    acceptance:
-      - Given a valid YouTube URL, when transcribeURL is called, then a completed transcription is returned
-      - Progress emits download and transcription percentages
+REQ-YT-001:
+  description: YouTube URL transcription via yt-dlp
+  version: v0.3
+  status: implemented
 ```
 
-### Contract Shape
+Optional fields such as `source`, `priority`, and `acceptance` are allowed when they clarify active or high-risk work, but they are not required for every historical entry.
 
-Each contract must include:
+### Traceability Map
 
+`spec/kernel/traceability.md` is a manual feature -> source -> test map. It should be updated when a behavior change adds, removes, or materially moves implementation or test coverage for a mapped requirement.
+
+Current table shape:
+
+| Requirement | Source Files | Test Files |
+|---|---|---|
+| `REQ-YT-001` | `MacParakeetCore/Services/YouTubeDownloader.swift` | `YouTubeDownloaderTests.swift` |
+
+Rules:
+
+1. One row per current requirement when practical.
+2. Source and test entries should be concrete file paths or clearly marked gaps.
+3. If a requirement is implemented and has no mapped tests, call that out instead of implying coverage.
+
+### Optional Contracts
+
+Create `spec/kernel/contracts/*.yaml` only when a stable interface needs machine-checkable clarity, such as:
+
+- CLI JSON envelopes and exit/error contracts
+- Import/export bundle schemas
+- Database migration compatibility contracts
+- Telemetry/privacy event schemas
+- External-process invocation boundaries
+
+Each contract should include:
+
+- `name`
 - `input`
 - `output`
 - `errors` (stable error codes)
@@ -143,10 +160,20 @@ invariants:
   - sourceURL must equal request url for URL-based transcriptions
 ```
 
-### State Machine Shape
+### Optional State Machines
 
-Each flow machine must include:
+Create `spec/kernel/state_machines/*.yaml` only for flows where explicit transitions reduce real risk, such as:
 
+- Dictation lifecycle
+- Meeting recording lifecycle and crash recovery
+- STT scheduler/lease behavior
+- Calendar auto-start/auto-stop
+- Destructive import/replace flows
+
+Each state machine should include:
+
+- `name`
+- `initial`
 - `states`
 - `events`
 - `transitions`
@@ -167,32 +194,19 @@ transitions:
 terminal_states: [success, error]
 ```
 
-### Traceability Format
-
-`spec/kernel/traceability.md` must use this table:
-
-| Requirement ID | Contract(s) | Implementation | Tests | Status |
-|---|---|---|---|---|
-| `REQ-F11-001` | `contracts/transcribe_url.yaml` | `Sources/MacParakeetCore/Services/YouTubeDownloader.swift` | `Tests/MacParakeetTests/Services/YouTubeDownloaderTests.swift` | `active` |
-
-Rules:
-
-1. One row per active requirement.
-2. `Implementation` and `Tests` must be concrete file paths.
-3. If requirement is `implemented`, at least one mapped test must exist.
-
 ## Implementation Workflow
 
 For any behavior change:
 
-1. Select target requirement IDs.
-2. Read linked contract/state machine.
-3. Implement smallest change satisfying acceptance.
-4. Add/update tests mapped to requirement IDs.
-5. Update `traceability.md`.
-6. Run tests per test-scope policy.
+1. Read the governing ADRs, spec sections, and active plans.
+2. Identify existing requirement IDs, or add one if the change introduces a notable feature, public behavior, persistence format, or CLI surface.
+3. Define must-not-change invariants before editing.
+4. Add/update tests for changed behavior.
+5. Update `traceability.md` if implementation or test mappings changed.
+6. Add/update optional contracts or state machines only if the change touches a high-risk seam listed above.
+7. Run tests per test-scope policy.
 
-No feature work is complete without requirement + test mapping.
+Small bug fixes, copy changes, internal refactors, and straightforward UI polish may skip new requirement IDs when the existing specs and tests already bound the work.
 
 ## Test-Scope Policy
 
@@ -211,11 +225,12 @@ Before merge:
 
 A change is PR-ready only when all are true:
 
-1. Requirement entries updated (`requirements.yaml`).
-2. Contracts/state machine updated if behavior changed.
-3. Code + tests linked in `traceability.md`.
-4. Mapped tests pass for affected requirements.
-5. Precedence conflicts reconciled.
+1. Governing ADR/spec/plan context was checked.
+2. Requirement entries are updated when the change adds or changes a notable feature/public behavior.
+3. Traceability is updated when source/test mappings changed.
+4. Optional contracts/state machines are updated when they exist for the touched seam.
+5. Focused tests pass for affected behavior.
+6. Precedence conflicts are reconciled.
 
 ### Merge Gate
 
@@ -223,20 +238,21 @@ A change is merge-complete only when all are true:
 
 1. PR-Ready DoD is satisfied.
 2. Full test suite (`swift test`) passes in CI.
-3. Requirement status is updated appropriately (`active` or `implemented`).
+3. Relevant docs and plan status markers are updated.
 
 ## Coding Rules for Agents
 
-1. Do not implement against prose alone if a kernel requirement exists.
-2. Do not introduce new runtime behavior without requirement IDs.
-3. Prefer explicit error codes over free-form strings for core flows.
+1. Do not treat kernel files as higher precedence than ADRs or narrative specs.
+2. Do not introduce major user-visible behavior without updating the relevant spec/plan and, when appropriate, `requirements.yaml`.
+3. Prefer explicit error codes over free-form strings for public CLI, import/export, and core flow errors.
 4. Preserve local-first/privacy ADR constraints unless an ADR changes.
+5. Requirement IDs do not need to appear in Swift source or test names unless that improves clarity.
 
 ### Agent Discretion (Bounded)
 
 Agents are expected to use judgment, but within explicit constraints:
 
-1. For behavior changes, kernel workflow is mandatory (requirements + contracts/state machines as applicable + traceability + mapped tests).
+1. For behavior changes, documentation updates should be proportional to risk and user visibility.
 2. For non-behavioral changes (formatting, comments, renames, internal refactors with unchanged behavior), agents may use a lighter process.
 3. If a materially better third approach is identified, propose it and update this method before adopting it broadly.
 4. Prefer the simplest process that preserves correctness, traceability, and ADR constraints.
@@ -245,47 +261,48 @@ Agents are expected to use judgment, but within explicit constraints:
 
 Avoid:
 
-1. "Spec says maybe" language in implementation contracts.
-2. Requirement IDs that change over time.
-3. Tests with no requirement mapping.
-4. Silent behavior changes not reflected in kernel artifacts.
+1. Treating optional contracts/state machines as if they already exist.
+2. Claiming CI enforces traceability unless a CI check actually does.
+3. Requirement IDs that change over time.
+4. Silent behavior changes not reflected in the relevant ADR/spec/plan/kernel docs.
+5. Retrofitting heavy YAML artifacts for low-risk historical features just to satisfy process.
 
 ## Rollout Plan
 
-### Phase 1 (now)
+### Current Operating Mode
 
-1. Add this methodology.
-2. Start kernel for highest-risk flows: dictation lifecycle, transcription lifecycle, YouTube URL flow, export flow.
-3. Assign owner: repository maintainers.
-
-Success metric:
-
-- At least 10 active requirements represented in kernel artifacts.
-
-### Phase 2
-
-1. Enforce traceability in PR checklist.
-2. Add lightweight CI check for missing requirement/test mapping.
+1. Keep `requirements.yaml` accurate as a compact feature/status index.
+2. Keep `traceability.md` useful as a manual feature -> source -> test map.
+3. Add optional contracts/state machines only when they reduce ambiguity at high-risk seams.
 
 Success metric:
 
-- CI fails on unmapped active requirements.
+- A new agent can quickly find the source and test surface for a shipped feature.
+- Kernel docs do not contradict ADRs, narrative specs, or current code.
 
-### Phase 3
+### Targeted Investment
 
-1. Expand kernel coverage to all active features.
-2. Keep narrative docs concise and linked to kernel IDs.
+When repeatedly editing a high-risk flow, add the smallest durable artifact that would have prevented the last ambiguity:
 
-Success metric:
+- A contract for stable I/O/error schemas.
+- A state machine for tricky lifecycle/concurrency behavior.
+- A traceability row for source/test discovery.
 
-- 100% of active features map to kernel requirements and tests.
+Non-goals:
+
+- 100% active-feature kernel coverage.
+- CI failure on unmapped requirements without first building and maintaining that check.
+- Repo-wide retroactive contracts for simple or historical behavior.
 
 ## Relationship to Existing Specs
 
-Narrative docs remain the human-facing product and architecture guide.
-The kernel is the implementation authority for coding agents.
+Narrative docs remain the human-facing product and architecture guide. ADRs remain the locked decision record. The kernel supports implementation discovery and review; it is not the primary implementation authority.
 
-Both are required:
+Use each artifact for what it is good at:
 
-- Narrative without kernel -> ambiguity and drift.
-- Kernel without narrative -> local optimization, poor product decisions.
+- ADRs: decisions and constraints.
+- Narrative specs: product behavior and architecture.
+- Plans: active implementation detail.
+- Kernel requirements: compact status/index.
+- Kernel traceability: source and test discovery.
+- Optional contracts/state machines: targeted clarity for high-risk seams.

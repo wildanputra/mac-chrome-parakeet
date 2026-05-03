@@ -52,7 +52,7 @@ This matrix traces each requirement ID from `requirements.yaml` to its implement
 | REQ-YT-002 | `MacParakeetCore/Database/TranscriptionRepository.swift` | `TranscriptionRepositoryTests.swift` |
 | REQ-DATA-004 | `MacParakeetCore/Database/TranscriptionRepository.swift` | `TranscriptionRepositoryTests.swift` |
 
-## v0.6 Video Player & UI Revamp
+## v0.5 Video Player & UI Revamp
 
 | Requirement | Source Files | Test Files |
 |------------|-------------|------------|
@@ -75,6 +75,7 @@ This matrix traces each requirement ID from `requirements.yaml` to its implement
 | REQ-MEET-006 | `MacParakeetCore/Audio/MeetingAudioStorageWriter.swift`, `MacParakeetCore/Audio/PCMBufferToSampleBuffer.swift` | `PCMBufferToSampleBufferTests.swift`, `MeetingAudioStorageWriterTests.swift`, `MeetingRecordingCrashRecoveryTests.swift` |
 | REQ-MEET-008 | `MacParakeet/Views/MeetingRecording/MeetingRecordingPanelView.swift`, `MacParakeet/Views/MeetingRecording/LiveNotesPaneView.swift`, `MacParakeet/Views/MeetingRecording/TranscriptTextView.swift`, `MacParakeet/Views/MeetingRecording/LiveAskPaneView.swift`, `MacParakeetViewModels/MeetingRecordingPanelViewModel.swift`, `MacParakeetViewModels/TranscriptChatViewModel.swift` | `MeetingRecordingPanelViewModelTests.swift`, `TranscriptChatViewModelTests.swift` |
 | REQ-MEET-009 | `MacParakeetCore/Services/MeetingRecordingService.swift`, `MacParakeetCore/Services/MeetingRecordingRecoveryService.swift`, `MacParakeetCore/Services/MeetingNotesFile.swift`, `MacParakeetCore/Services/LLMService.swift`, `MacParakeetCore/Models/PromptTemplateRenderer.swift`, `MacParakeet/Views/Transcription/TranscriptResultView.swift`, `MacParakeetViewModels/MeetingNotesViewModel.swift`, `MacParakeetViewModels/TranscriptChatViewModel.swift` | `MeetingRecordingServiceTests.swift`, `MeetingRecordingRecoveryServiceTests.swift`, `MeetingNotesFileTests.swift`, `LLMServiceTests.swift`, `PromptTemplateRendererTests.swift`, `TranscriptChatViewModelTests.swift` |
+| REQ-MEET-010 | `MacParakeetCore/Models/QuickPrompt.swift`, `MacParakeetCore/Models/QuickPromptBundle.swift`, `MacParakeetCore/Database/QuickPromptRepository.swift`, `MacParakeetCore/Database/DatabaseManager.swift`, `MacParakeetViewModels/QuickPromptsViewModel.swift`, `MacParakeet/Views/MeetingRecording/LiveAskPaneView.swift`, `MacParakeet/Views/MeetingRecording/AskPromptsSheet.swift`, `CLI/Commands/QuickPromptsCommand.swift`, `CLI/MacParakeetCLI.swift` | `QuickPromptRepositoryTests.swift`, `QuickPromptBundleTests.swift`, `QuickPromptsViewModelTests.swift`, `QuickPromptsCommandTests.swift`, `DatabaseManagerTests.swift` |
 
 ## v0.7 Multilingual Speech Recognition
 
