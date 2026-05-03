@@ -6,12 +6,20 @@ public struct ChatDisplayMessage: Identifiable, Equatable {
     public let id: UUID
     public let role: ChatMessage.Role
     public var content: String
+    public let modelPromptOverride: String?
     public var isStreaming: Bool
 
-    public init(id: UUID = UUID(), role: ChatMessage.Role, content: String, isStreaming: Bool = false) {
+    public init(
+        id: UUID = UUID(),
+        role: ChatMessage.Role,
+        content: String,
+        modelPromptOverride: String? = nil,
+        isStreaming: Bool = false
+    ) {
         self.id = id
         self.role = role
         self.content = content
+        self.modelPromptOverride = modelPromptOverride
         self.isStreaming = isStreaming
     }
 }
@@ -45,6 +53,18 @@ public final class TranscriptChatViewModel {
     private var conversationRepo: ChatConversationRepositoryProtocol?
     private var transcriptionId: UUID?
     private var transcriptText: String = ""
+    /// Optional provider closure that returns the user's typed meeting notes
+    /// at chat-send time. Returning nil/empty omits the notes block from the
+    /// chat system prompt, leaving chat behavior byte-identical to a chat
+    /// without notes. The closure shape (vs. a stored snapshot) lets the live
+    /// in-meeting Ask path read the freshest keystroke without reactive
+    /// plumbing — see `MeetingRecordingPanelViewModel` for the wiring.
+    ///
+    /// `@MainActor`-isolated rather than `@Sendable` because the closure is
+    /// invoked from `sendMessage()` on the MainActor before the streaming
+    /// task is detached, and typical implementations read MainActor-isolated
+    /// state (e.g. `MeetingNotesViewModel.notesText`).
+    private var userNotesProvider: (@MainActor () -> String?)?
     private var chatHistory: [ChatMessage] = []
     private var streamingTask: Task<Void, Never>?
     private var streamingAssistantID: UUID?
@@ -133,7 +153,7 @@ public final class TranscriptChatViewModel {
     ///   user-visible bubble and persisted history both show `inputText`.
     public func sendMessage(richPrompt: String? = nil) {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isStreaming, let llmService else { return }
+        guard !text.isEmpty, !isStreaming, llmService != nil else { return }
         let llmQuestion: String
         if let rich = richPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !rich.isEmpty {
             llmQuestion = rich
@@ -174,13 +194,52 @@ public final class TranscriptChatViewModel {
         inputText = ""
         errorMessage = nil
 
-        let userMessage = ChatDisplayMessage(role: .user, content: text)
+        let modelPromptOverride = llmQuestion == text ? nil : llmQuestion
+        let userMessage = ChatDisplayMessage(role: .user, content: text, modelPromptOverride: modelPromptOverride)
         messages.append(userMessage)
 
         // Capture history BEFORE appending user message — buildChatMessages() adds question separately
         let historyForRequest = chatHistory
-        chatHistory.append(ChatMessage(role: .user, content: text))
+        chatHistory.append(ChatMessage(role: .user, content: text, modelPromptOverride: modelPromptOverride))
         persistChatMessages()
+
+        startStreamingAssistant(question: llmQuestion, historyForRequest: historyForRequest)
+    }
+
+    /// Tail-only regenerate: drops the last completed assistant turn and re-issues
+    /// the most recent user prompt against the same prior history. Mid-history
+    /// regeneration would force a branching/forking model into a surface that's
+    /// purposefully linear; we deliberately don't support it.
+    public func regenerateLastResponse() {
+        guard !isStreaming, llmService != nil else { return }
+        guard let last = messages.last,
+              last.role == .assistant,
+              !last.isStreaming else { return }
+        guard chatHistory.last?.role == .assistant else { return }
+
+        // Pop the assistant turn from both the visible thread and persisted
+        // history; commit the removal so a crash/restart wouldn't replay the
+        // stale answer.
+        messages.removeLast()
+        chatHistory.removeLast()
+        persistChatMessages()
+        errorMessage = nil
+
+        guard let trailingUser = chatHistory.last,
+              trailingUser.role == .user,
+              let visibleUser = messages.last,
+              visibleUser.role == .user else { return }
+        let userPrompt = trailingUser.modelPromptOverride ?? visibleUser.modelPromptOverride ?? trailingUser.content
+        let historyForRequest = Array(chatHistory.dropLast())
+
+        startStreamingAssistant(question: userPrompt, historyForRequest: historyForRequest)
+    }
+
+    /// Shared streaming kernel for both first-send and regenerate. Appends a
+    /// streaming-state assistant turn, then runs the LLM stream with the same
+    /// detach/cancel/error semantics in both code paths.
+    private func startStreamingAssistant(question: String, historyForRequest: [ChatMessage]) {
+        guard let llmService else { return }
 
         let assistantID = UUID()
         let assistantMessage = ChatDisplayMessage(id: assistantID, role: .assistant, content: "", isStreaming: true)
@@ -189,6 +248,7 @@ public final class TranscriptChatViewModel {
         streamingAssistantID = assistantID
 
         let transcript = transcriptText
+        let userNotes = userNotesProvider?()
 
         // Capture context so the task can persist independently if detached (e.g. user clicks New Chat)
         let capturedConversationId = currentConversation?.id
@@ -200,8 +260,9 @@ public final class TranscriptChatViewModel {
             var accumulated = ""
             do {
                 let stream = llmService.chatStream(
-                    question: llmQuestion,
+                    question: question,
                     transcript: transcript,
+                    userNotes: userNotes,
                     history: historyForRequest
                 )
                 for try await token in stream {
@@ -280,6 +341,22 @@ public final class TranscriptChatViewModel {
     /// should run against the latest text without losing prior turns.
     public func updateTranscriptText(_ text: String) {
         transcriptText = text
+    }
+
+    /// Wire a closure that returns the user's typed meeting notes at chat-send
+    /// time. Pass `nil` to clear. Empty / whitespace-only return values are
+    /// treated as "no notes" by the LLM service — chat behaves identically to
+    /// a chat without notes when the closure has nothing to give.
+    ///
+    /// Two shapes of caller:
+    /// - **Saved transcription detail page**: bind a closure that returns the
+    ///   loaded `Transcription.userNotes`. It is effectively static for the
+    ///   page's lifetime, but the closure pattern keeps the API uniform.
+    /// - **Live in-meeting Ask**: bind a closure that reads the live
+    ///   notepad's `notesText` at call time so chat sees every keystroke up
+    ///   to the moment the user hits Send.
+    public func bindUserNotesProvider(_ provider: (@MainActor () -> String?)?) {
+        self.userNotesProvider = provider
     }
 
     /// Promotes an in-memory live chat (no transcriptionId, no conversationRepo)
@@ -476,7 +553,7 @@ public final class TranscriptChatViewModel {
         currentConversation = conversation
         if let chatMessages = conversation.messages, !chatMessages.isEmpty {
             messages = chatMessages.map { msg in
-                ChatDisplayMessage(role: msg.role, content: msg.content)
+                ChatDisplayMessage(role: msg.role, content: msg.content, modelPromptOverride: msg.modelPromptOverride)
             }
             chatHistory = chatMessages
         } else {

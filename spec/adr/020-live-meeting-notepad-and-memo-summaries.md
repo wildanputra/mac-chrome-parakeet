@@ -1,9 +1,53 @@
 # ADR-020: Live Meeting Notepad + Memo-Steered Summaries
 
-> Status: Implemented
-> Date: 2026-04-25 (proposed) · Amended 2026-04-25 (post-review) · Implemented 2026-04-25 (Phases 1–4)
+> Status: Partially Implemented (notepad + template plumbing shipped; "Memo-Steered Notes" built-in prompt reverted 2026-05-02)
+> Date: 2026-04-25 (proposed) · Amended 2026-04-25 (post-review) · Implemented 2026-04-25 (Phases 1–4) · Amended 2026-05-02 (Notes + Transcript tab badges dropped — all three tabs plain) · Amended 2026-05-02 ("Memo-Steered Notes" built-in prompt reverted)
 > Related: ADR-013 (prompt library + multi-summary), ADR-014 (meeting recording), ADR-017 (calendar auto-start), ADR-018 (live meeting Ask tab), ADR-019 (crash-resilient meeting recording)
 > Naming Note (2026-04-28): The persisted table remains `summaries`, but the current Swift names are `PromptResult`, `PromptResultRepository`, and `PromptResultsViewModel`.
+
+## Amendment (2026-05-02, "Memo-Steered Notes" built-in prompt reverted)
+
+The "Memo-Steered Notes" built-in prompt described in §5 has been removed from `Prompt.builtInPrompts()` and `community-prompts.json`. The reconciler's existing "delete built-ins not in the canonical list" path removes the row on next launch for any DB that has it from the 2026-04-25 → 2026-05-02 window. The canonical UUID `1C5A1B4A-7E2C-4D38-B3EF-5C0F8A7E3E1A` is reserved and must not be reused for a different prompt — reissuing it would resurrect the removed prompt on installs that still have its row.
+
+**Why reverted:**
+
+1. **Source leak.** The prompt is a meeting-recording concept but was shipped as a global auto-run built-in with no source scoping in `Prompt`. It fired on YouTube, file, and audio transcriptions where `transcriptions.userNotes` is always `nil` — `{{userNotes}}` substituted to empty string, but the prompt's output template (`Key Points — Each user note expanded with supporting detail...`) explicitly anchors to user notes. The output was structurally pretending notes existed on sources where they couldn't.
+
+2. **Empty-notes case is structurally awkward.** Even on meeting recordings, the median user takes no notes. The prompt's preamble says "If the user wrote nothing, infer structure from the transcript and produce a clean meeting-notes view," but the highlighted output section directly contradicts that ("Each user note expanded..."). The LLM bridges the gap, but the prompt is internally inconsistent in the empty case.
+
+3. **Duplicate auto-run summaries.** Both `Memo-Steered Notes` and `Summary` shipped with `isAutoRun: true`. With notes empty (the median case), users got two transcript-only summaries that overlapped ~80%. With notes filled, they got one note-expanded and one transcript-only — still redundant for most users. The architecture conflated "best summary for meetings with notes" with "summary that everyone always wants."
+
+**What stays:**
+- The Notes tab in the live meeting panel (§1, §2)
+- `transcriptions.userNotes` schema column (§3)
+- Soft length cap (§3, 8,000 words)
+- `PromptTemplateRenderer` with `{{userNotes}}` and `{{transcript}}` (§4) — available for custom prompts
+- `userNotesSnapshot` on `PromptResult` (§6)
+- Slash commands in the Notes pane (§7)
+- Service-routed auto-save (§8) and lock-file extension (§9)
+- Rich pre-meeting countdown toast (§10)
+- The notes invariant: "Notes are user-authored only" (§11)
+
+**What re-introduction looks like:** A future memo-steered prompt should not auto-run as a global default. Two paths are open: (a) add a `Prompt.appliesToSources: [TranscriptionSource]?` field so the prompt only appears on meeting-recording transcriptions; or (b) gate auto-run dispatch on the substitution: if a prompt references `{{userNotes}}` and the transcription's `userNotes` is `nil`/empty, skip auto-run. Path (a) is stronger (also hides from the picker on non-meeting sources); path (b) is smaller. The infrastructure for both is already in place.
+
+**Notes consumption path going forward:** With the auto-run prompt removed, the user's typed notes still need a way out. Two surfaces, neither of which re-introduces the auto-run / source-leak problems above:
+
+1. **`notes.md` sidecar.** Written into the meeting session folder alongside `meeting.m4a` and `meeting-recording-metadata.json` at finalize and crash-recovery time. Empty / whitespace-only / nil notes do not produce a file. The DB column `transcriptions.userNotes` is canonical; `notes.md` is a snapshot at finalize and is not synced with later edits (e.g. via `macparakeet-cli meetings notes`). Zero-UI consumption surface — user opens the meeting folder in Finder and reads what they typed in any editor.
+2. **Chat threading.** `LLMService.chat / chatStream / chatDetailed` accept a `userNotes: String?` parameter. When the user has typed notes, the chat system prompt gains a `User's notes from the meeting:\n…` block before the transcript block. Chat is user-initiated (not auto-run) and the empty-notes case is byte-identical to today's chat — so the failure modes that drove the prompt revert do not apply. `TranscriptChatViewModel.bindUserNotesProvider(_:)` lets callers thread either a static value (saved-transcription detail page reads `Transcription.userNotes`) or a live closure (live in-meeting Ask reads `MeetingNotesViewModel.notesText` at chat-send time so every keystroke up to Send is visible to the LLM).
+
+The first surface gives the user a file they can read; the second gives the AI context the user already typed. Together they cover the value the reverted built-in prompt was trying to deliver, without the auto-run footguns. A richer in-app surface on the transcription detail page (collapsed Notes section) is a future option, not a requirement.
+
+**Tests:** `testReconcileRemovesRevertedMemoSteeredNotesPrompt` in `DatabaseManagerTests` pins the prompt-deletion behavior. `MeetingNotesFileTests` covers the async `notes.md` writer (header, empty/nil/whitespace cases, stale-file removal, internal line-break preservation). `MeetingRecordingServiceTests` integration-tests the finalize call site (notes-with-content writes the file; empty-notes meetings do not), and `MeetingRecordingRecoveryServiceTests` verifies recovered notes also write the sidecar. `LLMServiceTests` cover the chat-threading path: notes block precedes the transcript block when present, is omitted entirely on nil/empty/whitespace, the byte-identical equivalence between nil and whitespace-only is asserted, and notes+transcript are budgeted together. `TranscriptChatViewModelTests` cover the provider-closure plumbing including re-evaluation on every send (so live-meeting Ask sees the freshest keystroke) and rich-prompt regeneration.
+
+## Amendment (2026-05-02, all three tab badges dropped)
+
+In two passes the same day, we removed every text badge from the live-panel tab strip. The strip now reads `Notes   Transcript   Ask` plus a quiet breathing dot on Ask while `chatViewModel.isStreaming`. The `ViewThatFits`-based collapse machinery is unchanged — it just has fewer states to render.
+
+**Pass 1: Transcript dropped `LIVE`.** Recording state is already broadcast five times in the panel header directly above the tab bar — the pulsing dual-audio orb, the `Recording` status string, the live elapsed timer, the live transcript word count, and the Stop button. A 6th instance on the tab was decoration, so Transcript now renders as a plain tab label.
+
+**Pass 2: Notes dropped `Nw`.** Word count was decoration too. The notes themselves are the canonical surface for "how much have I written?" — and the soft-cap warning at 8,000 words has its own dedicated footer UI in `LiveNotesPaneView`. Writers' tooling lives inside the writing surface, not on the navigation strip. `MeetingNotesViewModel.wordCount` is still computed and used internally for `isApproachingSoftCap`.
+
+**Reframing of the §1 tab-label intent.** The original framing assumed every tab should surface a richer-than-noun label. The corrected framing: surface state the user *can't already see by switching tabs*. Only Ask qualifies — its streaming state ("an answer is forming") is invisible while you're on Notes or Transcript. Everything else either repeats a louder header signal (Transcript) or is visible in the pane itself once you switch (Notes). The taxonomy is now: three plain nouns plus one ambient indicator on the one tab where ambient state matters.
 
 ## Amendment (2026-04-25, post-review)
 
@@ -50,13 +94,13 @@ What's missing: a place for the user to type during the meeting, a column to per
 
 ### 1. Three tabs in the live panel: Notes / Transcript / Ask, Notes default
 
-`MeetingRecordingPanelView` grows from two tabs to three. The Notes tab is selected by default when the panel opens. Tab labels carry live state hints so the user gets situational awareness from the tab bar:
+`MeetingRecordingPanelView` grows from two tabs to three. The Notes tab is selected by default when the panel opens. Notes and Transcript render as plain labels; Ask is the only tab that carries live state, showing a breathing dot while `chatViewModel.isStreaming` so the user can tell an answer is forming without restoring the old numeric badge model:
 
 ```
 ┌────────────────────────────────────────────────┐
 │ ● Recording 6:03                               │
 ├────────────────────────────────────────────────┤
-│  Notes · 24w   Transcript · LIVE   Ask · 3     │
+│  Notes        Transcript        Ask ●          │
 ├────────────────────────────────────────────────┤
 │                                                │
 │  [content for selected tab]                    │
@@ -68,7 +112,9 @@ Keyboard: ⌘1 → Notes, ⌘2 → Transcript, ⌘3 → Ask. The floating record
 
 The Notes default is the deliberate signal: this is the main event during a meeting. Transcript and Ask are the supporting cast.
 
-**Tab-label collapse at narrow panel widths.** The current panel has a 360px minimum width. State-bearing labels (`Notes · 24w`, `Transcript · LIVE`, `Ask · 3`) will not fit at the minimum. Strategy: per-tab measurement at layout time. When the available cell width is below the measured label-with-badge width, the badge collapses into the tab's tooltip and the label renders as the plain noun (`Notes`, `Transcript`, `Ask`). Verified at 360px during Phase 2; the rich label is the goal at default panel widths (~440px+) where it consistently fits.
+**Tab-label collapse at narrow panel widths.** The current panel has a 360px minimum width. After the 2026-05-02 amendments, only Ask carries any extra glyph (the breathing dot while `chatViewModel.isStreaming`); Notes and Transcript always render as plain nouns. The `ViewThatFits` machinery still exists and gracefully collapses the Ask dot into the tab's tooltip if the cell ever gets too narrow to fit it. Verified at 360px during Phase 2; the rich label is the goal at default panel widths (~440px+) where it consistently fits.
+
+**Ask state is binary, not numeric.** The Ask tab originally exposed message count (`Ask · 12`). That was decoration: knowing twelve messages exist doesn't help a user reading Notes decide whether to switch back. The actionable state is "is an answer forming right now?" — so the Ask tab now shows a quiet breathing dot only while `chatViewModel.isStreaming` is true, and is otherwise just `Ask`. Strictly bound to streaming so the dot can't decay into a stale notification badge.
 
 **Escape-hatch threshold.** The collapsible-transcript-ticker-inside-Notes pattern (Char's collapsible footer) is listed under Future Work. The trigger to promote it from Future Work to required is concrete: if Phase 2 manual usability testing shows users switching between Notes and Transcript more than ~3 times per minute on average, the cost of the switch outweighs the cost of the inline ticker. The decision is taken before Phase 3 freezes — not at "tired of looking at the branch" time.
 
@@ -76,7 +122,7 @@ The Notes default is the deliberate signal: this is the main event during a meet
 
 The Notes pane is a `TextEditor` with placeholder copy. No rich-text, no NSTextView wrapper, no markdown rendering during the meeting. Slash commands (§7) cover the highest-signal structuring needs (action items, decisions, timestamps) without a formatting infrastructure.
 
-Rich-text is deferred to Future Work. Plaintext is enough to ship the memo→summary mechanic, which is where the user value lives.
+Rich-text is deferred to Future Work. Plaintext is enough to ship the notepad, notes sidecar, chat context, and `{{userNotes}}` template plumbing; the built-in memo-steered prompt can return later with proper source scoping.
 
 ### 3. Notes persist on `transcriptions.userNotes`
 
@@ -233,7 +279,7 @@ The invariant is therefore enforced by surface area, not by hope.
 ┌──────────────────────────────────────────────────────────┐
 │              MeetingRecordingPanelView                   │
 │  ┌──────────┐ ┌───────────┐ ┌─────┐                      │
-│  │ Notes·Nw │ │Transcript │ │Ask·N│  ← tabs (⌘1/⌘2/⌘3)   │
+│  │ Notes    │ │Transcript │ │Ask ●│  ← tabs (⌘1/⌘2/⌘3)   │
 │  └──────────┘ └───────────┘ └─────┘                      │
 │                                                          │
 │  ┌──────────────────────────────────────────────────┐    │
@@ -297,7 +343,7 @@ Reading scrolling text is passive. Watching an AI think back at you (Ask) is pas
 Folding the transcript into a one-line footer inside Notes (Char's pattern) was the leading alternative. Three reasons we kept tabs:
 
 - **Ask is fat-target.** ADR-018 just shipped; reviewers and users like the thinking-partner pills. Demoting Ask to a slash command (`/ask`) buries them and forces users to remember they exist.
-- **State-bearing tab labels** (`Notes · 24w`, `Transcript · LIVE`, `Ask · 3`) reduce the cost of three tabs by giving the user situational awareness from the tab bar. They don't need to switch as often.
+- **Ambient state on the Ask tab** (a quiet breathing dot while `chatViewModel.isStreaming`) reduces the cost of three tabs by letting a user reading Notes or Transcript see that their answer is forming without switching. After the 2026-05-02 amendments, Notes and Transcript are plain nouns — situational awareness for those two surfaces comes from the panes themselves and from the panel header, not from tab badges.
 - **The collapsible-footer pattern can still come later** as a polish refinement *inside* the Notes tab — a one-line "last sentence" strip at the bottom — without removing the Transcript tab. We can have both.
 
 ### Why not `/ask` in the slash menu
@@ -368,7 +414,7 @@ If post-implementation the diff is genuinely too large to review in one sitting,
 
 ### Negative
 
-- **Three tabs in a small floating panel risks feeling cramped.** Mitigated by Notes default, tab-label collapse strategy at narrow widths (§1), and state-bearing tab labels at wider widths. If Phase 2 usability testing shows users switching too frequently, the collapsible-transcript-ticker-inside-Notes pattern is a planned escape hatch with a defined trigger threshold (~3+ switches/min).
+- **Three tabs in a small floating panel risks feeling cramped.** Mitigated by Notes default, the `ViewThatFits` collapse strategy at narrow widths (§1), and the Ask-only streaming dot at wider widths. If Phase 2 usability testing shows users switching too frequently, the collapsible-transcript-ticker-inside-Notes pattern is a planned escape hatch with a defined trigger threshold (~3+ switches/min).
 - **No inline formatting during the meeting.** Plaintext + slash commands cover headings/labels via plaintext markers; bold/italic/lists are not available. Char's TipTap renders formatted blocks live; ours render raw `**Action:**` characters until post-meeting markdown rendering ships (Future Work). Users coming from Char will experience this as a visual regression. Acceptable v0.6 compromise; markdown rendering is one of the first follow-up PRs.
 - **Customized clones of built-in prompts will not gain `{{userNotes}}` automatically.** Users who cloned a built-in into a custom prompt for editing will continue to see their custom prompt produce notes-blind summaries. There is no migration path that touches custom prompts (by design — we don't rewrite user content). The new "Memo-Steered Notes" built-in is the recommended path for users who want notes-aware summaries; the prompt library UI surfaces this via copy on the new prompt's card.
 - **One more thing to do during a meeting.** Whether to type notes is now a live decision. Placeholder copy nudges; no force.

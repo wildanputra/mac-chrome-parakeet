@@ -4,7 +4,7 @@ import Foundation
 
 public protocol LLMServiceProtocol: Sendable {
     func generatePromptResult(transcript: String, systemPrompt: String?) async throws -> String
-    func chat(question: String, transcript: String, history: [ChatMessage]) async throws -> String
+    func chat(question: String, transcript: String, userNotes: String?, history: [ChatMessage]) async throws -> String
     func transform(text: String, prompt: String) async throws -> String
     func formatTranscript(
         transcript: String,
@@ -14,7 +14,7 @@ public protocol LLMServiceProtocol: Sendable {
     ) async throws -> String
 
     func generatePromptResultStream(transcript: String, systemPrompt: String?) -> AsyncThrowingStream<String, Error>
-    func chatStream(question: String, transcript: String, history: [ChatMessage]) -> AsyncThrowingStream<String, Error>
+    func chatStream(question: String, transcript: String, userNotes: String?, history: [ChatMessage]) -> AsyncThrowingStream<String, Error>
     func transformStream(text: String, prompt: String) -> AsyncThrowingStream<String, Error>
 
     // MARK: Envelope variants
@@ -25,7 +25,7 @@ public protocol LLMServiceProtocol: Sendable {
     // `String`-returning callers (the GUI) are unaffected.
 
     func generatePromptResultDetailed(transcript: String, systemPrompt: String?) async throws -> LLMResult
-    func chatDetailed(question: String, transcript: String, history: [ChatMessage]) async throws -> LLMResult
+    func chatDetailed(question: String, transcript: String, userNotes: String?, history: [ChatMessage]) async throws -> LLMResult
     func transformDetailed(text: String, prompt: String) async throws -> LLMResult
 }
 
@@ -81,9 +81,14 @@ public final class LLMService: LLMServiceProtocol, Sendable {
         additionalProperties: false
     )
 
-    // Context budgets (characters)
-    internal static let cloudContextBudget = 100_000
-    internal static let localContextBudget = 24_000
+    // Context budgets (characters). Sized for 2026 model norms: every modern
+    // cloud provider ships at least a 200K-token context, and local models on
+    // Apple Silicon (Llama 4 / Qwen / Gemma / Mistral) routinely have 32K+
+    // tokens. We sit comfortably under those floors so first-token latency and
+    // per-turn cost stay reasonable while a multi-hour meeting can fit
+    // un-truncated. ~3.5 chars/token in English.
+    internal static let cloudContextBudget = 500_000   // ≈140K tokens
+    internal static let localContextBudget =  80_000   // ≈ 22K tokens
 
     public init(
         client: LLMClientProtocol = RoutingLLMClient(),
@@ -118,8 +123,8 @@ public final class LLMService: LLMServiceProtocol, Sendable {
         try await generatePromptResultDetailed(transcript: transcript, systemPrompt: systemPrompt).output
     }
 
-    public func chat(question: String, transcript: String, history: [ChatMessage]) async throws -> String {
-        try await chatDetailed(question: question, transcript: transcript, history: history).output
+    public func chat(question: String, transcript: String, userNotes: String?, history: [ChatMessage]) async throws -> String {
+        try await chatDetailed(question: question, transcript: transcript, userNotes: userNotes, history: history).output
     }
 
     public func transform(text: String, prompt: String) async throws -> String {
@@ -201,7 +206,7 @@ public final class LLMService: LLMServiceProtocol, Sendable {
         }
     }
 
-    public func chatDetailed(question: String, transcript: String, history: [ChatMessage]) async throws -> LLMResult {
+    public func chatDetailed(question: String, transcript: String, userNotes: String?, history: [ChatMessage]) async throws -> LLMResult {
         let operationID = Observability.operationID()
         let startedAt = Date()
         let context = try loadContextForLLMOperation(
@@ -213,7 +218,7 @@ public final class LLMService: LLMServiceProtocol, Sendable {
             messageCount: history.count + 1
         )
         let config = context.providerConfig
-        let messages = buildChatMessages(question: question, transcript: transcript, history: history, config: config)
+        let messages = buildChatMessages(question: question, transcript: transcript, userNotes: userNotes, history: history, config: config)
         let budget = contextBudget(for: config)
         do {
             let response = try await client.chatCompletion(messages: messages, context: context, options: .default)
@@ -561,7 +566,7 @@ public final class LLMService: LLMServiceProtocol, Sendable {
         }
     }
 
-    public func chatStream(question: String, transcript: String, history: [ChatMessage]) -> AsyncThrowingStream<String, Error> {
+    public func chatStream(question: String, transcript: String, userNotes: String?, history: [ChatMessage]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let operationID = Observability.operationID()
             let startedAt = Date()
@@ -591,7 +596,7 @@ public final class LLMService: LLMServiceProtocol, Sendable {
                     let config = context.providerConfig
                     provider = config.id.rawValue
                     inputTruncated = transcript.count > self.contextBudget(for: config)
-                    let messages = self.buildChatMessages(question: question, transcript: transcript, history: history, config: config)
+                    let messages = self.buildChatMessages(question: question, transcript: transcript, userNotes: userNotes, history: history, config: config)
                     let stream = self.client.chatCompletionStream(messages: messages, context: context, options: .default)
                     for try await token in stream {
                         outputChars += token.count
@@ -848,13 +853,17 @@ public final class LLMService: LLMServiceProtocol, Sendable {
     private func buildChatMessages(
         question: String,
         transcript: String,
+        userNotes: String?,
         history: [ChatMessage],
         config: LLMProviderConfig
     ) -> [ChatMessage] {
         let budget = contextBudget(for: config)
-        let truncated = Self.truncateMiddle(transcript, limit: budget)
-
-        let systemPrompt = Prompts.chat + "\n\n---\nTranscript:\n" + truncated
+        let systemPrompt = Self.buildChatSystemPrompt(
+            transcript: transcript,
+            userNotes: userNotes,
+            question: question,
+            budget: budget
+        )
 
         var messages = [ChatMessage(role: .system, content: systemPrompt)]
 
@@ -872,16 +881,19 @@ public final class LLMService: LLMServiceProtocol, Sendable {
             i -= 1
             // If this is an assistant message preceded by a user message, take both as a turn
             if i > 0 && history[i].role == .assistant && history[i - 1].role == .user {
-                let turnChars = history[i - 1].content.count + history[i].content.count
+                let userMessage = Self.requestMessage(from: history[i - 1])
+                let assistantMessage = Self.requestMessage(from: history[i])
+                let turnChars = userMessage.content.count + assistantMessage.content.count
                 if historyChars + turnChars > historyBudget { break }
                 historyChars += turnChars
-                keptTurns.insert([history[i - 1], history[i]], at: 0)
+                keptTurns.insert([userMessage, assistantMessage], at: 0)
                 i -= 1
             } else {
-                let turnChars = history[end - 1].content.count
+                let message = Self.requestMessage(from: history[end - 1])
+                let turnChars = message.content.count
                 if historyChars + turnChars > historyBudget { break }
                 historyChars += turnChars
-                keptTurns.insert([history[end - 1]], at: 0)
+                keptTurns.insert([message], at: 0)
             }
         }
         messages.append(contentsOf: keptTurns.flatMap { $0 })
@@ -890,18 +902,59 @@ public final class LLMService: LLMServiceProtocol, Sendable {
         return messages
     }
 
-    /// Truncate text from the middle, keeping first 45% and last 45% of the budget.
+    private static func requestMessage(from message: ChatMessage) -> ChatMessage {
+        ChatMessage(role: message.role, content: message.modelContent)
+    }
+
+    private static func buildChatSystemPrompt(
+        transcript: String,
+        userNotes: String?,
+        question: String,
+        budget: Int
+    ) -> String {
+        let trimmedNotes = userNotes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let transcriptHeader = "\n\n---\nTranscript:\n"
+        let notesHeader = "\n\n---\nUser's notes from the meeting (treat these as what the user thinks matters; the transcript is the source of truth for facts):\n"
+        let historyReserve = min(8_000, max(0, budget / 10))
+        let contextBudget = max(0, budget - Prompts.chat.count - question.count - historyReserve)
+
+        let notesBlock: String
+        if trimmedNotes.isEmpty {
+            notesBlock = ""
+        } else {
+            let notesTextBudget = max(0, min(trimmedNotes.count, contextBudget / 4))
+            notesBlock = notesHeader + truncateMiddle(trimmedNotes, limit: notesTextBudget)
+        }
+
+        let transcriptBudget = max(0, contextBudget - notesBlock.count - transcriptHeader.count)
+        let transcriptBlock = transcriptHeader + truncateMiddle(transcript, limit: transcriptBudget)
+        let context = notesBlock + transcriptBlock
+        let boundedContext = context.count > contextBudget
+            ? truncateMiddle(context, limit: contextBudget)
+            : context
+
+        return Prompts.chat + boundedContext
+    }
+
+    /// Truncate text from the middle, keeping the head and tail within the limit.
     /// Snaps to word boundaries to avoid slicing multi-byte Unicode characters.
     internal static func truncateMiddle(_ text: String, limit: Int) -> String {
+        guard limit > 0 else { return "" }
         guard text.count > limit else { return text }
 
-        let headBudget = Int(Double(limit) * 0.45)
-        let tailBudget = Int(Double(limit) * 0.45)
+        let marker = "\n\n[... content truncated ...]\n\n"
+        guard limit > marker.count else {
+            return String(text.prefix(limit))
+        }
+
+        let contentBudget = limit - marker.count
+        let headBudget = contentBudget / 2
+        let tailBudget = contentBudget - headBudget
 
         let head = snapToWordBoundary(text, fromStart: true, budget: headBudget)
         let tail = snapToWordBoundary(text, fromStart: false, budget: tailBudget)
 
-        return head + "\n\n[... content truncated ...]\n\n" + tail
+        return head + marker + tail
     }
 
     private static func snapToWordBoundary(_ text: String, fromStart: Bool, budget: Int) -> String {

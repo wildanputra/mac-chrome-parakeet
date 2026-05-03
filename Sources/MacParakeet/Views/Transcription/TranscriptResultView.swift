@@ -15,6 +15,7 @@ private struct ExportConfirmation: Identifiable {
 
 private struct RetranscriptionConfirmation: Identifiable {
     let id = UUID()
+    let transcriptionID: UUID
     let speechEngineOverride: SpeechEngineSelection?
 
     var title: String {
@@ -34,22 +35,24 @@ private struct RetranscriptionConfirmation: Identifiable {
     }
 
     var message: String {
-        if let speechEngineOverride {
-            let languageSuffix: String
-            if speechEngineOverride.engine == .whisper {
-                languageSuffix = " Whisper language: \(speechEngineOverride.language ?? "auto-detect")."
-            } else {
-                languageSuffix = ""
-            }
-            return "This reruns the saved audio with \(speechEngineOverride.engine.displayName) for this attempt only.\(languageSuffix) Meeting metadata and Settings stay unchanged. Existing prompt results and chats are preserved, but may no longer match the updated transcript."
-        }
-        return "This replaces the transcript text in place. Existing prompt results and chats are preserved, but may no longer match the updated transcript."
+        "Replaces this transcript. Prompts and chats are preserved."
     }
 }
 
 private enum TranscriptDisplayMode: String, CaseIterable, Hashable {
     case text = "Text"
     case timed = "Timed"
+}
+
+/// Records the user's engine choice from the retranscribe popover so the
+/// confirmation alert can be presented in a *separate* render cycle from
+/// the popover dismissal — chaining popover → alert in the same cycle on
+/// macOS reliably drops the alert. The single `override` field carries
+/// nil when the user picked the primary engine (no override needed) and
+/// `.some` when they picked the alternative.
+private struct RetranscribePick: Sendable {
+    let transcriptionID: UUID
+    let override: SpeechEngineSelection?
 }
 
 struct TranscriptResultView: View {
@@ -78,6 +81,8 @@ struct TranscriptResultView: View {
     @State private var copiedResetTask: Task<Void, Never>?
     @State private var resultCopiedResetTask: Task<Void, Never>?
     @State private var resultButtonCopiedResetTask: Task<Void, Never>?
+    @State private var notesCopied = false
+    @State private var notesCopiedResetTask: Task<Void, Never>?
     @State private var dismissTask: Task<Void, Never>?
     @State private var editingMeetingTitle = false
     @State private var meetingTitleDraft = ""
@@ -106,7 +111,8 @@ struct TranscriptResultView: View {
     @State private var showPromptLibrary = false
     @State private var showGeneratePopover = false
     @State private var retranscriptionConfirmation: RetranscriptionConfirmation?
-    @State private var showingEngineComparisonPopover = false
+    @State private var showingRetranscribeOptions = false
+    @State private var pendingRetranscribePick: RetranscribePick?
     @State private var showingCancelGenerationAlert: UUID?
     @FocusState private var chatInputFocused: Bool
     @FocusState private var meetingTitleFocused: Bool
@@ -139,6 +145,13 @@ struct TranscriptResultView: View {
             promptResultsViewModel.loadPromptResults(transcriptionId: transcription.id)
             let text = viewModel.currentTranscription?.cleanTranscript ?? viewModel.currentTranscription?.rawTranscript ?? ""
             chatViewModel.loadTranscript(text, transcriptionId: viewModel.currentTranscription?.id)
+            // Feed the user's typed meeting notes (if any) into chat alongside
+            // the transcript. The closure is re-evaluated on every chat-send so
+            // a CLI edit to userNotes in another process is visible to the next
+            // chat turn without having to reload the page.
+            chatViewModel.bindUserNotesProvider { [viewModel] in
+                viewModel.currentTranscription?.userNotes
+            }
         }
         .onChange(of: transcription.id) {
             Task {
@@ -424,41 +437,38 @@ struct TranscriptResultView: View {
 
             if onRetranscribe != nil, let filePath = transcription.filePath,
                FileManager.default.fileExists(atPath: filePath) {
+                let engineOption = viewModel.retranscriptionEngineOption(for: transcription)
                 Button {
-                    retranscriptionConfirmation = RetranscriptionConfirmation(speechEngineOverride: nil)
+                    if engineOption != nil {
+                        showingRetranscribeOptions.toggle()
+                    } else {
+                        retranscriptionConfirmation = RetranscriptionConfirmation(
+                            transcriptionID: transcription.id,
+                            speechEngineOverride: nil
+                        )
+                    }
                 } label: {
-                    Label("Retranscribe", systemImage: "arrow.trianglehead.2.clockwise")
-                }
-                .buttonStyle(.bordered)
-
-                if let option = viewModel.retranscriptionEngineOption(for: transcription) {
-                    HStack(spacing: 4) {
-                        Button {
-                            retranscriptionConfirmation = RetranscriptionConfirmation(
-                                speechEngineOverride: option.alternativeEngine
-                            )
-                        } label: {
-                            Label(option.title, systemImage: "arrow.triangle.2.circlepath")
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(!option.isAlternativeAvailable)
-                        .help(engineComparisonHelp(for: option))
-
-                        Button {
-                            showingEngineComparisonPopover.toggle()
-                        } label: {
-                            Image(systemName: "info.circle")
-                                .accessibilityLabel("Compare speech engines")
-                        }
-                        .buttonStyle(.borderless)
-                        .frame(width: 28, height: 28)
-                        .help("Compare Parakeet and Whisper")
-                        .popover(isPresented: $showingEngineComparisonPopover, arrowEdge: .top) {
-                            engineComparisonPopover(for: option)
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.trianglehead.2.clockwise")
+                        Text("Retranscribe")
+                        if engineOption != nil {
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 2)
                         }
                     }
                 }
+                .buttonStyle(.bordered)
+                .help(engineOption != nil ? "Choose a speech engine for this rerun" : "Retranscribe this file")
+                .popover(isPresented: $showingRetranscribeOptions, arrowEdge: .top) {
+                    if let engineOption {
+                        retranscribeOptionsPopover(for: engineOption)
+                    }
+                }
             }
+
+            Spacer()
 
             if let onStartNew {
                 Button {
@@ -469,16 +479,35 @@ struct TranscriptResultView: View {
                 .buttonStyle(.bordered)
                 .tint(DesignSystem.Colors.accent)
             }
-
-            Spacer()
         }
         .padding(DesignSystem.Spacing.md)
+        .onChange(of: showingRetranscribeOptions) { _, isOpen in
+            // Picker → alert handoff: the picker popover stores the user's
+            // choice in `pendingRetranscribePick` then closes itself. We hop
+            // through Task { @MainActor } so the popover-dismiss render
+            // cycle finishes before the alert tries to present — without the
+            // hop, SwiftUI on macOS reliably drops the alert.
+            guard !isOpen, let pick = pendingRetranscribePick else { return }
+            pendingRetranscribePick = nil
+            Task { @MainActor in
+                retranscriptionConfirmation = RetranscriptionConfirmation(
+                    transcriptionID: pick.transcriptionID,
+                    speechEngineOverride: pick.override
+                )
+            }
+        }
+        .onChange(of: transcription.id) {
+            pendingRetranscribePick = nil
+            retranscriptionConfirmation = nil
+            showingRetranscribeOptions = false
+        }
         .alert(
             retranscriptionConfirmation?.title ?? "Retranscribe this file?",
             isPresented: isRetranscriptionConfirmationPresented,
             presenting: retranscriptionConfirmation
         ) { confirmation in
             Button(confirmation.confirmLabel, role: .destructive) {
+                guard confirmation.transcriptionID == transcription.id else { return }
                 onRetranscribe?(transcription, confirmation.speechEngineOverride)
             }
             Button("Cancel", role: .cancel) { }
@@ -492,7 +521,7 @@ struct TranscriptResultView: View {
 
     private var isRetranscriptionConfirmationPresented: Binding<Bool> {
         Binding(
-            get: { retranscriptionConfirmation != nil },
+            get: { retranscriptionConfirmation?.transcriptionID == transcription.id },
             set: { isPresented in
                 if !isPresented {
                     retranscriptionConfirmation = nil
@@ -501,73 +530,52 @@ struct TranscriptResultView: View {
         )
     }
 
-    private func engineComparisonPopover(
+    private func retranscribeOptionsPopover(
         for option: TranscriptionViewModel.RetranscriptionEngineOption
     ) -> some View {
-        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
-            Text("Engine tradeoffs")
-                .font(DesignSystem.Typography.caption.weight(.semibold))
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
+            Text("Retranscribe with")
+                .font(DesignSystem.Typography.body.weight(.semibold))
+                .foregroundStyle(DesignSystem.Colors.textPrimary)
 
-            Grid(alignment: .leading, horizontalSpacing: DesignSystem.Spacing.md, verticalSpacing: 6) {
-                GridRow {
-                    engineComparisonHeader("Engine")
-                    engineComparisonHeader("Best for")
-                    engineComparisonHeader("Language coverage")
+            VStack(spacing: DesignSystem.Spacing.sm) {
+                EngineOptionCard(
+                    selection: option.primaryEngine,
+                    isPrimary: true,
+                    isAvailable: true,
+                    unavailableReason: nil
+                ) {
+                    selectRetranscribeEngine(option.primaryEngine, in: option)
                 }
-                GridRow {
-                    engineComparisonCell("Parakeet")
-                    engineComparisonCell("Fast reruns")
-                    engineComparisonCell("25 European languages, including English")
-                }
-                GridRow {
-                    engineComparisonCell("Whisper")
-                    engineComparisonCell("Broader language retry")
-                    engineComparisonCell("Korean, Chinese, Japanese, and more")
+
+                EngineOptionCard(
+                    selection: option.alternativeEngine,
+                    isPrimary: false,
+                    isAvailable: option.isAlternativeAvailable,
+                    unavailableReason: option.unavailableReason
+                ) {
+                    selectRetranscribeEngine(option.alternativeEngine, in: option)
                 }
             }
 
-            Text("Trying another engine affects only this rerun.")
+            Text("Replaces this transcript. Prompts and chats are preserved.")
                 .font(DesignSystem.Typography.caption)
-                .foregroundStyle(DesignSystem.Colors.textSecondary)
-
-            if option.alternativeEngine.engine == .whisper {
-                Text("Whisper language: \(option.alternativeEngine.language ?? "auto-detect").")
-                    .font(DesignSystem.Typography.caption)
-                    .foregroundStyle(DesignSystem.Colors.textSecondary)
-            }
-
-            if let unavailableReason = option.unavailableReason {
-                Text(unavailableReason)
-                    .font(DesignSystem.Typography.caption)
-                    .foregroundStyle(DesignSystem.Colors.textSecondary)
-            }
+                .foregroundStyle(DesignSystem.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(DesignSystem.Spacing.md)
-        .frame(width: 430)
+        .frame(width: 360)
     }
 
-    private func engineComparisonHeader(_ text: String) -> some View {
-        Text(text)
-            .font(DesignSystem.Typography.caption.weight(.semibold))
-            .foregroundStyle(DesignSystem.Colors.textSecondary)
-    }
-
-    private func engineComparisonCell(_ text: String) -> some View {
-        Text(text)
-            .font(DesignSystem.Typography.caption)
-            .foregroundStyle(DesignSystem.Colors.textPrimary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func engineComparisonHelp(
-        for option: TranscriptionViewModel.RetranscriptionEngineOption
-    ) -> String {
-        let unavailable = option.unavailableReason.map { "\n\n\($0)" } ?? ""
-        return """
-        Parakeet: faster local reruns; 25 European languages, including English.
-        Whisper: slower, broader multilingual coverage for Korean, Chinese, Japanese, and more.
-        This changes only this rerun.\(unavailable)
-        """
+    private func selectRetranscribeEngine(
+        _ selection: SpeechEngineSelection,
+        in option: TranscriptionViewModel.RetranscriptionEngineOption
+    ) {
+        let override: SpeechEngineSelection? = (selection == option.primaryEngine) ? nil : selection
+        pendingRetranscribePick = RetranscribePick(transcriptionID: transcription.id, override: override)
+        showingRetranscribeOptions = false
+        // Confirmation alert is presented from the .onChange handler that
+        // observes showingRetranscribeOptions flipping to false — see actionBar.
     }
 
     private var activeTranscription: Transcription {
@@ -586,6 +594,10 @@ struct TranscriptResultView: View {
     }
 
     private var hasEditedTranscript: Bool {
+        activeTranscription.isTranscriptEdited && hasCleanTranscriptText
+    }
+
+    private var hasCleanTranscriptText: Bool {
         guard let clean = activeTranscription.cleanTranscript else { return false }
         return !clean.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -941,6 +953,11 @@ struct TranscriptResultView: View {
                 LazyVStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
                     transcriptPaneHeader
 
+                    if let userNotes = activeTranscription.userNotes,
+                       !userNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        meetingNotesSection(userNotes)
+                    }
+
                     if let error = transcriptEditError {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .font(DesignSystem.Typography.caption)
@@ -1042,7 +1059,7 @@ struct TranscriptResultView: View {
 
             Spacer()
 
-            if !editingTranscript, hasEditedTranscript, hasTimestamps {
+            if !editingTranscript, hasCleanTranscriptText, hasTimestamps {
                 Picker("Transcript view", selection: $transcriptDisplayMode) {
                     ForEach(TranscriptDisplayMode.allCases, id: \.self) { mode in
                         Text(mode.rawValue).tag(mode)
@@ -1120,6 +1137,53 @@ struct TranscriptResultView: View {
                 RoundedRectangle(cornerRadius: DesignSystem.Layout.rowCornerRadius)
                     .fill(DesignSystem.Colors.surfaceElevated.opacity(0.6))
             )
+    }
+
+    private func meetingNotesSection(_ notes: String) -> some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.xs) {
+            HStack(spacing: DesignSystem.Spacing.xs) {
+                Label("Your notes", systemImage: "note.text")
+                    .font(DesignSystem.Typography.caption.weight(.semibold))
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+
+                Spacer()
+
+                Button {
+                    TranscriptResultActions.copyText(notes)
+                    notesCopied = true
+                    notesCopiedResetTask?.cancel()
+                    notesCopiedResetTask = Task {
+                        try? await Task.sleep(for: .seconds(1))
+                        if !Task.isCancelled {
+                            notesCopied = false
+                        }
+                    }
+                } label: {
+                    HStack(spacing: DesignSystem.Spacing.xs) {
+                        Image(systemName: notesCopied ? "checkmark" : "doc.on.doc")
+                        Text(notesCopied ? "Copied" : "Copy")
+                    }
+                    .font(DesignSystem.Typography.caption)
+                    .foregroundStyle(notesCopied ? DesignSystem.Colors.successGreen : .primary)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel(notesCopied ? "Notes copied" : "Copy your notes")
+            }
+
+            Text(notes)
+                .font(DesignSystem.Typography.body)
+                .foregroundStyle(DesignSystem.Colors.textPrimary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(DesignSystem.Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: DesignSystem.Layout.rowCornerRadius)
+                .fill(DesignSystem.Colors.surfaceElevated.opacity(0.25))
+        )
     }
 
     // MARK: - Tab Bar
@@ -1378,10 +1442,6 @@ struct TranscriptResultView: View {
                         .controlSize(.small)
                     }
 
-                    if let notesUsed = promptResult.displayableUserNotesSnapshot {
-                        notesUsedSection(notesUsed)
-                    }
-
                     MarkdownContentView(promptResult.content, font: DesignSystem.Typography.bodyLarge)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -1397,23 +1457,6 @@ struct TranscriptResultView: View {
             RoundedRectangle(cornerRadius: DesignSystem.Layout.cardCornerRadius)
                 .strokeBorder(DesignSystem.Colors.border.opacity(0.75), lineWidth: 0.5)
         )
-    }
-
-    private func notesUsedSection(_ notes: String) -> some View {
-        VStack(alignment: .leading, spacing: DesignSystem.Spacing.xs) {
-            Label("Notes used", systemImage: "note.text")
-                .font(DesignSystem.Typography.caption.weight(.semibold))
-                .foregroundStyle(DesignSystem.Colors.textSecondary)
-
-            Text(notes)
-                .font(DesignSystem.Typography.caption)
-                .foregroundStyle(DesignSystem.Colors.textSecondary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.bottom, DesignSystem.Spacing.sm)
-        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -1630,34 +1673,39 @@ struct TranscriptResultView: View {
 
             ScrollViewReader { proxy in
                 VStack(spacing: 0) {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: DesignSystem.Spacing.lg) {
-                            if !chatVM.canSendMessage {
-                                chatConfigurationBanner
-                            } else if chatVM.messages.isEmpty {
-                                chatEmptyState(chatVM: chatVM)
-                            }
-
-                            ForEach(chatVM.messages) { message in
-                                chatBubble(message)
-                                    .id(message.id)
-                            }
+                    if chatVM.canSendMessage && chatVM.messages.isEmpty {
+                        VStack(spacing: DesignSystem.Spacing.md) {
+                            chatEmptyState(chatVM: chatVM)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                             if let error = chatVM.errorMessage {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .foregroundStyle(DesignSystem.Colors.errorRed)
-                                    Text(error)
-                                        .font(DesignSystem.Typography.caption)
-                                        .foregroundStyle(DesignSystem.Colors.errorRed)
-                                }
-                                .padding(.horizontal, DesignSystem.Spacing.md)
+                                chatErrorRow(error)
                             }
                         }
                         .padding(DesignSystem.Spacing.lg)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(DesignSystem.Colors.surface)
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: DesignSystem.Spacing.lg) {
+                                if !chatVM.canSendMessage {
+                                    chatConfigurationBanner
+                                }
+
+                                ForEach(chatVM.messages) { message in
+                                    chatBubble(message)
+                                        .id(message.id)
+                                }
+
+                                if let error = chatVM.errorMessage {
+                                    chatErrorRow(error)
+                                }
+                            }
+                            .padding(DesignSystem.Spacing.lg)
+                        }
+                        .defaultScrollAnchor(.bottom)
+                        .background(DesignSystem.Colors.surface)
                     }
-                    .defaultScrollAnchor(.bottom)
-                    .background(DesignSystem.Colors.surface)
 
                     Divider()
 
@@ -1982,55 +2030,72 @@ struct TranscriptResultView: View {
         )
     }
 
+    @ViewBuilder
+    private func chatErrorRow(_ error: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(DesignSystem.Colors.errorRed)
+            Text(error)
+                .font(DesignSystem.Typography.caption)
+                .foregroundStyle(DesignSystem.Colors.errorRed)
+        }
+        .padding(.horizontal, DesignSystem.Spacing.md)
+    }
+
     private func chatEmptyState(chatVM: TranscriptChatViewModel) -> some View {
-        VStack(spacing: DesignSystem.Spacing.lg) {
-            MeditativeMerkabaView(
-                size: 60,
-                revolutionDuration: 6.0,
-                tintColor: DesignSystem.Colors.accent
-            )
+        VStack(spacing: 0) {
+            Spacer(minLength: DesignSystem.Spacing.hero)
 
-            VStack(spacing: DesignSystem.Spacing.xs) {
-                Text("Ask a question about this transcript")
-                    .foregroundStyle(DesignSystem.Colors.textPrimary)
-                    .font(DesignSystem.Typography.pageTitle)
+            VStack(spacing: DesignSystem.Spacing.lg) {
+                MeditativeMerkabaView(
+                    size: 60,
+                    revolutionDuration: 6.0,
+                    tintColor: DesignSystem.Colors.accent
+                )
 
-                Text("Start with a quick prompt, then keep drilling down.")
-                    .foregroundStyle(DesignSystem.Colors.textSecondary)
-                    .font(DesignSystem.Typography.body)
-            }
+                VStack(spacing: DesignSystem.Spacing.xs) {
+                    Text("Ask a question about this transcript")
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+                        .font(DesignSystem.Typography.pageTitle)
 
-            HStack(spacing: DesignSystem.Spacing.sm) {
-                ForEach(suggestedPrompts, id: \.self) { prompt in
-                    Button {
-                        chatVM.inputText = prompt
-                        chatVM.sendMessage()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "sparkles")
-                                .font(.system(size: 11))
-                                .foregroundStyle(DesignSystem.Colors.accent.opacity(0.7))
-                            Text(prompt)
-                                .font(DesignSystem.Typography.bodySmall)
+                    Text("Start with a quick prompt, then keep drilling down.")
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                        .font(DesignSystem.Typography.body)
+                }
+
+                HStack(spacing: DesignSystem.Spacing.sm) {
+                    ForEach(suggestedPrompts, id: \.self) { prompt in
+                        Button {
+                            chatVM.inputText = prompt
+                            chatVM.sendMessage()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(DesignSystem.Colors.accent.opacity(0.7))
+                                Text(prompt)
+                                    .font(DesignSystem.Typography.bodySmall)
+                            }
+                            .padding(.horizontal, DesignSystem.Spacing.md)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule()
+                                    .fill(DesignSystem.Colors.surfaceElevated)
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(DesignSystem.Colors.border.opacity(0.8), lineWidth: 1)
+                                    )
+                            )
                         }
-                        .padding(.horizontal, DesignSystem.Spacing.md)
-                        .padding(.vertical, 8)
-                        .background(
-                            Capsule()
-                                .fill(DesignSystem.Colors.surfaceElevated)
-                                .overlay(
-                                    Capsule()
-                                        .stroke(DesignSystem.Colors.border.opacity(0.8), lineWidth: 1)
-                                )
-                        )
+                        .buttonStyle(.plain)
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(DesignSystem.Colors.textPrimary)
                 }
             }
+
+            Spacer(minLength: DesignSystem.Spacing.hero)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, DesignSystem.Spacing.hero)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, DesignSystem.Spacing.lg)
         .background(
             RoundedRectangle(cornerRadius: DesignSystem.Layout.rowCornerRadius)
@@ -2317,7 +2382,7 @@ struct TranscriptResultView: View {
     }
 
     private func syncTranscriptDisplayMode() {
-        transcriptDisplayMode = hasEditedTranscript ? .text : .timed
+        transcriptDisplayMode = hasCleanTranscriptText ? .text : .timed
     }
 
     private func beginTranscriptEdit() {
@@ -2401,18 +2466,12 @@ struct TranscriptResultView: View {
         return !words.isEmpty
     }
 
-    private var hasEditedTranscriptForExport: Bool {
-        guard activeTranscription.isTranscriptEdited else { return false }
-        guard let cleanTranscript = activeTranscription.cleanTranscript else { return false }
-        return !cleanTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     private var hasAlignedTimestampsForExport: Bool {
-        hasTimestamps && !hasEditedTranscriptForExport
+        hasTimestamps && !hasEditedTranscript
     }
 
     private var hasSpeakerLabelsForExport: Bool {
-        guard !hasEditedTranscriptForExport else { return false }
+        guard !hasEditedTranscript else { return false }
         guard let speakers = activeTranscription.speakers, !speakers.isEmpty,
               let words = activeTranscription.wordTimestamps else { return false }
         return words.contains { $0.speakerId != nil }
@@ -2641,5 +2700,173 @@ struct TranscriptResultView: View {
         let minutes = totalSeconds / 60
         let seconds = totalSeconds % 60
         return String(format: "%02d:%02d", minutes, seconds)
+    }
+}
+
+private struct EngineOptionCard: View {
+    let selection: SpeechEngineSelection
+    let isPrimary: Bool
+    let isAvailable: Bool
+    let unavailableReason: String?
+    let onSelect: () -> Void
+
+    @State private var hovering = false
+
+    private var iconName: String {
+        switch selection.engine {
+        case .parakeet: "bolt.fill"
+        case .whisper: "globe"
+        }
+    }
+
+    private var subtitle: String {
+        switch selection.engine {
+        case .parakeet:
+            "Fast • 25 European languages, including English"
+        case .whisper:
+            "Broader languages • Korean, Chinese, Japanese, and more"
+        }
+    }
+
+    private var languageDetail: String? {
+        guard selection.engine == .whisper else { return nil }
+        let language = selection.language ?? "auto-detect"
+        return "Language: \(language)"
+    }
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(alignment: .top, spacing: DesignSystem.Spacing.sm) {
+                Image(systemName: iconName)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(iconColor)
+                    .frame(width: 22, height: 22)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(selection.engine.displayName)
+                            .font(DesignSystem.Typography.body.weight(.semibold))
+                            .foregroundStyle(titleColor)
+                        if isPrimary {
+                            EngineBadge(text: "Current", tint: DesignSystem.Colors.accent)
+                        } else if !isAvailable {
+                            EngineBadge(text: "Unavailable", tint: DesignSystem.Colors.warningAmber)
+                        }
+                    }
+
+                    Text(subtitle)
+                        .font(DesignSystem.Typography.caption)
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let languageDetail {
+                        Text(languageDetail)
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(DesignSystem.Colors.textTertiary)
+                    }
+
+                    if let unavailableReason, !isAvailable {
+                        Text(unavailableReason)
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(DesignSystem.Colors.textSecondary)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 1)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, DesignSystem.Spacing.sm + 2)
+            .padding(.horizontal, DesignSystem.Spacing.sm + 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(backgroundFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(borderColor, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isAvailable)
+        .onHover { isHovering in
+            guard isAvailable else { return }
+            withAnimation(DesignSystem.Animation.hoverTransition) {
+                hovering = isHovering
+            }
+        }
+        .help(helpText)
+        .accessibilityLabel(Text(accessibilityLabel))
+        .accessibilityHint(Text(accessibilityHint))
+    }
+
+    private var helpText: String {
+        if !isAvailable {
+            return unavailableReason ?? "Unavailable for this rerun."
+        }
+        return "Rerun with \(selection.engine.displayName)."
+    }
+
+    private var iconColor: Color {
+        guard isAvailable else { return DesignSystem.Colors.textTertiary }
+        return DesignSystem.Colors.accent
+    }
+
+    private var titleColor: Color {
+        isAvailable ? DesignSystem.Colors.textPrimary : DesignSystem.Colors.textSecondary
+    }
+
+    private var backgroundFill: Color {
+        if !isAvailable {
+            return DesignSystem.Colors.surfaceElevated.opacity(0.5)
+        }
+        return hovering ? DesignSystem.Colors.accentLight : DesignSystem.Colors.surfaceElevated
+    }
+
+    private var borderColor: Color {
+        if !isAvailable {
+            return DesignSystem.Colors.border.opacity(0.6)
+        }
+        return hovering ? DesignSystem.Colors.accent.opacity(0.5) : DesignSystem.Colors.border
+    }
+
+    private var accessibilityLabel: String {
+        var parts = [selection.engine.displayName]
+        if isPrimary { parts.append("current engine") }
+        if !isAvailable { parts.append("unavailable") }
+        return parts.joined(separator: ", ")
+    }
+
+    private var accessibilityHint: String {
+        if !isAvailable {
+            return unavailableReason ?? "Unavailable for this rerun."
+        }
+        return "Reruns this transcription with \(selection.engine.displayName)."
+    }
+}
+
+private struct EngineBadge: View {
+    let text: String
+    let tint: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(tint.opacity(0.14))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(tint.opacity(0.28), lineWidth: 0.5)
+            )
     }
 }

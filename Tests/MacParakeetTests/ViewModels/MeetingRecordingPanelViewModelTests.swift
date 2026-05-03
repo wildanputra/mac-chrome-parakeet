@@ -192,4 +192,61 @@ final class MeetingRecordingPanelViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.notesViewModel.notesText, "")
     }
+
+    func testNotesAndTranscriptTabsHaveNoBadgeInAnyState() {
+        let viewModel = MeetingRecordingPanelViewModel()
+
+        // ADR-020 §1 amendments (2026-05-02): all three tabs render as plain nouns.
+        // Notes was decoration (the writing surface itself shows the words; the
+        // soft-cap footer covers the only actionable word-count moment).
+        // Transcript was the 6th instance of recording state already broadcast
+        // by the panel header (orb / "Recording" / elapsed timer / transcript
+        // word count / Stop).
+        let states: [MeetingRecordingPanelViewModel.PanelState] = [
+            .hidden, .recording, .transcribing, .error("test")
+        ]
+        for state in states {
+            viewModel.state = state
+
+            XCTAssertNil(
+                viewModel.badge(for: .notes),
+                "Notes tab should be plain in state \(state) — the pane itself surfaces the words"
+            )
+            XCTAssertNil(
+                viewModel.badge(for: .transcript),
+                "Transcript tab should be plain in state \(state) — header carries the recording signal"
+            )
+        }
+
+        // Drive notes content > 0 to confirm the badge stays nil even when
+        // word count is non-zero (defends against accidentally re-introducing
+        // a notesBadge property that fires on user input).
+        viewModel.notesViewModel.notesBinding.wrappedValue = "hello world"
+        XCTAssertNil(
+            viewModel.badge(for: .notes),
+            "Notes tab stays plain even with content — word count is not surfaced on the tab strip"
+        )
+    }
+
+    func testAskTabHasNoStringBadgeAndExposesStreamingFlagInstead() {
+        let viewModel = MeetingRecordingPanelViewModel()
+
+        XCTAssertNil(
+            viewModel.badge(for: .ask),
+            "Ask tab no longer carries a numeric badge — message count is decoration, not information"
+        )
+        XCTAssertFalse(viewModel.isAskStreaming, "Default Ask state is idle (no breathing dot)")
+
+        viewModel.chatViewModel.isStreaming = true
+        XCTAssertTrue(
+            viewModel.isAskStreaming,
+            "isAskStreaming mirrors chatViewModel.isStreaming so the tab dot animates while an answer is forming"
+        )
+
+        viewModel.chatViewModel.isStreaming = false
+        XCTAssertFalse(
+            viewModel.isAskStreaming,
+            "Strictly bound to streaming — the dot vanishes the instant streaming ends so it can't decay into a stale notification badge"
+        )
+    }
 }

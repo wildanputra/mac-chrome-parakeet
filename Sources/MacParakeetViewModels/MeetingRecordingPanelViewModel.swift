@@ -45,7 +45,18 @@ public final class MeetingRecordingPanelViewModel {
     private var copiedResetTask: Task<Void, Never>?
     private var previewLineWordCounts: [Int] = []
 
-    public init() {}
+    public init() {
+        // Thread the live notepad into the live Ask chat: the closure is
+        // called by `TranscriptChatViewModel` at chat-send time, so the
+        // freshest keystroke up to the moment the user hits Send is what the
+        // LLM sees alongside the rolling transcript. See ADR-020 (post-revert
+        // amendment) for why this is safe even though we reverted the
+        // memo-steered auto-run prompt — chat is user-initiated, so empty
+        // notes don't produce nonsense output.
+        chatViewModel.bindUserNotesProvider { [weak notesViewModel] in
+            notesViewModel?.notesText
+        }
+    }
 
     /// Show "Copied" confirmation and auto-dismiss after 1.5s.
     /// Owns the timer so the View doesn't need @State Task.
@@ -202,43 +213,34 @@ public final class MeetingRecordingPanelViewModel {
 
     // MARK: - Tab badges (ADR-020 §1)
 
-    /// Live state hint for the Notes tab. `nil` while the editor is empty so
-    /// the tab reads as plain "Notes" until the user has actually written
-    /// something — avoids "Notes · 0w" noise in the empty state.
-    public var notesBadge: String? {
-        let count = notesViewModel.wordCount
-        guard count > 0 else { return nil }
-        return "\(count)w"
-    }
-
-    /// Live state hint for the Transcript tab. "LIVE" while we're actively
-    /// recording (audio is flowing); `nil` in the transcribing/error/hidden
-    /// states where no new text is arriving.
-    public var transcriptBadge: String? {
-        switch state {
-        case .recording:
-            return "LIVE"
-        case .hidden, .transcribing, .error:
+    /// All three tabs render as plain nouns. The badge taxonomy reduces to a
+    /// single rule: surface state the user can't see by switching tabs.
+    ///
+    /// - **Notes**: word count was decoration. The notes themselves are the
+    ///   canonical surface for "how much have I written?" — and the soft-cap
+    ///   warning has its own footer UI in `LiveNotesPaneView`.
+    /// - **Transcript**: recording state is already broadcast by the panel
+    ///   header (orb, "Recording", elapsed timer, transcript word count,
+    ///   Stop). A tab badge was the Nth instance of the same signal.
+    /// - **Ask**: a message count is decoration. The actionable state is
+    ///   "is an answer forming right now?" — covered by `isAskStreaming` and
+    ///   its breathing dot, which is rendered separately by the view layer
+    ///   (see `MeetingRecordingPanelView.tabLabel`).
+    ///
+    /// See ADR-020 §1 amendments (2026-05-02 and the Notes follow-on).
+    public func badge(for tab: LivePanelTab) -> String? {
+        switch tab {
+        case .notes, .transcript, .ask:
             return nil
         }
     }
 
-    /// Live state hint for the Ask tab. Number of messages in the live
-    /// thread; `nil` when the thread is empty so it doesn't shout for
-    /// attention before the user has actually started a conversation.
-    public var askBadge: String? {
-        let count = chatViewModel.messages.count
-        guard count > 0 else { return nil }
-        return "\(count)"
-    }
-
-    /// Stable badge accessor for any tab — used by the view layer's
-    /// per-tab label rendering.
-    public func badge(for tab: LivePanelTab) -> String? {
-        switch tab {
-        case .notes: return notesBadge
-        case .transcript: return transcriptBadge
-        case .ask: return askBadge
-        }
+    /// True while the Ask conversation is mid-LLM-response. Drives the
+    /// breathing dot in the Ask tab label so a user reading Notes/Transcript
+    /// can see at a glance that their answer is forming. Strictly bound to
+    /// `chatViewModel.isStreaming` — vanishes the moment streaming ends so
+    /// the dot never decays into a stale notification badge.
+    public var isAskStreaming: Bool {
+        chatViewModel.isStreaming
     }
 }

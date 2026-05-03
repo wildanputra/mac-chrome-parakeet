@@ -140,7 +140,10 @@ final class MeetingRecordingRecoveryServiceTests: XCTestCase {
     }
 
     func testRecoverCleansAwaitingTranscriptionLockWhenTranscriptAlreadyExists() async throws {
-        let fixture = try makeRecoverableSession(lockState: .awaitingTranscription)
+        let fixture = try makeRecoverableSession(
+            lockState: .awaitingTranscription,
+            notes: "existing transcript note"
+        )
         let existing = Transcription(
             fileName: fixture.lock.displayName,
             filePath: fixture.folderURL.appendingPathComponent("meeting.m4a").path,
@@ -155,6 +158,10 @@ final class MeetingRecordingRecoveryServiceTests: XCTestCase {
         XCTAssertNil(try lockStore.read(folderURL: fixture.folderURL))
         XCTAssertTrue(audioConverter.mixes.isEmpty)
         XCTAssertTrue(transcriptionService.recordings.isEmpty)
+
+        let notesURL = MeetingNotesFile.fileURL(for: fixture.folderURL)
+        let notesContent = try String(contentsOf: notesURL, encoding: .utf8)
+        XCTAssertEqual(notesContent, "# Recovered Team Sync\n\nexisting transcript note\n")
     }
 
     func testDiscardRemovesEverything() async throws {
@@ -223,6 +230,16 @@ final class MeetingRecordingRecoveryServiceTests: XCTestCase {
 
         XCTAssertTrue(transcription.recoveredFromCrash)
         XCTAssertEqual(transcription.userNotes, "key decision: ship Friday\nfollow up with QA")
+    }
+
+    func testRecoverWritesRecoveredNotesSidecar() async throws {
+        let fixture = try makeRecoverableSession(notes: "key decision: ship Friday\nfollow up with QA")
+
+        _ = try await recoveryService.recover(fixture.lock)
+
+        let notesURL = MeetingNotesFile.fileURL(for: fixture.folderURL)
+        let content = try String(contentsOf: notesURL, encoding: .utf8)
+        XCTAssertEqual(content, "# Recovered Team Sync\n\nkey decision: ship Friday\nfollow up with QA\n")
     }
 
     func testRecoverDoesNotSetUserNotesWhenLockHasNone() async throws {

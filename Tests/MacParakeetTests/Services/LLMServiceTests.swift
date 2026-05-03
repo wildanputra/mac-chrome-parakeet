@@ -218,7 +218,7 @@ final class LLMServiceTests: XCTestCase {
         mockConfigStore.config = nil
 
         do {
-            _ = try await service.chat(question: "Q", transcript: "T", history: [])
+            _ = try await service.chat(question: "Q", transcript: "T", userNotes: nil, history: [])
             XCTFail("Expected LLMError.notConfigured")
         } catch let error as LLMError {
             if case .notConfigured = error {} else {
@@ -304,6 +304,7 @@ final class LLMServiceTests: XCTestCase {
         _ = try await service.chat(
             question: "What was discussed?",
             transcript: "We talked about the release.",
+            userNotes: nil,
             history: []
         )
 
@@ -323,6 +324,7 @@ final class LLMServiceTests: XCTestCase {
         _ = try await service.chat(
             question: "What did Alice say?",
             transcript: "Alice said hello.",
+            userNotes: nil,
             history: history
         )
 
@@ -333,6 +335,88 @@ final class LLMServiceTests: XCTestCase {
         XCTAssertEqual(mockClient.capturedMessages[2].role, .assistant)
         XCTAssertEqual(mockClient.capturedMessages[3].role, .user)
         XCTAssertEqual(mockClient.capturedMessages[3].content, "What did Alice say?")
+    }
+
+    func testChatInjectsUserNotesIntoSystemPromptWhenPresent() async throws {
+        _ = try await service.chat(
+            question: "Why did we delay?",
+            transcript: "Alice: We're slipping by a week.",
+            userNotes: "decision: ship Friday\nQA owns smoke tests",
+            history: []
+        )
+
+        let systemPrompt = mockClient.capturedMessages[0].content
+        XCTAssertTrue(systemPrompt.contains("User's notes from the meeting"))
+        XCTAssertTrue(systemPrompt.contains("decision: ship Friday"))
+        XCTAssertTrue(systemPrompt.contains("QA owns smoke tests"))
+        // The notes block must precede the transcript block — the LLM reads
+        // them as context for what the user cares about, applied while reading
+        // the transcript that follows.
+        let notesIdx = systemPrompt.range(of: "User's notes from the meeting")!.lowerBound
+        let transcriptIdx = systemPrompt.range(of: "Transcript:")!.lowerBound
+        XCTAssertLessThan(notesIdx, transcriptIdx)
+    }
+
+    func testChatOmitsUserNotesBlockWhenNotesAreNil() async throws {
+        _ = try await service.chat(
+            question: "Q",
+            transcript: "T",
+            userNotes: nil,
+            history: []
+        )
+        XCTAssertFalse(
+            mockClient.capturedMessages[0].content.contains("User's notes from the meeting"),
+            "Nil userNotes must not introduce the notes block"
+        )
+    }
+
+    func testChatOmitsUserNotesBlockWhenNotesAreEmpty() async throws {
+        _ = try await service.chat(
+            question: "Q",
+            transcript: "T",
+            userNotes: "",
+            history: []
+        )
+        XCTAssertFalse(
+            mockClient.capturedMessages[0].content.contains("User's notes from the meeting"),
+            "Empty userNotes must not introduce the notes block"
+        )
+    }
+
+    func testChatOmitsUserNotesBlockWhenNotesAreWhitespaceOnly() async throws {
+        _ = try await service.chat(
+            question: "Q",
+            transcript: "T",
+            userNotes: "   \n\t  \n  ",
+            history: []
+        )
+        XCTAssertFalse(
+            mockClient.capturedMessages[0].content.contains("User's notes from the meeting"),
+            "Whitespace-only userNotes must not introduce the notes block"
+        )
+    }
+
+    func testChatWithNilNotesIsByteIdenticalToOmittedBlock() async throws {
+        _ = try await service.chat(
+            question: "Q",
+            transcript: "T",
+            userNotes: nil,
+            history: []
+        )
+        let withoutNotes = mockClient.capturedMessages[0].content
+
+        // Re-init the mock and exercise with empty/whitespace notes; output
+        // should be identical to the nil-notes case (no degraded behavior for
+        // chats where the user simply hasn't typed during the meeting).
+        mockClient.capturedMessages = []
+        _ = try await service.chat(
+            question: "Q",
+            transcript: "T",
+            userNotes: "   ",
+            history: []
+        )
+        let withWhitespace = mockClient.capturedMessages[0].content
+        XCTAssertEqual(withoutNotes, withWhitespace)
     }
 
     // MARK: - Detailed (Envelope) Variants
@@ -376,6 +460,7 @@ final class LLMServiceTests: XCTestCase {
         let result = try await service.chatDetailed(
             question: "Who?",
             transcript: "Alice and Bob spoke.",
+            userNotes: nil,
             history: []
         )
 
@@ -587,11 +672,12 @@ final class LLMServiceTests: XCTestCase {
 
     func testTruncationSnapsToWordBoundary() {
         let text = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima"
-        let result = LLMService.truncateMiddle(text, limit: 40)
+        let result = LLMService.truncateMiddle(text, limit: 60)
         XCTAssertTrue(result.contains("[... content truncated ...]"))
         // Should not split mid-word
         let parts = result.components(separatedBy: "\n\n[... content truncated ...]\n\n")
         XCTAssertEqual(parts.count, 2)
+        guard parts.count == 2 else { return }
         let head = parts[0]
         let tail = parts[1]
         XCTAssertFalse(head.isEmpty)
@@ -610,18 +696,18 @@ final class LLMServiceTests: XCTestCase {
     }
 
     func testCloudContextBudget() {
-        XCTAssertEqual(LLMService.cloudContextBudget, 100_000)
+        XCTAssertEqual(LLMService.cloudContextBudget, 500_000)
     }
 
     func testLocalContextBudget() {
-        XCTAssertEqual(LLMService.localContextBudget, 24_000)
+        XCTAssertEqual(LLMService.localContextBudget, 80_000)
     }
 
     func testLocalProviderUsesLocalBudget() async throws {
         mockConfigStore.config = .ollama(model: "llama3.2")
 
         // Create text that exceeds local budget but not cloud budget
-        let text = String(repeating: "word ", count: 6000) // 30_000 chars > 24_000 local budget
+        let text = String(repeating: "word ", count: 18_000) // 90_000 chars > 80_000 local budget
         _ = try await service.summarize(transcript: text)
 
         // The user message should be truncated
@@ -632,7 +718,7 @@ final class LLMServiceTests: XCTestCase {
     func testCloudProviderDoesNotTruncateWithinBudget() async throws {
         mockConfigStore.config = .openai(apiKey: "sk-test")
 
-        // 30K chars is within cloud budget (100K)
+        // 30K chars is comfortably within cloud budget (500K)
         let text = String(repeating: "word ", count: 6000)
         _ = try await service.summarize(transcript: text)
 
@@ -643,10 +729,10 @@ final class LLMServiceTests: XCTestCase {
     // MARK: - Chat History Overflow
 
     func testChatDropsOldHistoryWhenOverBudget() async throws {
-        mockConfigStore.config = .ollama(model: "llama3.2") // local = 24K budget
+        mockConfigStore.config = .ollama(model: "llama3.2") // local = 80K budget
 
         // Create a long transcript that uses most of the budget
-        let transcript = String(repeating: "word ", count: 4000) // 20K chars
+        let transcript = String(repeating: "word ", count: 14_000) // 70K chars
 
         // Create history with identifiable messages (~210 chars each)
         let history = (0..<50).flatMap { i -> [ChatMessage] in
@@ -659,6 +745,7 @@ final class LLMServiceTests: XCTestCase {
         _ = try await service.chat(
             question: "Latest question",
             transcript: transcript,
+            userNotes: nil,
             history: history
         )
 
@@ -672,21 +759,22 @@ final class LLMServiceTests: XCTestCase {
     }
 
     func testChatWithNegativeHistoryBudgetDropsAllHistory() async throws {
-        mockConfigStore.config = .ollama(model: "llama3.2") // local = 24K budget
+        mockConfigStore.config = .ollama(model: "llama3.2") // local = 80K budget
 
-        // The truncated transcript is ~90% of budget (45% head + 45% tail).
-        // System prompt prefix + truncated transcript + question leaves ~2K chars.
-        // Make each history entry large enough (>2K each) so none fit.
-        let transcript = String(repeating: "word ", count: 20000) // 100K chars
+        // The truncated transcript fills almost all available local context.
+        // System prompt prefix + truncated transcript + question leave little history budget.
+        // Make each history entry large enough (>8K each) so none fit.
+        let transcript = String(repeating: "word ", count: 40_000) // 200K chars
 
         let history = [
-            ChatMessage(role: .user, content: String(repeating: "z", count: 3000)),
-            ChatMessage(role: .assistant, content: String(repeating: "z", count: 3000)),
+            ChatMessage(role: .user, content: String(repeating: "z", count: 10_000)),
+            ChatMessage(role: .assistant, content: String(repeating: "z", count: 10_000)),
         ]
 
         _ = try await service.chat(
             question: "New question",
             transcript: transcript,
+            userNotes: nil,
             history: history
         )
 
@@ -694,8 +782,59 @@ final class LLMServiceTests: XCTestCase {
         XCTAssertEqual(messages.first?.role, .system)
         XCTAssertEqual(messages.last?.role, .user)
         XCTAssertEqual(messages.last?.content, "New question")
-        // Each history entry is 3K chars, but only ~2K budget — none fit
+        // Each history entry is 10K chars, but only ~7-8K budget — none fit
         XCTAssertEqual(messages.count, 2)
+    }
+
+    func testChatBudgetsUserNotesAndTranscriptTogether() async throws {
+        mockConfigStore.config = .ollama(model: "llama3.2")
+
+        let transcript = String(repeating: "transcript word ", count: 12_000)
+        let notes = String(repeating: "notes word ", count: 12_000)
+        let history = [
+            ChatMessage(role: .user, content: "Earlier question"),
+            ChatMessage(role: .assistant, content: "Earlier answer"),
+        ]
+        let question = "Latest question"
+
+        _ = try await service.chat(
+            question: question,
+            transcript: transcript,
+            userNotes: notes,
+            history: history
+        )
+
+        let messages = mockClient.capturedMessages
+        let systemPrompt = try XCTUnwrap(messages.first?.content)
+        XCTAssertLessThanOrEqual(
+            systemPrompt.count + question.count,
+            LLMService.localContextBudget
+        )
+        XCTAssertTrue(systemPrompt.contains("User's notes from the meeting"))
+        XCTAssertTrue(systemPrompt.contains("Transcript:"))
+        XCTAssertEqual(messages.last?.content, question)
+        XCTAssertGreaterThan(messages.count, 2, "Small recent history should still fit after notes/transcript budgeting")
+    }
+
+    func testChatHistoryUsesModelPromptOverrideForRichPromptTurns() async throws {
+        mockConfigStore.config = .openai(apiKey: "sk-test", model: "gpt-4")
+
+        let richPrompt = "Explain the unresolved risks in the meeting so far."
+        let history = [
+            ChatMessage(role: .user, content: "Tell me more", modelPromptOverride: richPrompt),
+            ChatMessage(role: .assistant, content: "The main risk is timeline compression."),
+        ]
+
+        _ = try await service.chat(
+            question: "What should we do next?",
+            transcript: "The team discussed delivery risks.",
+            userNotes: nil,
+            history: history
+        )
+
+        let messages = mockClient.capturedMessages
+        XCTAssertTrue(messages.contains { $0.role == .user && $0.content == richPrompt })
+        XCTAssertFalse(messages.contains { $0.role == .user && $0.content == "Tell me more" })
     }
 
     // MARK: - Streaming
@@ -717,6 +856,7 @@ final class LLMServiceTests: XCTestCase {
         let stream = service.chatStream(
             question: "What happened?",
             transcript: "Something happened.",
+            userNotes: nil,
             history: []
         )
 
@@ -790,7 +930,7 @@ final class LLMServiceTests: XCTestCase {
 
     func testChatStreamThrowsWhenNotConfigured() async {
         mockConfigStore.config = nil
-        let stream = service.chatStream(question: "Q", transcript: "T", history: [])
+        let stream = service.chatStream(question: "Q", transcript: "T", userNotes: nil, history: [])
 
         do {
             for try await _ in stream {

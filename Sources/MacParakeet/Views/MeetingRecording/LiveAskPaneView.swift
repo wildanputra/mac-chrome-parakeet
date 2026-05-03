@@ -1,3 +1,4 @@
+import AppKit
 import MacParakeetCore
 import MacParakeetViewModels
 import SwiftUI
@@ -42,6 +43,12 @@ struct LiveAskPaneView: View {
                 return .handled
             }
             return .ignored
+        }
+        .onChange(of: viewModel.isStreaming) { _, streaming in
+            // The sparkle button dims + ignores hits while streaming, but if the
+            // menu was already open when streaming began (e.g. user regenerated
+            // from an earlier bubble) it would sit there with non-firing prompts.
+            if streaming { showingPromptMenu = false }
         }
     }
 
@@ -135,8 +142,12 @@ struct LiveAskPaneView: View {
                         emptyStateWithPills
                     } else {
                         ForEach(viewModel.messages) { message in
-                            MessageBubble(message: message)
-                                .id(message.id)
+                            MessageBubble(
+                                message: message,
+                                isLast: message.id == viewModel.messages.last?.id,
+                                onRegenerate: { viewModel.regenerateLastResponse() }
+                            )
+                            .id(message.id)
                         }
                     }
 
@@ -205,8 +216,13 @@ struct LiveAskPaneView: View {
         HStack(spacing: DesignSystem.Spacing.sm) {
             // Menu button only mid-conversation — empty state already shows the
             // full prompt grid in the pane, so the button would be redundant.
+            // Mirrors the follow-up row's streaming treatment so the entire
+            // composer reads as "wait" while the assistant is composing.
             if !viewModel.messages.isEmpty && viewModel.canSendMessage {
                 PromptMenuButton(isOpen: $showingPromptMenu)
+                    .opacity(viewModel.isStreaming ? 0.45 : 1)
+                    .allowsHitTesting(!viewModel.isStreaming)
+                    .animation(.easeOut(duration: 0.18), value: viewModel.isStreaming)
             }
 
             TextField("Ask about the meeting…", text: $viewModel.inputText, axis: .vertical)
@@ -306,7 +322,7 @@ enum LiveAskStarterPrompts {
             ),
             LiveAskPrompt(
                 label: "What did I miss?",
-                prompt: "Catch me up on what I missed in the last few minutes — the most important points or shifts. Be terse, signal-rich."
+                prompt: "Catch me up on the most recent shifts in the meeting — the latest decisions, new arguments, or topic changes. Skip what was clearly settled earlier. Be terse, signal-rich."
             ),
         ]),
         Group(label: "CAPTURE", prompts: [
@@ -423,7 +439,7 @@ enum LiveAskFollowUpPrompts {
     static let all: [LiveAskPrompt] = [
         LiveAskPrompt(
             label: "Tell me more",
-            prompt: "Expand on your previous response. Go deeper with concrete details and any nuances worth knowing."
+            prompt: "Expand on your previous response with more concrete detail from the meeting itself — quotes, specifics, who said what. Surface nuances or caveats you compressed out the first time."
         ),
         LiveAskPrompt(
             label: "Why?",
@@ -431,15 +447,15 @@ enum LiveAskFollowUpPrompts {
         ),
         LiveAskPrompt(
             label: "Give an example",
-            prompt: "Give a specific, concrete example that illustrates your previous response — ideally pulled from what was actually said in the meeting."
+            prompt: "Give one specific, concrete example that illustrates your previous response. Pull it from the meeting itself — a moment, exchange, or quote. If the meeting doesn't contain a clean example, say so plainly and offer the closest analogue."
         ),
         LiveAskPrompt(
             label: "Counter-argument?",
-            prompt: "What's the strongest counter-argument to your previous response? Steelman the opposing view."
+            prompt: "What's the strongest counter-argument to your previous response? Steelman the opposing view, and use anything in the meeting that supports it."
         ),
         LiveAskPrompt(
             label: "TL;DR",
-            prompt: "Compress your previous response into one or two short, punchy sentences."
+            prompt: "Give the punchy, no-fluff TL;DR of your previous response — one or two sentences. No headers, no list, no preamble."
         ),
     ]
 }
@@ -552,75 +568,299 @@ private struct FollowUpPill: View {
 
 // MARK: - Message Bubble
 
+/// "Whisper" layout — designed for the live in-meeting context, not a generic
+/// chat. Asymmetric on purpose: user turns are small accent-tinted capsules
+/// (gestural, low visual weight); assistant turns are bubble-less typeset prose
+/// anchored by a leading accent rule with a sparkles glyph at the top. The rule
+/// breathes while streaming, echoing the recording pill's sacred-geometry
+/// language. Optimized for glance-and-return cognition in a narrow panel — no
+/// avatar burning width, no chat-app chrome competing with content. Distinct
+/// from the post-meeting transcript chat by design: that surface is archival
+/// and leisurely; this one is in-the-moment thinking partnership.
 private struct MessageBubble: View {
     let message: ChatDisplayMessage
+    let isLast: Bool
+    let onRegenerate: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            if message.role == .user { Spacer(minLength: 32) }
-
-            if message.role != .user && message.content.isEmpty && message.isStreaming {
-                TypingIndicator()
-            } else {
-                // Reuse the canonical NSTextView-based renderer used by the
-                // post-meeting Chat tab and PromptResults — same code path means
-                // the live thread and its persisted form look identical, and we
-                // get headings, code blocks, blockquotes, ordered lists, and
-                // proper text selection without re-implementing them here.
-                MarkdownContentView(message.content)
-                    .padding(.horizontal, DesignSystem.Spacing.md)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14)
-                            .fill(bubbleColor)
-                    )
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if message.role == .assistant { Spacer(minLength: 32) }
-        }
-    }
-
-    private var bubbleColor: Color {
         switch message.role {
         case .user:
-            return DesignSystem.Colors.accent.opacity(0.18)
+            UserTurnView(content: message.content)
         case .assistant, .system:
-            return DesignSystem.Colors.surfaceElevated.opacity(0.6)
+            AssistantTurnView(
+                content: message.content,
+                isStreaming: message.isStreaming,
+                isLast: isLast,
+                onRegenerate: onRegenerate
+            )
         }
     }
 }
 
-/// Three accent dots that wave gracefully while the assistant is composing.
-/// On-brand replacement for the placeholder "…" — restrained, ~1.4s cycle.
-private struct TypingIndicator: View {
+private struct UserTurnView: View {
+    let content: String
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 32)
+
+            Text(content)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(DesignSystem.Colors.accent)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(DesignSystem.Colors.accent.opacity(0.10))
+                )
+                .overlay(
+                    Capsule()
+                        .strokeBorder(DesignSystem.Colors.accent.opacity(0.22), lineWidth: 0.5)
+                )
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct AssistantTurnView: View {
+    let content: String
+    let isStreaming: Bool
+    let isLast: Bool
+    let onRegenerate: () -> Void
+
+    @State private var hovered = false
+    @State private var copied = false
+    @FocusState private var actionFocus: AssistantActionFocus?
+
+    private var isEmptyStreaming: Bool { content.isEmpty && isStreaming }
+
+    /// Actions ride on the assistant turn but they're not part of the read.
+    /// Hide while streaming (no copying half-tokens; no regenerating an unfinished
+    /// turn) and on empty content. Reveal on hover OR keyboard focus so a tab-only
+    /// user can still reach them. The `copied` hold keeps the row up while the
+    /// green-checkmark confirmation plays out, even if the cursor leaves first.
+    private var actionsVisible: Bool {
+        guard !isStreaming, !content.isEmpty else { return false }
+        return hovered || actionFocus != nil || copied
+    }
+
+    var body: some View {
+        // Two columns: a 16pt leading anchor (head + accent rule), then typeset
+        // prose. The rule fills the prose's full height via maxHeight, so a
+        // long markdown answer has a continuous accent column — and now also
+        // visually adopts the actions row beneath the prose. While we wait for
+        // the first token, the rule and prose are hidden — the merkaba (brand
+        // voice / sacred-geometry rotation) pairs with three small wave-pulsing
+        // dots (universal "thinking" signal) for the loading state. Same
+        // job-division as iMessage's avatar + typing bubble.
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 6) {
+                AssistantHead(isStreaming: isStreaming)
+
+                if !isEmptyStreaming {
+                    AssistantAccentRule(isActive: isStreaming)
+                        .transition(.opacity)
+                }
+            }
+            .frame(width: 16)
+
+            if isEmptyStreaming {
+                ThinkingDots()
+                    .transition(.opacity)
+                    // ThinkingDots is .accessibilityHidden(true) internally
+                    // (decorative); promote it to a single element here so
+                    // VoiceOver still reads the loading state.
+                    .accessibilityElement()
+                    .accessibilityLabel("Thinking")
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Reuse the canonical NSTextView-based renderer used
+                    // elsewhere (post-meeting Chat tab, PromptResults).
+                    // Markdown, headings, code blocks, lists, and proper text
+                    // selection — for free.
+                    MarkdownContentView(content)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // Always rendered (reserves height so hover doesn't shift
+                    // layout) but invisible until the assistant turn is hovered
+                    // or one of its action buttons takes keyboard focus.
+                    AssistantMessageActions(
+                        content: content,
+                        showRegenerate: isLast,
+                        onRegenerate: onRegenerate,
+                        focus: $actionFocus,
+                        copied: $copied
+                    )
+                    .opacity(actionsVisible ? 1 : 0)
+                    .allowsHitTesting(actionsVisible)
+                    .animation(.easeOut(duration: 0.12), value: actionsVisible)
+                }
+                .transition(.opacity)
+            }
+
+            Spacer(minLength: 0)
+        }
+        // Generous, forgiving hover target — cursor doesn't need to land
+        // precisely on prose to reveal actions; anywhere across the assistant
+        // strip counts.
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
+        .animation(.easeOut(duration: 0.2), value: isEmptyStreaming)
+    }
+}
+
+private enum AssistantActionFocus: Hashable {
+    case copy
+    case regenerate
+}
+
+/// Two SF Symbol buttons beneath the assistant prose: Copy (always) and
+/// Regenerate (tail only). Bare glyphs — no backgrounds, no labels — to honor
+/// the "whisper layout" intent: no chat-app chrome, just the response and
+/// quiet affordances that emerge on hover. Per-button hover bumps glyph
+/// opacity for a touch of liveliness without animating during reveal.
+private struct AssistantMessageActions: View {
+    let content: String
+    let showRegenerate: Bool
+    let onRegenerate: () -> Void
+    @FocusState.Binding var focus: AssistantActionFocus?
+    /// Lifted to the parent so the actions row stays revealed for the full
+    /// confirmation animation even if the cursor leaves the assistant turn.
+    @Binding var copied: Bool
+
+    @State private var copyHovered = false
+    @State private var regenerateHovered = false
+    @State private var resetTask: Task<Void, Never>?
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Button(action: copy) {
+                Image(systemName: copied ? "checkmark" : "doc.on.clipboard")
+                    .font(.system(size: 11, weight: .medium))
+                    .contentTransition(.symbolEffect(.replace))
+                    .foregroundStyle(
+                        copied
+                            ? DesignSystem.Colors.successGreen.opacity(0.95)
+                            : DesignSystem.Colors.accent.opacity(copyHovered ? 0.95 : 0.55)
+                    )
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focused($focus, equals: .copy)
+            .onHover { copyHovered = $0 }
+            .help(copied ? "Copied" : "Copy response")
+            .accessibilityLabel(copied ? "Copied" : "Copy response")
+
+            if showRegenerate {
+                Button(action: onRegenerate) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(
+                            DesignSystem.Colors.accent.opacity(regenerateHovered ? 0.95 : 0.55)
+                        )
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focused($focus, equals: .regenerate)
+                .onHover { regenerateHovered = $0 }
+                .help("Regenerate response")
+                .accessibilityLabel("Regenerate response")
+            }
+        }
+        .padding(.top, 8)
+        .onDisappear { resetTask?.cancel() }
+    }
+
+    private func copy() {
+        guard !content.isEmpty else { return }
+        // Copy the raw markdown source — pastes cleanly into Notes/Slack/email
+        // and preserves the bold quote callouts that make the response useful.
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(content, forType: .string)
+        copied = true
+        resetTask?.cancel()
+        resetTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1200))
+            if !Task.isCancelled {
+                copied = false
+            }
+        }
+    }
+}
+
+/// Three small accent dots that wave during empty-streaming. Sits at the right
+/// of the merkaba head, vertically centered to it, so the pair reads as one
+/// anchored loading affordance — not a glyph and floating decoration. Pure
+/// opacity wave (no scale) keeps static moments clean; the merkaba does the
+/// rotation work.
+private struct ThinkingDots: View {
     @State private var phase = 0
     private let dotCount = 3
-    private let interval: Duration = .milliseconds(380)
 
     var body: some View {
         HStack(spacing: 5) {
             ForEach(0..<dotCount, id: \.self) { i in
                 Circle()
-                    .fill(DesignSystem.Colors.accent.opacity(phase == i ? 0.9 : 0.32))
-                    .frame(width: 6, height: 6)
-                    .scaleEffect(phase == i ? 1.25 : 0.85)
+                    .fill(DesignSystem.Colors.accent.opacity(phase == i ? 0.85 : 0.28))
+                    .frame(width: 4, height: 4)
             }
         }
-        .padding(.horizontal, DesignSystem.Spacing.md)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(DesignSystem.Colors.surfaceElevated.opacity(0.6))
-        )
+        // Match the merkaba's 16pt frame so HStack(.top) aligns the two
+        // affordances by their centers, not their tops.
+        .frame(height: 16, alignment: .center)
         .task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: interval)
+                try? await Task.sleep(for: .milliseconds(330))
                 withAnimation(.easeInOut(duration: 0.32)) {
                     phase = (phase + 1) % dotCount
                 }
             }
         }
-        .accessibilityLabel("Thinking")
+        .accessibilityHidden(true)
+    }
+}
+
+/// Head of the assistant column — swaps between a spinning merkaba (streaming)
+/// and a static sparkles glyph (idle). Same visual language as the dictation
+/// overlay and post-meeting transcript chat avatar; carries sacred-geometry
+/// motion into the live Ask without bringing back chat-app avatar chrome.
+private struct AssistantHead: View {
+    let isStreaming: Bool
+
+    var body: some View {
+        ZStack {
+            if isStreaming {
+                SpinnerRingView(size: 14, revolutionDuration: 2.0, tintColor: DesignSystem.Colors.accent)
+                    .transition(.opacity)
+            } else {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(DesignSystem.Colors.accent.opacity(0.85))
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: 16, height: 16)
+        .animation(.easeInOut(duration: 0.2), value: isStreaming)
+        .accessibilityHidden(true)
+    }
+}
+
+/// 2pt vertical accent rule. Sits quiet when idle (0.18); brightens to a steady
+/// 0.4 during streaming so the column feels alive without competing with the
+/// spinning merkaba above it. Two motion sources stacked would be noise — the
+/// merkaba does the rotation, the rule does the static "active" presence.
+private struct AssistantAccentRule: View {
+    let isActive: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 1)
+            .fill(DesignSystem.Colors.accent.opacity(isActive ? 0.40 : 0.18))
+            .frame(width: 2)
+            .frame(maxHeight: .infinity)
+            .animation(.easeInOut(duration: 0.3), value: isActive)
     }
 }

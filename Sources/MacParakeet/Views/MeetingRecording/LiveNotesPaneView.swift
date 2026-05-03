@@ -5,14 +5,16 @@ import SwiftUI
 /// Notes tab inside the live meeting panel — the primary "active" surface
 /// during a recording (ADR-020 §1, §2). Plain-text scratchpad that auto-saves
 /// onto the lock file via a 250 ms idle debounce; on finalize, the notes are
-/// persisted onto the Transcription's `userNotes` column where the
-/// "Memo-Steered Notes" prompt can pull them in to shape the summary.
+/// persisted onto the Transcription's `userNotes` column. The "Memo-Steered
+/// Notes" built-in prompt that originally consumed those notes was reverted
+/// on 2026-05-02, but the column persists and the `{{userNotes}}` template
+/// variable remains available for custom prompts.
 ///
 /// "Notes are user-authored only" (ADR-020 §11): the only mutator wired up
 /// here is the user's own keystrokes. There is intentionally no /ask insertion
 /// path or "drop assistant reply into notes" affordance — that invariant is
-/// what lets the summary template treat `{{userNotes}}` as a trustable signal
-/// of what the user actually cares about.
+/// what lets any future summary template treat `{{userNotes}}` as a trustable
+/// signal of what the user actually cares about.
 struct LiveNotesPaneView: View {
     @Bindable var viewModel: MeetingNotesViewModel
     /// Elapsed meeting time, supplied by the parent panel. Used by the
@@ -78,9 +80,15 @@ struct LiveNotesPaneView: View {
                 }
 
             if viewModel.notesText.isEmpty {
+                // Match TextEditor's outer padding; the +5 horizontal absorbs
+                // NSTextView's text-container inset so the placeholder's first
+                // glyph lines up with where the caret renders. Vertical extra
+                // is intentionally zero — NSTextView's top inset on macOS is
+                // ~0pt, so any +v nudge pushes the placeholder a half-line
+                // below the caret.
                 placeholder
                     .padding(.horizontal, DesignSystem.Spacing.md + 5)
-                    .padding(.vertical, DesignSystem.Spacing.sm + 8)
+                    .padding(.vertical, DesignSystem.Spacing.sm)
                     .allowsHitTesting(false)
             }
 
@@ -108,10 +116,10 @@ struct LiveNotesPaneView: View {
 
     private var placeholder: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Take notes to shape the summary…")
+            Text("Take notes during the meeting…")
                 .font(DesignSystem.Typography.body)
                 .foregroundStyle(DesignSystem.Colors.textTertiary.opacity(0.7))
-            Text("Anything you type here steers the post-meeting summary. Headings, bullets, scratch — all welcome.")
+            Text("Saved with the recording. Available in Ask. Headings, bullets, scratch — all welcome.")
                 .font(DesignSystem.Typography.caption)
                 .foregroundStyle(DesignSystem.Colors.textTertiary.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)

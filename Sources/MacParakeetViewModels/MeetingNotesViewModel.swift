@@ -14,7 +14,11 @@ import SwiftUI
 /// the panel is disposed). Adding a programmatic insertion path (e.g. for an
 /// "insert AI response into notes" affordance) would require a new public
 /// mutator — visible in code review and a deliberate violation of the
-/// memo→summary invariant.
+/// user-authored-notes invariant. This is what lets every consumer of
+/// `userNotes` (the transcription detail page, the `notes.md` sidecar, and
+/// the chat path's optional `userNotes` parameter) treat the value as a
+/// trustable signal of what the user actually cares about, rather than a
+/// blob that AI replies could recursively dilute.
 @MainActor
 @Observable
 public final class MeetingNotesViewModel {
@@ -65,11 +69,11 @@ public final class MeetingNotesViewModel {
 
     /// Word count derived from `notesText`. Cached as a stored property
     /// and refreshed whenever `notesText` changes (via `applyEdit`,
-    /// `restore`, `reset`, or slash-command acceptance) — used by the
-    /// tab-state-bearing label (`Notes · 24w`) per panel render and by
-    /// `isApproachingSoftCap` per keystroke. With notes that can grow to
-    /// 8,000+ words and SwiftUI re-rendering on every observable change,
-    /// re-walking the string on every read would be real main-thread cost.
+    /// `restore`, `reset`, or slash-command acceptance) — used by
+    /// `isApproachingSoftCap` per keystroke and by the soft-cap footer in
+    /// `LiveNotesPaneView`. With notes that can grow to 8,000+ words and
+    /// SwiftUI re-rendering on every observable change, re-walking the
+    /// string on every read would be real main-thread cost.
     public private(set) var wordCount: Int = 0
 
     /// SwiftUI `TextEditor` binds to this. The setter both applies the new

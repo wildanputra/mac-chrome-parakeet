@@ -118,7 +118,7 @@ CREATE INDEX idx_transcriptions_created_at ON transcriptions(createdAt DESC);
 - `wordTimestamps` is a JSON text column, not a separate table. One transcription = one blob of timestamps. GRDB can decode this via `Codable`.
 - `speakerCount` and `speakers` are nullable, populated only when diarization is available (v0.4).
 - `filePath` is nullable because the original file may be moved or deleted after transcription.
-- For meeting recordings, `filePath` points to the mixed `meeting.m4a` artifact used for playback/export, while the per-source `microphone.m4a`, `system.m4a`, and `meeting-recording-metadata.json` sidecar remain inside the same session folder.
+- For meeting recordings, `filePath` points to the mixed `meeting.m4a` artifact used for playback/export, while the per-source `microphone.m4a`, `system.m4a`, and `meeting-recording-metadata.json` sidecar remain inside the same session folder. When the user typed notes during the meeting, a `notes.md` companion file is written into that folder at finalize/recovery time so the notes are inspectable in Finder / any editor without launching the app. The DB column `transcriptions.userNotes` is canonical; `notes.md` is a snapshot at finalize and is not synced with later edits via `macparakeet-cli meetings notes`.
 - Saved meeting retranscribes reconstruct the archived meeting from that folder when the sidecar exists, so the library path can reuse the same aligned dual-source finalization flow as the immediate post-stop path.
 - `sourceURL` distinguishes URL-sourced transcriptions (YouTube) from local file transcriptions. Added in v0.3.
 - `thumbnailURL`, `channelName`, `videoDescription` store YouTube metadata fetched during download. Added in v0.5.
@@ -198,7 +198,7 @@ CREATE TABLE chat_conversations (
     transcriptionId TEXT NOT NULL                      -- FK to transcriptions
         REFERENCES transcriptions(id) ON DELETE CASCADE,
     title TEXT NOT NULL DEFAULT '',                    -- Derived from first user message (auto-titled)
-    messages TEXT,                                     -- JSON: [{"role":"user","content":"..."},{"role":"assistant","content":"..."}]
+    messages TEXT,                                     -- JSON: [{"role":"user","content":"...","modelPromptOverride":"..."},{"role":"assistant","content":"..."}]
     createdAt TEXT NOT NULL,                           -- ISO 8601 timestamp
     updatedAt TEXT NOT NULL                            -- ISO 8601 timestamp
 );
@@ -209,6 +209,7 @@ CREATE INDEX idx_chat_conversations_transcription_id ON chat_conversations(trans
 **Notes:**
 - `transcriptionId` has a cascading delete — deleting a transcription removes all its conversations.
 - `messages` is a JSON array of `ChatMessage` objects, decoded via GRDB's `Codable` pattern.
+- `messages[].modelPromptOverride` is optional and only present for rich-prompt user turns; `content` remains the visible chat label, while regenerate/model-history assembly use `modelPromptOverride`.
 - `title` is auto-derived from the first user message (up to 50 chars) during creation or migration.
 - Legacy `chatMessages` field on `transcriptions` is nulled out after migration but kept for backward compatibility.
 
@@ -240,7 +241,7 @@ CREATE UNIQUE INDEX idx_prompts_name ON prompts(name COLLATE NOCASE);
 - `isBuiltIn` prompts are seeded from `Prompt.builtInPrompts()` during migration. The repository layer enforces the hide-only invariant (delete returns `false` for built-in prompts).
 - `isAutoRun` is independent of `isVisible`, but repository/UI behavior forces auto-run prompts visible while auto-run is enabled.
 - `category` currently stores the raw value `"summary"` for compatibility, while the Swift enum case is `Prompt.Category.result`.
-- Built-ins currently come from `Prompt.builtInPrompts()` in Swift. The list includes "Memo-Steered Notes" and "Summary" as auto-run prompts for users who have not disabled every auto-run prompt.
+- Built-ins currently come from `Prompt.builtInPrompts()` in Swift. "Summary" is the lone auto-run built-in for users who have not disabled every auto-run prompt. ("Memo-Steered Notes" was a second auto-run built-in introduced in ADR-020 and reverted on 2026-05-02 — see ADR-020 amendment.)
 
 ---
 

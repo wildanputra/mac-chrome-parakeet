@@ -6,6 +6,10 @@ import SwiftUI
 struct MeetingRecordingPanelView: View {
     @Bindable var viewModel: MeetingRecordingPanelViewModel
     @State private var autoScroll = true
+    /// Tab currently under the cursor — drives the hover-revealed `⌘N` chip
+    /// next to the tab label. Discoverability for the keyboard shortcuts
+    /// without permanent chrome on the tab bar.
+    @State private var hoveredTab: MeetingRecordingPanelViewModel.LivePanelTab? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,8 +20,8 @@ struct MeetingRecordingPanelView: View {
             paneContent
             // Notes and Ask own their own bottom UI (Notes shows a soft-cap
             // footer when relevant; Ask owns its composer + follow-up pills).
-            // The footer stays transcript-specific (Copy, auto-scroll toggle);
-            // the stop control is in the always-visible header.
+            // The footer stays transcript-specific (Copy, auto-scroll toggle, Stop).
+            // The floating recording pill remains the canonical Stop control.
             if viewModel.selectedTab == .transcript {
                 Divider()
                 footer
@@ -55,21 +59,31 @@ struct MeetingRecordingPanelView: View {
 
     private func tabButton(_ tab: MeetingRecordingPanelViewModel.LivePanelTab) -> some View {
         let isActive = viewModel.selectedTab == tab
-        let shortcut: KeyEquivalent = {
+        let shortcutNumber: Int = {
             switch tab {
-            case .notes: return "1"
-            case .transcript: return "2"
-            case .ask: return "3"
+            case .notes: return 1
+            case .transcript: return 2
+            case .ask: return 3
             }
         }()
+        let shortcut = KeyEquivalent(Character("\(shortcutNumber)"))
+        let shortcutDisplay = "⌘\(shortcutNumber)"
         let badge = viewModel.badge(for: tab)
+        let isStreaming = (tab == .ask) && viewModel.isAskStreaming
+        let shortcutHint = (hoveredTab == tab) ? shortcutDisplay : nil
         return Button {
             withAnimation(.easeOut(duration: 0.18)) {
                 viewModel.selectedTab = tab
             }
         } label: {
             VStack(spacing: 5) {
-                tabLabel(title: tab.title, badge: badge, isActive: isActive)
+                tabLabel(
+                    title: tab.title,
+                    badge: badge,
+                    isStreaming: isStreaming,
+                    shortcutHint: shortcutHint,
+                    isActive: isActive
+                )
                 Capsule()
                     .fill(isActive ? DesignSystem.Colors.accent : Color.clear)
                     .frame(height: 1)
@@ -81,36 +95,91 @@ struct MeetingRecordingPanelView: View {
         }
         .buttonStyle(.plain)
         .keyboardShortcut(shortcut, modifiers: .command)
-        .help(badge.map { "\(tab.title) · \($0)" } ?? tab.title)
+        // Race-safe hover tracking. When the cursor moves between tabs both
+        // the leaving tab's `false` and the entering tab's `true` fire — the
+        // `hoveredTab == tab` guard prevents the leaver from wiping the
+        // entrant's claim if they arrive in either order.
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                if hovering {
+                    hoveredTab = tab
+                } else if hoveredTab == tab {
+                    hoveredTab = nil
+                }
+            }
+        }
+        .help(tabTooltip(title: tab.title, badge: badge, isStreaming: isStreaming, shortcut: shortcutDisplay))
+    }
+
+    private func tabTooltip(title: String, badge: String?, isStreaming: Bool, shortcut: String) -> String {
+        let base: String = {
+            if isStreaming { return "\(title) · Responding…" }
+            if let badge { return "\(title) · \(badge)" }
+            return title
+        }()
+        return "\(base) (\(shortcut))"
     }
 
     /// State-bearing tab label per ADR-020 §1. `ViewThatFits` picks the
-    /// richest variant the cell width allows: rich (noun · badge) at
-    /// default panel widths, plain noun at the 360px floor. Tooltip carries
-    /// the full label so the badge never disappears entirely — see
-    /// `.help(...)` on the parent button.
+    /// richest variant the cell width allows: rich (noun [⌘N] · badge, or
+    /// noun [⌘N] dot for streaming) at default panel widths, plain noun at
+    /// the 360px floor. The `·` separator is dropped before the streaming
+    /// dot — a symbol doesn't need text-style punctuation in front of it.
+    /// Tooltip carries the full label so the state never disappears
+    /// entirely — see `.help(...)` on the parent button.
+    ///
+    /// `isStreaming` takes precedence over `badge` because LLM-in-flight is
+    /// the most actionable state — and today only the Ask tab uses it.
+    /// `shortcutHint` is non-nil only while the tab is hovered; the chip
+    /// fades in next to the noun, before the state separator, so it groups
+    /// with the tab identity rather than with the live state.
     @ViewBuilder
-    private func tabLabel(title: String, badge: String?, isActive: Bool) -> some View {
+    private func tabLabel(
+        title: String,
+        badge: String?,
+        isStreaming: Bool,
+        shortcutHint: String?,
+        isActive: Bool
+    ) -> some View {
         let weight: Font.Weight = isActive ? .medium : .regular
         let foreground: Color = isActive
             ? DesignSystem.Colors.textPrimary
             : DesignSystem.Colors.textTertiary
+        let hasTrailing = isStreaming || badge != nil
 
-        if let badge {
+        if hasTrailing || shortcutHint != nil {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 5) {
                     Text(title)
                         .font(.system(size: 12, weight: weight))
                         .foregroundStyle(foreground)
-                    Text("·")
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(DesignSystem.Colors.textTertiary.opacity(0.6))
-                    Text(badge)
-                        .font(.system(size: 11, weight: .regular).monospacedDigit())
-                        .foregroundStyle(isActive
-                            ? DesignSystem.Colors.accent
-                            : DesignSystem.Colors.textTertiary)
-                        .lineLimit(1)
+
+                    if let shortcutHint {
+                        Text(shortcutHint)
+                            .font(.system(size: 10, weight: .regular).monospacedDigit())
+                            .foregroundStyle(DesignSystem.Colors.textTertiary.opacity(0.7))
+                            .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                    }
+
+                    if hasTrailing {
+                        // The `·` separator only earns its keep before text-based
+                        // state (`Notes · 24w`, `Transcript · LIVE`). Before the
+                        // streaming dot it's redundant punctuation around what's
+                        // already a visual symbol — `Ask ●` reads cleaner.
+                        if isStreaming {
+                            AskStreamingDot(isActive: isActive)
+                        } else if let badge {
+                            Text("·")
+                                .font(.system(size: 12, weight: .regular))
+                                .foregroundStyle(DesignSystem.Colors.textTertiary.opacity(0.6))
+                            Text(badge)
+                                .font(.system(size: 11, weight: .regular).monospacedDigit())
+                                .foregroundStyle(isActive
+                                    ? DesignSystem.Colors.accent
+                                    : DesignSystem.Colors.textTertiary)
+                                .lineLimit(1)
+                        }
+                    }
                 }
                 .fixedSize()
 
@@ -153,12 +222,6 @@ struct MeetingRecordingPanelView: View {
                     Text("\(viewModel.wordCount) words")
                         .font(.system(size: 10, weight: .regular).monospacedDigit())
                         .foregroundStyle(DesignSystem.Colors.textTertiary.opacity(0.8))
-                }
-
-                if viewModel.canStop {
-                    StopRecordingButton {
-                        viewModel.onStop?()
-                    }
                 }
             }
 
@@ -266,6 +329,29 @@ struct MeetingRecordingPanelView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(DesignSystem.Colors.warningAmber)
         }
+    }
+}
+
+/// Quiet breathing dot rendered next to "Ask" while the LLM is mid-response.
+/// Strictly bound to streaming — vanishes the instant streaming ends so it
+/// can't decay into a stale notification badge. Matches the brand-orange
+/// emphasis of the Ask tab when active; falls back to tertiary text color
+/// when the user is on a different tab so it reads as ambient, not loud.
+private struct AskStreamingDot: View {
+    let isActive: Bool
+    @State private var animate = false
+
+    var body: some View {
+        Circle()
+            .fill(isActive ? DesignSystem.Colors.accent : DesignSystem.Colors.textTertiary)
+            .frame(width: 5, height: 5)
+            .opacity(animate ? 1.0 : 0.35)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                    animate = true
+                }
+            }
+            .accessibilityLabel("Ask is responding")
     }
 }
 

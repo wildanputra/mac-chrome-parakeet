@@ -1513,7 +1513,7 @@ Prompt library and multi-summary system. Users control how AI processes transcri
 
 ## v0.6 — Meeting Recording (Implemented on main; unreleased)
 
-The v0.6 release ships system audio + mic capture (ADR-014, ADR-015), the centralized STT runtime (ADR-016), calendar-driven auto-start (ADR-017), the live Ask tab (ADR-018), crash-resilient recording (ADR-019), and the live notepad + memo-steered summaries (ADR-020). The full v0.6 backlog lives in `spec/README.md`; the F-numbered entries below cover the ADR-020 feature surface that this PR introduces.
+The v0.6 release ships system audio + mic capture (ADR-014, ADR-015), the centralized STT runtime (ADR-016), calendar-driven auto-start (ADR-017), the live Ask tab (ADR-018), crash-resilient recording (ADR-019), and the live notepad plus `{{userNotes}}` plumbing from ADR-020. The full v0.6 backlog lives in `spec/README.md`; the F-numbered entries below cover the ADR-020 feature surface that this PR introduces.
 
 Meeting transcription uses the current speech engine captured at recording start. Parakeet remains the default; WhisperKit can be selected before starting a meeting for languages outside Parakeet coverage.
 
@@ -1521,12 +1521,12 @@ Meeting transcription uses the current speech engine captured at recording start
 
 > Status: **IMPLEMENTED**
 
-**What:** Three-tab live meeting panel — Notes / Transcript / Ask, Notes default — with a plaintext `TextEditor` for free-form note-taking during a recording. Auto-saves through `MeetingRecordingService.updateNotes(_:)` on a 250 ms idle debounce; survives crashes via the ADR-019 lock file's additive `notes` field; persists onto `transcriptions.userNotes` at finalize where it steers post-meeting summary generation.
+**What:** Three-tab live meeting panel — Notes / Transcript / Ask, Notes default — with a plaintext `TextEditor` for free-form note-taking during a recording. Auto-saves through `MeetingRecordingService.updateNotes(_:)` on a 250 ms idle debounce; survives crashes via the ADR-019 lock file's additive `notes` field; persists onto `transcriptions.userNotes` at finalize for saved meeting context, chat threading, `notes.md` sidecar export, and future/custom `{{userNotes}}` prompt templates.
 
 **Acceptance criteria:**
 - [x] `MeetingRecordingPanelView` defaults to the Notes tab when the panel opens
 - [x] ⌘1 / ⌘2 / ⌘3 navigate to Notes / Transcript / Ask respectively
-- [x] State-bearing tab labels (`Notes · Nw`, `Transcript · LIVE`, `Ask · N`) collapse to plain noun + tooltip at the 360px panel-width floor via `ViewThatFits`
+- [x] Tab labels render as plain nouns (`Notes`, `Transcript`, `Ask`); only the Ask tab carries an ambient indicator — a breathing dot while `chatViewModel.isStreaming`. `ViewThatFits` collapses the dot into the tooltip at the 360px panel-width floor (ADR-020 §1 amendments 2026-05-02)
 - [x] Notes auto-save serializes through `MeetingRecordingService.updateNotes(_:)` so all `recording.lock` writes share one writer
 - [x] Notes round-trip through crash recovery via lock-file `notes` (additive, decoded with `decodeIfPresent`, decoded independently so a malformed notes value doesn't block audio recovery)
 - [x] Soft-cap warning footer at 7,500 words; notes themselves are never truncated (cap applies only at prompt-assembly time)
@@ -1534,16 +1534,18 @@ Meeting transcription uses the current speech engine captured at recording start
 
 ### F37: Memo-Steered Summaries
 
-> Status: **IMPLEMENTED**
+> Status: **REVERTED (2026-05-02)** — built-in prompt removed; template-variable plumbing retained.
 
-**What:** New "Memo-Steered Notes" built-in prompt that treats the user's typed notes as the structure and priorities of the post-meeting summary, expanding each note with detail from the transcript. Existing prompts can adopt the same pattern by using the new template variables.
+**What:** Originally shipped a "Memo-Steered Notes" built-in prompt that auto-ran on every transcription with `{{userNotes}}` and `{{transcript}}` substitution. Reverted because the prompt fired on non-meeting sources (YouTube, file transcription) where `userNotes` is always empty and the prompt's output template was nonsensical without notes; combined with `Summary` also being an auto-run default, every meeting auto-generated two redundant summaries. The underlying `{{userNotes}}` / `{{transcript}}` template plumbing is intentionally retained for future re-introduction with proper source scoping.
 
-**Acceptance criteria:**
+**What still ships:**
 - [x] `PromptTemplateRenderer` supports `{{userNotes}}` and `{{transcript}}` substitution; single-pass and simultaneous to prevent injection via user notes containing `{{transcript}}` literals
 - [x] Variable names are case-sensitive; canonical lowercase (typos fall through to empty-string fallback rather than silently producing empty output)
-- [x] "Memo-Steered Notes" prompt seeded as a built-in via `Prompt.builtInPrompts()` and `community-prompts.json`
-- [x] Auto-run insertion guard: the new prompt is inserted with `isAutoRun = true` only when at least one existing prompt has `isAutoRun = true`, preserving ADR-013's "zero auto-run is valid" invariant
-- [x] `Summary` row gains `userNotesSnapshot: String?` — the value of `userNotes` at the moment of summary generation, captured alongside the existing prompt snapshot per ADR-013
+- [x] `Summary` row (PromptResult) gains `userNotesSnapshot: String?` — the value of `userNotes` at the moment of summary generation, captured alongside the existing prompt snapshot per ADR-013
+
+**Reverted:**
+- [x] "Memo-Steered Notes" prompt removed from `Prompt.builtInPrompts()` and `community-prompts.json`; reconciler deletes the row on next launch for any DB that has it from a prior build
+- [x] Auto-run insertion guard from ADR-020 §5 is still tested via `Summary` (the remaining auto-run built-in) — the mechanism is intact and ready for the next prompt that needs it
 
 ### F38: Slash Commands in Notes
 

@@ -760,4 +760,250 @@ final class TranscriptChatViewModelTests: XCTestCase {
 
         XCTAssertTrue(mockConversationRepo.deleteEmptyCalls.contains(transcriptionId))
     }
+
+    // MARK: - userNotes provider (post-Memo-Steered-revert path)
+
+    func testSendMessagePassesUserNotesFromProviderToLLM() async throws {
+        let transcriptionId = UUID()
+        viewModel.loadTranscript("Transcript", transcriptionId: transcriptionId)
+        viewModel.bindUserNotesProvider { "decision: ship Friday" }
+        mockService.streamTokens = ["ok"]
+        viewModel.inputText = "Why Friday?"
+
+        viewModel.sendMessage()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(mockService.lastChatUserNotes, "decision: ship Friday")
+    }
+
+    func testSendMessagePassesNilUserNotesWhenProviderUnset() async throws {
+        let transcriptionId = UUID()
+        viewModel.loadTranscript("Transcript", transcriptionId: transcriptionId)
+        // No bindUserNotesProvider call — closure is nil.
+        mockService.streamTokens = ["ok"]
+        viewModel.inputText = "Q"
+
+        viewModel.sendMessage()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertNil(mockService.lastChatUserNotes)
+    }
+
+    func testProviderClosureIsReevaluatedOnEverySend() async throws {
+        let transcriptionId = UUID()
+        viewModel.loadTranscript("Transcript", transcriptionId: transcriptionId)
+
+        // Mutable backing store the closure reads from each invocation —
+        // simulates a live notepad where the user keeps typing between sends.
+        let liveNotes = LockedString()
+        liveNotes.set("first")
+        viewModel.bindUserNotesProvider { liveNotes.get() }
+
+        mockService.streamTokens = ["ok"]
+        viewModel.inputText = "First send"
+        viewModel.sendMessage()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(mockService.lastChatUserNotes, "first")
+
+        liveNotes.set("first\nsecond — added between sends")
+        viewModel.inputText = "Second send"
+        viewModel.sendMessage()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(
+            mockService.lastChatUserNotes,
+            "first\nsecond — added between sends",
+            "Closure must read the latest notes at each chat-send, not snapshot at bind time"
+        )
+    }
+
+    func testBindUserNotesProviderNilClearsExistingProvider() async throws {
+        let transcriptionId = UUID()
+        viewModel.loadTranscript("Transcript", transcriptionId: transcriptionId)
+        viewModel.bindUserNotesProvider { "some notes" }
+        viewModel.bindUserNotesProvider(nil)
+
+        mockService.streamTokens = ["ok"]
+        viewModel.inputText = "Q"
+        viewModel.sendMessage()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertNil(mockService.lastChatUserNotes)
+    }
+
+    // MARK: - Regenerate Last Response
+
+    func testRegenerateLastResponseReissuesPriorPromptAndReplacesTail() async throws {
+        let transcriptionId = UUID()
+        viewModel.loadTranscript("Transcript", transcriptionId: transcriptionId)
+
+        mockService.streamTokens = ["First", " answer"]
+        viewModel.inputText = "What is this about?"
+        viewModel.sendMessage()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(viewModel.messages.count, 2)
+        XCTAssertEqual(viewModel.messages[1].content, "First answer")
+        let firstAssistantID = viewModel.messages[1].id
+
+        mockService.streamTokens = ["Second", " answer"]
+        viewModel.regenerateLastResponse()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        // Same shape (user + 1 assistant), new assistant content + new id.
+        XCTAssertEqual(viewModel.messages.count, 2)
+        XCTAssertEqual(viewModel.messages[0].role, .user)
+        XCTAssertEqual(viewModel.messages[0].content, "What is this about?")
+        XCTAssertEqual(viewModel.messages[1].role, .assistant)
+        XCTAssertEqual(viewModel.messages[1].content, "Second answer")
+        XCTAssertNotEqual(viewModel.messages[1].id, firstAssistantID)
+
+        // LLM saw the same user prompt and history excluded the trailing user turn.
+        XCTAssertEqual(mockService.lastChatQuestion, "What is this about?")
+        XCTAssertEqual(mockService.lastChatHistory?.count, 0)
+    }
+
+    func testRegenerateLastResponseReusesRichPrompt() async throws {
+        let transcriptionId = UUID()
+        viewModel.loadTranscript("Transcript", transcriptionId: transcriptionId)
+
+        let richPrompt = "Explain the unresolved risks in the meeting so far."
+        mockService.streamTokens = ["First"]
+        viewModel.inputText = "Tell me more"
+        viewModel.sendMessage(richPrompt: richPrompt)
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(mockConversationRepo.updateMessagesCalls.last?.messages?.first?.modelPromptOverride, richPrompt)
+
+        mockService.streamTokens = ["Second"]
+        viewModel.regenerateLastResponse()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(viewModel.messages.map(\.content), ["Tell me more", "Second"])
+        XCTAssertEqual(mockService.lastChatQuestion, richPrompt)
+    }
+
+    func testRegenerateLastResponseReusesPersistedRichPromptAfterReload() async throws {
+        let transcriptionId = UUID()
+        viewModel.loadTranscript("Transcript", transcriptionId: transcriptionId)
+
+        let richPrompt = "Explain the unresolved risks in the meeting so far."
+        mockService.streamTokens = ["First"]
+        viewModel.inputText = "Tell me more"
+        viewModel.sendMessage(richPrompt: richPrompt)
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        let persisted = try XCTUnwrap(mockConversationRepo.conversations.first)
+        XCTAssertEqual(persisted.messages?.first?.content, "Tell me more")
+        XCTAssertEqual(persisted.messages?.first?.modelPromptOverride, richPrompt)
+
+        let reloadedService = MockLLMService()
+        let reloaded = TranscriptChatViewModel()
+        reloaded.configure(
+            llmService: reloadedService,
+            transcriptText: "Transcript",
+            transcriptionRepo: mockRepo,
+            conversationRepo: mockConversationRepo
+        )
+        reloaded.loadTranscript("Transcript", transcriptionId: transcriptionId)
+
+        reloadedService.streamTokens = ["Second"]
+        reloaded.regenerateLastResponse()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(reloaded.messages.map(\.content), ["Tell me more", "Second"])
+        XCTAssertEqual(reloadedService.lastChatQuestion, richPrompt)
+    }
+
+    func testRegenerateLastResponsePreservesEarlierTurnsInHistory() async throws {
+        let transcriptionId = UUID()
+        viewModel.loadTranscript("Transcript", transcriptionId: transcriptionId)
+
+        mockService.streamTokens = ["A1"]
+        viewModel.inputText = "Q1"
+        viewModel.sendMessage()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        mockService.streamTokens = ["A2"]
+        viewModel.inputText = "Q2"
+        viewModel.sendMessage()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(viewModel.messages.count, 4)
+
+        mockService.streamTokens = ["A2-prime"]
+        viewModel.regenerateLastResponse()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        // Q1/A1/Q2 retained; A2 replaced.
+        XCTAssertEqual(viewModel.messages.count, 4)
+        XCTAssertEqual(viewModel.messages.map(\.content), ["Q1", "A1", "Q2", "A2-prime"])
+
+        // History sent to the LLM excludes the trailing user turn (Q2 is the question).
+        XCTAssertEqual(mockService.lastChatQuestion, "Q2")
+        XCTAssertEqual(mockService.lastChatHistory?.count, 2)
+        XCTAssertEqual(mockService.lastChatHistory?[0].content, "Q1")
+        XCTAssertEqual(mockService.lastChatHistory?[1].content, "A1")
+    }
+
+    func testRegenerateLastResponseDoesNothingWhenStreaming() async throws {
+        let transcriptionId = UUID()
+        viewModel.loadTranscript("Transcript", transcriptionId: transcriptionId)
+
+        mockService.streamTokens = ["slow"]
+        mockService.streamDelayNs = 200_000_000
+        viewModel.inputText = "Q"
+        viewModel.sendMessage()
+
+        // While streaming, regenerate must be a no-op.
+        let countBefore = viewModel.messages.count
+        viewModel.regenerateLastResponse()
+        XCTAssertEqual(viewModel.messages.count, countBefore)
+        XCTAssertTrue(viewModel.isStreaming)
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+    }
+
+    func testRegenerateLastResponseDoesNothingOnEmptyThread() {
+        viewModel.regenerateLastResponse()
+        XCTAssertTrue(viewModel.messages.isEmpty)
+        XCTAssertFalse(viewModel.isStreaming)
+    }
+
+    func testRegenerateLastResponseDoesNothingAfterErrorTail() async throws {
+        let transcriptionId = UUID()
+        viewModel.loadTranscript("Transcript", transcriptionId: transcriptionId)
+
+        mockService.errorToThrow = LLMError.authenticationFailed(nil)
+        viewModel.inputText = "Will fail"
+        viewModel.sendMessage()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        // After error, only the user turn remains — regenerate has nothing to replace.
+        XCTAssertEqual(viewModel.messages.count, 1)
+        XCTAssertEqual(viewModel.messages[0].role, .user)
+
+        let chatCallsBefore = mockService.chatCallCount
+        viewModel.regenerateLastResponse()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(mockService.chatCallCount, chatCallsBefore, "Regenerate must not re-issue when tail isn't an assistant turn")
+        XCTAssertEqual(viewModel.messages.count, 1)
+    }
+}
+
+/// Tiny @unchecked-Sendable string box used by the closure-reevaluation test.
+/// XCTest setup runs on @MainActor; the closure may be called from the LLM
+/// service's task. A real lock would be overkill — this is a serialized
+/// MainActor + Task hand-off in tests.
+private final class LockedString: @unchecked Sendable {
+    private var value: String = ""
+    private let lock = NSLock()
+    func get() -> String {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+    func set(_ newValue: String) {
+        lock.lock(); defer { lock.unlock() }
+        value = newValue
+    }
 }
