@@ -213,7 +213,7 @@ struct MeetingRecordingTile: View {
         Button(action: triggerStart) {
             HStack(spacing: 6) {
                 BloomBudGlyph(progress: startBloom)
-                    .frame(width: 14, height: 14)
+                    .frame(width: 16, height: 16)
                 Text("Start")
                     .font(DesignSystem.Typography.caption.weight(.semibold))
             }
@@ -447,40 +447,56 @@ private struct SacredFlowerTile: View {
 
 // MARK: - Start glyph (bud → bloom on press)
 
-/// Leading glyph on the Start button. At rest (`progress` 0) it's a small
-/// filled coral bud; at full bloom (`progress` 1) six stroked petals fan
-/// out around the bud in a flower-of-life pattern, echoing the larger
-/// `SacredFlowerTile` glyph at miniature scale. The press handler drives
-/// `progress` 0 → 1 with a spring; the tile's state transition usually
-/// tears the button down before the bloom completes, which is the
-/// intended choreography (the cut blends into the idle → recording swap).
+/// Leading glyph on the Start button — a miniature flower-of-life
+/// rendered in the recording-red palette. Geometry mirrors the larger
+/// `SacredFlowerTile`: all seven circles are equal in diameter and the
+/// six outer petals' centers sit on the central circle's rim (the
+/// classic Vesica Piscis pattern that makes the rosette read as a
+/// flower).
+///
+/// At rest (`progress` 0) the petals are visible at low opacity and
+/// pulled inward, reading as a dim, closed flower waiting to open. On
+/// press the petals fan out to their full positions and brighten — the
+/// spring-driven transition is what makes the bud "bloom." The tile's
+/// `.idle → .recording` state transition usually tears the button down
+/// before bloom completes; the cut blends into the tile's content swap,
+/// which is the intended choreography.
 private struct BloomBudGlyph: View {
     var progress: Double
 
-    private let centerSize: CGFloat = 5
-    private let petalSize: CGFloat = 4
-    private let petalRadius: CGFloat = 3.2
+    private let frameSize: CGFloat = 16
+    private let circleSize: CGFloat = 6
+    private let bloomedOffset: CGFloat = 3 // half of circleSize → petals sit on central rim
+
+    // Idle holds a "closed" silhouette: petals pulled inward (60% spread)
+    // and faded (35% opacity). Bloom interpolates to 100% spread + 90%.
+    private var spread: CGFloat { 0.6 + 0.4 * CGFloat(progress) }
+    private var petalOpacity: Double { 0.35 + 0.55 * progress }
+    private var ringOpacity: Double { 0.55 + 0.35 * progress }
 
     var body: some View {
         ZStack {
             ForEach(0..<6, id: \.self) { index in
                 let angle = Double(index) * 60.0
                 let radians = angle * .pi / 180
-                let x = CGFloat(cos(radians)) * petalRadius * CGFloat(progress)
-                let y = CGFloat(sin(radians)) * petalRadius * CGFloat(progress)
+                let x = CGFloat(cos(radians)) * bloomedOffset * spread
+                let y = CGFloat(sin(radians)) * bloomedOffset * spread
 
                 Circle()
-                    .stroke(DesignSystem.Colors.recordingRed.opacity(0.85), lineWidth: 1.0)
-                    .frame(width: petalSize, height: petalSize)
+                    .stroke(DesignSystem.Colors.recordingRed.opacity(petalOpacity), lineWidth: 1.0)
+                    .frame(width: circleSize, height: circleSize)
                     .offset(x: x, y: y)
-                    .scaleEffect(CGFloat(progress))
-                    .opacity(progress)
             }
 
             Circle()
+                .stroke(DesignSystem.Colors.recordingRed.opacity(ringOpacity), lineWidth: 1.0)
+                .frame(width: circleSize, height: circleSize)
+
+            Circle()
                 .fill(DesignSystem.Colors.recordingRed)
-                .frame(width: centerSize, height: centerSize)
+                .frame(width: 2.5, height: 2.5)
         }
+        .frame(width: frameSize, height: frameSize)
     }
 }
 
