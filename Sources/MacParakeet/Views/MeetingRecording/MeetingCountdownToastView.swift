@@ -82,7 +82,7 @@ struct MeetingCountdownToastView: View {
                         Text(confirmLabel)
                             .frame(maxWidth: .infinity)
                     }
-                    .parakeetAction(.primary, prominent: true)
+                    .parakeetAction(.primaryProminent)
                     .controlSize(.small)
                     .keyboardShortcut(.return, modifiers: [])
                 }

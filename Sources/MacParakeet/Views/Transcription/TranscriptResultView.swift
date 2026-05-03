@@ -1091,7 +1091,7 @@ struct TranscriptResultView: View {
                 } label: {
                     Label("Save", systemImage: "checkmark")
                 }
-                .parakeetAction(.primary, prominent: true)
+                .parakeetAction(.primaryProminent)
                 .disabled(transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             } else {
                 Button {
@@ -1596,7 +1596,7 @@ struct TranscriptResultView: View {
                 } label: {
                     Label("Generate", systemImage: "sparkles")
                 }
-                .parakeetAction(.primary, prominent: true)
+                .parakeetAction(.primaryProminent)
                 .controlSize(.regular)
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!promptResultsViewModel.canGenerateManualPromptResult || transcriptText.isEmpty)
@@ -2582,7 +2582,7 @@ struct TranscriptResultView: View {
                 } label: {
                     Label("Export", systemImage: "arrow.down.doc")
                 }
-                .parakeetAction(.primary, prominent: true)
+                .parakeetAction(.primaryProminent)
                 .keyboardShortcut(.defaultAction)
             }
         }

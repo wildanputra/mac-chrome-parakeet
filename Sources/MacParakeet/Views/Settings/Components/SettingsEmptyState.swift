@@ -45,7 +45,7 @@ struct SettingsEmptyState: View {
 
             if let actionLabel, let action {
                 Button(actionLabel, action: action)
-                    .parakeetAction(.primary, prominent: true)
+                    .parakeetAction(.primaryProminent)
                     .padding(.top, 6)
             }
         }

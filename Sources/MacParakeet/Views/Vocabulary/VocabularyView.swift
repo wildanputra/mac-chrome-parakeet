@@ -429,7 +429,7 @@ struct VocabularyView: View {
                     action()
                 }
                 .font(DesignSystem.Typography.caption.weight(.semibold))
-                .parakeetAction(.primary)
+                .parakeetAction(.secondary)
             }
         }
         .padding(.horizontal, DesignSystem.Spacing.lg)

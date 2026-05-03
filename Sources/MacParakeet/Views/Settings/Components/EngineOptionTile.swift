@@ -250,7 +250,7 @@ struct EngineDownloadBanner: View {
         switch mode {
         case .download:
             Button("Download", action: action)
-                .parakeetAction(.primary, prominent: true)
+                .parakeetAction(.primaryProminent)
                 .controlSize(.regular)
                 .accessibilityLabel("Download \(title)")
         case .downloading:
@@ -264,7 +264,7 @@ struct EngineDownloadBanner: View {
             .accessibilityLabel("Downloading \(title)")
         case .retry:
             Button("Retry Download", action: action)
-                .parakeetAction(.destructive, prominent: true)
+                .parakeetAction(.primaryProminent)
                 .controlSize(.regular)
                 .accessibilityLabel("Retry downloading \(title)")
         }

@@ -168,7 +168,7 @@ struct AskPromptsSheet: View {
                     .font(DesignSystem.Typography.body.weight(.semibold))
                     .padding(.horizontal, DesignSystem.Spacing.sm)
             }
-            .parakeetAction(.primary, prominent: true)
+            .parakeetAction(.primaryProminent)
             .controlSize(.large)
             // Esc dismisses (Apple HIG default for sheets). `.cancelAction`
             // is Esc + Cmd-. on macOS — both reach the close intent.
@@ -504,7 +504,7 @@ private struct EditPromptSheet: View {
                     .parakeetAction(.secondary)
                     .keyboardShortcut(.cancelAction)
                 Button("Save") { commit() }
-                    .parakeetAction(.primary, prominent: true)
+                    .parakeetAction(.primaryProminent)
                     .keyboardShortcut(.defaultAction)
             }
             .padding(DesignSystem.Spacing.lg)
@@ -662,7 +662,7 @@ private struct CreatePromptSheet: View {
                         dismiss()
                     }
                 }
-                .parakeetAction(.primary, prominent: true)
+                .parakeetAction(.primaryProminent)
                 .keyboardShortcut(.defaultAction)
             }
             .padding(DesignSystem.Spacing.lg)

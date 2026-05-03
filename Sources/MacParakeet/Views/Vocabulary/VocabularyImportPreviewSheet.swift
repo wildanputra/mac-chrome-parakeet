@@ -291,7 +291,7 @@ struct VocabularyImportPreviewSheet: View {
                     }
                 }
             }
-            .parakeetAction(.primary, prominent: true)
+            .parakeetAction(.primaryProminent)
             .keyboardShortcut(.defaultAction)
             .disabled(preview.wordsTotal == 0 && preview.snippetsTotal == 0)
         }

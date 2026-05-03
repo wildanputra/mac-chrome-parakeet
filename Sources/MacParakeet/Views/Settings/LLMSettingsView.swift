@@ -155,7 +155,7 @@ struct LLMSettingsView: View {
                 Button("Save") {
                     viewModel.saveConfiguration()
                 }
-                .parakeetAction(.primary, prominent: true)
+                .parakeetAction(.primaryProminent)
                 .disabled(!viewModel.canSave)
 
                 if viewModel.isConfigured {

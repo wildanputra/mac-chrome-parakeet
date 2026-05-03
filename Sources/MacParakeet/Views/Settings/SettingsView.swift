@@ -355,7 +355,7 @@ struct SettingsView: View {
                             systemImage: viewModel.microphoneTestState == .testing ? "stop.fill" : "waveform"
                         )
                     }
-                    .parakeetAction(.primary, prominent: true)
+                    .parakeetAction(.primaryProminent)
                     .disabled(!viewModel.microphoneGranted && viewModel.microphoneTestState != .testing)
                 }
             }
@@ -1444,14 +1444,14 @@ struct SettingsView: View {
                             Button("Open Accessibility Settings") {
                                 openAccessibilitySettings()
                             }
-                            .parakeetAction(.primary, prominent: true)
+                            .parakeetAction(.primaryProminent)
                         }
 
                         if needsScreenRecordingAction {
                             Button("Enable meeting recording") {
                                 viewModel.requestScreenRecordingAccess()
                             }
-                            .parakeetAction(.primary, prominent: true)
+                            .parakeetAction(.primaryProminent)
 
                             Button("Open Screen Recording Settings") {
                                 viewModel.openScreenRecordingSystemSettings()
@@ -1534,7 +1534,7 @@ struct SettingsView: View {
                     Button("Check for Updates...") {
                         updater.checkForUpdates()
                     }
-                    .parakeetAction(.primary, prominent: true)
+                    .parakeetAction(.primaryProminent)
                     .disabled(!updater.canCheckForUpdates)
                 }
             }
@@ -1558,7 +1558,7 @@ struct SettingsView: View {
                 Button("Open Setup...") {
                     NotificationCenter.default.post(name: .macParakeetOpenOnboarding, object: nil)
                 }
-                .parakeetAction(.primary, prominent: true)
+                .parakeetAction(.primaryProminent)
             }
         }
     }
@@ -1714,7 +1714,7 @@ struct SettingsView: View {
         let label = isWorking ? "Working…" : action.label
         if action.isProminent {
             Button(label, action: action.run)
-                .parakeetAction(.primary, prominent: true)
+                .parakeetAction(.primaryProminent)
                 .controlSize(.small)
                 .disabled(isWorking)
         } else {

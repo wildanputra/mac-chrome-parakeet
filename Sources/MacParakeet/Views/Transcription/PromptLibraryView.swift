@@ -35,7 +35,7 @@ struct PromptLibraryView: View {
                         .font(DesignSystem.Typography.body.weight(.semibold))
                         .padding(.horizontal, DesignSystem.Spacing.sm)
                 }
-                .parakeetAction(.primary, prominent: true)
+                .parakeetAction(.primaryProminent)
                 .controlSize(.large)
                 // Esc dismisses (Apple HIG default for sheets).
                 .keyboardShortcut(.cancelAction)
@@ -452,7 +452,7 @@ struct PromptLibraryView: View {
                     }
                     .padding(.horizontal, DesignSystem.Spacing.sm)
                 }
-                .parakeetAction(.primary, prominent: true)
+                .parakeetAction(.primaryProminent)
                 .controlSize(.large)
                 .disabled(viewModel.newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.newContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -547,7 +547,7 @@ struct PromptLibraryView: View {
                 Button("Save Changes") {
                     viewModel.updatePrompt(prompt, name: editName, content: editContent)
                 }
-                .parakeetAction(.primary, prominent: true)
+                .parakeetAction(.primaryProminent)
                 .controlSize(.large)
                 // Cmd+Return (not bare Return) because the Instructions
                 // TextEditor below treats Return as a literal newline; bare

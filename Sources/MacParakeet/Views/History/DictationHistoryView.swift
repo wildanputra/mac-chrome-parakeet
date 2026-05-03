@@ -524,7 +524,18 @@ struct DictationCardRow: View {
 
         let nsText = text as NSString
         var searchRange = NSRange(location: 0, length: nsText.length)
-        let highlightColor = NSColor(DesignSystem.Colors.accent.opacity(0.2))
+        // Apply the alpha inside a dynamic provider so the highlight re-resolves
+        // on light/dark flip. Resolves `accent` under the supplied appearance,
+        // then attaches alpha — keeps `DesignSystem.Colors.accent` as the single
+        // source of truth without snapping to whatever appearance was current
+        // when the attributed string was built.
+        let highlightColor = NSColor(name: nil) { appearance in
+            var resolved = NSColor.clear
+            appearance.performAsCurrentDrawingAppearance {
+                resolved = NSColor(DesignSystem.Colors.accent)
+            }
+            return resolved.withAlphaComponent(0.2)
+        }
 
         while searchRange.length > 0 {
             let found = nsText.range(of: query, options: .caseInsensitive, range: searchRange)

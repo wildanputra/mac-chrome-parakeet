@@ -84,7 +84,6 @@ struct MainWindowView: View {
                     }
                 }
                 .listStyle(.sidebar)
-                .tint(DesignSystem.Colors.accent)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     DiscoverSidebarCard(
                         viewModel: discoverViewModel,

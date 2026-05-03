@@ -243,7 +243,7 @@ struct FeedbackView: View {
                 Button(viewModel.submissionState == .submitting ? "Sending..." : "Send Feedback") {
                     viewModel.submit()
                 }
-                .parakeetAction(.primary, prominent: true)
+                .parakeetAction(.primaryProminent)
                 .disabled(!viewModel.canSubmit)
                 .keyboardShortcut(.defaultAction)
             }

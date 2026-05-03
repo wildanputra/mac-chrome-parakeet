@@ -53,19 +53,22 @@ extension DesignSystem.Colors {
 
 // Sources/MacParakeet/Views/Components/ParakeetActionStyle.swift (new)
 enum ParakeetActionRole {
-    case primary       // brand coral; one per surface
-    case secondary     // neutral — system label color, .bordered
-    case destructive   // red — system destructive role
-    case subtle        // lower-weight neutral; .borderless or .plain
+    case primary               // brand coral, .bordered
+    case primaryProminent      // brand coral, .borderedProminent
+    case secondary             // neutral — system label color, .bordered
+    case destructive           // red — system destructive role
+    case destructiveProminent  // red, .borderedProminent
+    case subtle                // lower-weight neutral; .borderless or .plain
 }
 
 extension View {
     /// Apply a semantic action role. Replaces ad-hoc `.buttonStyle + .tint`.
-    func parakeetAction(_ role: ParakeetActionRole, prominent: Bool = false) -> some View
+    func parakeetAction(_ role: ParakeetActionRole) -> some View
 }
 ```
 
-`prominent: true` maps to `.borderedProminent`; default is `.bordered`.
+Prominence is encoded in the role so secondary/subtle controls cannot receive
+an ignored prominence flag.
 
 ### Tint cascade removed from
 
@@ -75,6 +78,7 @@ extension View {
 - `Sources/MacParakeet/Views/MeetingRecording/MeetingRecordingPanelController.swift`
 - `Sources/MacParakeet/Views/MeetingRecording/MeetingRecordingPillController.swift`
 - `Sources/MacParakeet/Views/Transcription/YouTubeInputPanelController.swift`
+- `Sources/MacParakeet/Views/MainWindowView.swift` sidebar list selection tint
 - Cross-window sheet patches: `TranscriptResultView` L219, `PromptLibraryView` L146/L238, `VocabularyView`, `VocabularyBackupSection`, `AskPromptsSheet` L138/L282/L533/L706
 
 ### Role mapping (representative; full sweep in PR)
@@ -93,7 +97,7 @@ extension View {
 | Button | Role |
 |--------|------|
 | Edit | `.secondary` |
-| Save (commit edit) | `.primary` (prominent) |
+| Save (commit edit) | `.primaryProminent` |
 | Cancel | `.secondary` |
 | Revert | `.secondary` |
 

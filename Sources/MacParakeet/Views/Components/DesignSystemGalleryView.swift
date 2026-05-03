@@ -33,25 +33,25 @@ struct DesignSystemGalleryView: View {
     @ViewBuilder
     private var buttonRoles: some View {
         VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
-            roleRow(label: "primary",          prominent: false, role: .primary)
-            roleRow(label: "primary prominent", prominent: true,  role: .primary)
-            roleRow(label: "secondary",        prominent: false, role: .secondary)
-            roleRow(label: "destructive",      prominent: false, role: .destructive)
-            roleRow(label: "destructive prominent", prominent: true, role: .destructive)
-            roleRow(label: "subtle",           prominent: false, role: .subtle)
+            roleRow(label: "primary", role: .primary)
+            roleRow(label: "primary prominent", role: .primaryProminent)
+            roleRow(label: "secondary", role: .secondary)
+            roleRow(label: "destructive", role: .destructive)
+            roleRow(label: "destructive prominent", role: .destructiveProminent)
+            roleRow(label: "subtle", role: .subtle)
         }
     }
 
-    private func roleRow(label: String, prominent: Bool, role: ParakeetActionRole) -> some View {
+    private func roleRow(label: String, role: ParakeetActionRole) -> some View {
         HStack(spacing: DesignSystem.Spacing.lg) {
             Text(label)
                 .font(DesignSystem.Typography.caption.monospaced())
                 .foregroundStyle(DesignSystem.Colors.textSecondary)
                 .frame(width: 200, alignment: .leading)
             Button("Action") { }
-                .parakeetAction(role, prominent: prominent)
+                .parakeetAction(role)
             Button("Disabled") { }
-                .parakeetAction(role, prominent: prominent)
+                .parakeetAction(role)
                 .disabled(true)
             Spacer()
         }

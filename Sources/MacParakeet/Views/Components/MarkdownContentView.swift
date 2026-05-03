@@ -183,11 +183,23 @@ struct MarkdownContentView: NSViewRepresentable {
                 codeStyle.lineSpacing = 2
                 codeStyle.paragraphSpacing = 10
 
+                // Apply the alpha inside a dynamic NSColor provider so the result
+                // re-resolves on light/dark flip. We resolve `surfaceElevated` under
+                // the supplied appearance, then attach the alpha — this keeps the
+                // single source of truth (`DesignSystem.Colors.surfaceElevated`)
+                // without snapping to the appearance that was current at first draw.
+                let codeBackground = NSColor(name: nil) { appearance in
+                    var resolved = NSColor.clear
+                    appearance.performAsCurrentDrawingAppearance {
+                        resolved = NSColor(DesignSystem.Colors.surfaceElevated)
+                    }
+                    return resolved.withAlphaComponent(0.7)
+                }
                 let codeStr = NSMutableAttributedString(string: code, attributes: [
                     .font: codeFont,
                     .foregroundColor: textColor,
                     .paragraphStyle: codeStyle,
-                    .backgroundColor: NSColor(DesignSystem.Colors.surfaceElevated.opacity(0.7))
+                    .backgroundColor: codeBackground
                 ])
                 result.append(codeStr)
                 result.append(NSAttributedString(string: "\n"))

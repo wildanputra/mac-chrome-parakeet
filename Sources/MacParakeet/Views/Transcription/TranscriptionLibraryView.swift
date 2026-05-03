@@ -32,7 +32,7 @@ struct TranscriptionLibraryView: View {
 
                 if let primaryActionTitle, let onPrimaryAction {
                     Button(primaryActionTitle, action: onPrimaryAction)
-                        .parakeetAction(.primary, prominent: true)
+                        .parakeetAction(.primaryProminent)
                 }
             }
             .padding(.horizontal, DesignSystem.Spacing.lg)
