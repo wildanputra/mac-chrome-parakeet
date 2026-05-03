@@ -35,7 +35,7 @@ MacParakeet uses **SQLite via GRDB** for all persistent storage. Single database
 └──────────────────┘
 
 ┌──────────────────┐
-│  quick_prompts   │   v0.6 — Live Ask tab shortcut pills
+│  quick_prompts   │   v0.10 migration — v0.6 Live Ask shortcut pills
 └──────────────────┘
 ```
 
@@ -61,12 +61,14 @@ CREATE TABLE dictations (
     processingMode TEXT NOT NULL DEFAULT 'raw',        -- 'raw' (v0.1) or 'clean' (v0.2 default)
     status TEXT NOT NULL DEFAULT 'completed',          -- 'recording', 'processing', 'completed', 'error'
     errorMessage TEXT,                                -- Error details if status='error'
+    updatedAt TEXT NOT NULL,                          -- ISO 8601 timestamp
     hidden INTEGER NOT NULL DEFAULT 0,                -- v0.5: Private dictation mode (excluded from history)
     wordCount INTEGER NOT NULL DEFAULT 0,             -- v0.5: Cached word count for voice stats
-    updatedAt TEXT NOT NULL                           -- ISO 8601 timestamp
+    engine TEXT,                                      -- v0.8: STT engine (`parakeet` / `whisper`)
+    engineVariant TEXT                                -- v0.8: Engine-specific model variant
 );
 
-CREATE INDEX idx_dictations_created_at ON dictations(createdAt DESC);
+CREATE INDEX idx_dictations_created_at ON dictations(createdAt);
 
 -- Note: FTS5 virtual table + sync triggers were created in v0.1 but dropped in v0.5
 -- (never queried — search uses LIKE). Kept in migration history but not in active schema.
@@ -76,6 +78,7 @@ CREATE INDEX idx_dictations_created_at ON dictations(createdAt DESC);
 - `audioPath` is nullable because audio retention is configurable (Settings > Storage).
 - `pastedToApp` captures the frontmost app's bundle ID at paste time (e.g., `com.apple.TextEdit`). Useful for history context.
 - `processingMode` records which mode was active when the dictation was captured.
+- `engine` / `engineVariant` record the STT engine attribution for rows created after the v0.8 migration. Legacy rows keep `NULL` rather than being silently relabeled.
 - ~~FTS5 was created in v0.1 but dropped in v0.5~~ — search uses `LIKE` queries instead. The FTS5 table and its 3 sync triggers added write overhead on every INSERT/UPDATE/DELETE without being queried.
 
 ---
@@ -112,10 +115,14 @@ CREATE TABLE transcriptions (
     recoveredFromCrash INTEGER NOT NULL DEFAULT 0,       -- v0.7.5: recovered interrupted meeting flag
     isTranscriptEdited INTEGER NOT NULL DEFAULT 0,       -- v0.7.7: user-edited transcript flag
     userNotes TEXT,                                      -- v0.8: meeting notes used to steer prompt results
-    updatedAt TEXT NOT NULL                             -- ISO 8601 timestamp
+    engine TEXT,                                         -- v0.8: STT engine (`parakeet` / `whisper`)
+    engineVariant TEXT,                                  -- v0.8: Engine-specific model variant
+    derivedTitle TEXT,                                   -- v0.9: Display title derived from transcript content
+    derivedSnippet TEXT,                                 -- v0.9: Display preview snippet derived from transcript content
+    updatedAt TEXT NOT NULL                              -- ISO 8601 timestamp
 );
 
-CREATE INDEX idx_transcriptions_created_at ON transcriptions(createdAt DESC);
+CREATE INDEX idx_transcriptions_created_at ON transcriptions(createdAt);
 ```
 
 **Notes:**
@@ -131,6 +138,8 @@ CREATE INDEX idx_transcriptions_created_at ON transcriptions(createdAt DESC);
 - `recoveredFromCrash` marks meeting recordings recovered from an interrupted session. Added in v0.7.5.
 - `isTranscriptEdited` marks transcript text changed by the user after automatic processing. Added in v0.7.7.
 - `userNotes` stores free-form meeting notes typed during recording; prompt generation snapshots this value on `summaries.userNotesSnapshot`. Added in v0.8.
+- `engine` / `engineVariant` record the STT engine attribution for Parakeet and optional WhisperKit paths. Added in v0.8; legacy rows keep `NULL`.
+- `derivedTitle` / `derivedSnippet` cache display copy derived from the completed transcript. Added in v0.9 so Library cards do not need to recompute preview text on every render.
 - The legacy `summary` column was migrated into `summaries` in v0.7 and dropped in v0.7.6.
 - No FTS on transcriptions in v0.1. Search by filename or scroll the list. Revisit if the list grows large.
 
@@ -278,7 +287,7 @@ CREATE INDEX idx_summaries_transcription_id ON summaries(transcriptionId);
 
 ---
 
-### `quick_prompts` (v0.6)
+### `quick_prompts` (v0.10 migration; v0.6 product feature)
 
 Stores user-customizable live meeting Ask tab shortcut pills. These are separate from `prompts`: prompt library rows generate persistent transcript results, while quick prompts are lightweight chat shortcuts with a visible chip label and a richer LLM instruction body.
 
@@ -359,6 +368,8 @@ struct Dictation: Codable, Identifiable {
     var wordCount: Int                      // v0.5 — Cached word count for voice stats dashboard
     var errorMessage: String?
     var updatedAt: Date
+    var engine: String?                     // v0.8 — STT engine (`parakeet` / `whisper`)
+    var engineVariant: String?              // v0.8 — Engine-specific model variant
 
     enum ProcessingMode: String, Codable {
         case raw
@@ -379,7 +390,7 @@ extension Dictation: FetchableRecord, PersistableRecord {
     enum Columns: String, ColumnExpression {
         case id, createdAt, durationMs, rawTranscript, cleanTranscript
         case audioPath, pastedToApp, processingMode, status, errorMessage
-        case hidden, wordCount, updatedAt
+        case hidden, wordCount, updatedAt, engine, engineVariant
     }
 }
 ```
@@ -417,6 +428,10 @@ struct Transcription: Codable, Identifiable {
     var recoveredFromCrash: Bool        // v0.7.5 — Recovered interrupted meeting
     var isTranscriptEdited: Bool        // v0.7.7 — User edited transcript text
     var userNotes: String?              // v0.8 — Free-form meeting notes
+    var engine: String?                 // v0.8 — STT engine (`parakeet` / `whisper`)
+    var engineVariant: String?          // v0.8 — Engine-specific model variant
+    var derivedTitle: String?           // v0.9 — Display title derived from transcript text
+    var derivedSnippet: String?         // v0.9 — Display preview snippet derived from transcript text
     var updatedAt: Date
 
     struct WordTimestamp: Codable {
@@ -803,7 +818,9 @@ migrator.registerMigration("v0.7-prompts-and-summaries") { db in
 // v0.7.6 — drop legacy transcriptions.summary
 // v0.7.7 — transcriptions.isTranscriptEdited
 // v0.8 — transcriptions.userNotes and summaries.userNotesSnapshot
-// v0.6 — quick_prompts
+// v0.8 — dictations.engine/engineVariant and transcriptions.engine/engineVariant
+// v0.9 — transcriptions.derivedTitle and transcriptions.derivedSnippet
+// v0.10 — quick_prompts (v0.6 Live Ask product surface)
 ```
 
 ### Migration Rules
@@ -844,7 +861,13 @@ migrator.registerMigration("v0.7-prompts-and-summaries") { db in
 | `transcriptions.isTranscriptEdited` | v0.7.7 | User-edited transcript marker |
 | `transcriptions.userNotes` | v0.8 | Free-form notes captured during meeting recording |
 | `summaries.userNotesSnapshot` | v0.8 | Snapshot of notes used for prompt generation |
-| `quick_prompts` | v0.6 | User-customizable live Ask tab shortcut pills |
+| `dictations.engine` | v0.8 | STT engine that produced the dictation; `NULL` for legacy rows |
+| `dictations.engineVariant` | v0.8 | Engine-specific variant id; `NULL` for engines without variants and legacy rows |
+| `transcriptions.engine` | v0.8 | STT engine that produced the transcription; `NULL` for legacy rows |
+| `transcriptions.engineVariant` | v0.8 | Engine-specific variant id; `NULL` for engines without variants and legacy rows |
+| `transcriptions.derivedTitle` | v0.9 | Cached display title derived from transcript content |
+| `transcriptions.derivedSnippet` | v0.9 | Cached display preview snippet derived from transcript content |
+| `quick_prompts` | v0.10 | User-customizable live Ask tab shortcut pills; v0.6 product feature |
 
 ### Tables NOT Planned (YAGNI)
 

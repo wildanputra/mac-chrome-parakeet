@@ -1,7 +1,7 @@
 # Plan: CLI prompts subsystem + structured output
 
-> Status: **ACTIVE**
-> Branch: `feat/cli-prompts-and-json`
+> Status: **COMPLETED** — shipped in PR #138; moved from `plans/active` on 2026-05-03 during docs/spec alignment.
+> Original branch: `feat/cli-prompts-and-json`
 > Owner: agent (Claude)
 > Related: `MEMORY.md` decision *"CLI stays as internal dev tool"*
 

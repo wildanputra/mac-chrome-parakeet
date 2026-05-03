@@ -1,6 +1,6 @@
 # ADR-017: Calendar-Driven Meeting Auto-Start
 
-> Status: **IMPLEMENTED** — Phases 1 (notify-only) and 2 (auto-start + countdown + auto-stop) shipped 2026-04-25. Phase 3 (late-join, retro-link, generic URL extraction) remains **PROPOSED** (see Phased Rollout below).
+> Status: **IMPLEMENTED BUT HIDDEN** — Phases 1 (notify-only) and 2 (auto-start + countdown + auto-stop) are implemented in source. They are not part of the v0.6 shipping surface: `AppFeatures.calendarEnabled = false` hides onboarding, Settings, search, notifications, countdowns, and coordinator polling pending hands-on end-to-end validation. Phase 3 (late-join, retro-link, generic URL extraction) remains **PROPOSED** (see Phased Rollout below).
 > Date: 2026-04-19
 > Related: ADR-002 (local-first), ADR-005 (onboarding), ADR-009 (custom hotkeys), ADR-014 (meeting recording), ADR-015 (concurrent dictation/meeting)
 
@@ -74,9 +74,9 @@ A single `Timer` in the coordinator fires every 60 seconds during idle periods. 
 
 Also: subscribe to `.EKEventStoreChanged` so a calendar edit (e.g., meeting moved earlier) triggers an immediate re-evaluation without waiting for the next tick.
 
-### 8. Dedicated settings pane — not hidden in the meeting card
+### 8. Settings surface — folded into Meeting Recording card
 
-A new "Calendar" section appears in Settings, beneath the existing Meetings section:
+The implemented Settings surface is folded into the Meeting Recording card rather than a standalone Settings card. When `AppFeatures.calendarEnabled` is `true`, the Meeting Recording card includes:
 
 - Mode picker (`Off` / `Notify` / `Auto-start`)
 - Reminder lead time (`Off` / `1 min` / `5 min` / `10 min`)
@@ -84,6 +84,8 @@ A new "Calendar" section appears in Settings, beneath the existing Meetings sect
 - Auto-stop toggle (only shown when mode is `autoStart`)
 - Per-calendar include list (checkboxes over the user's visible calendars)
 - A "Grant Calendar access" button if permission is `.notDetermined` or `.denied`
+
+In v0.6 this subsection remains hidden because `AppFeatures.calendarEnabled` is `false`.
 
 ### 9. Onboarding: optional, skippable, post-permissions
 

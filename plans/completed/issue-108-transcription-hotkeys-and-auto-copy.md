@@ -1,5 +1,7 @@
 # Issue #108 — Transcription hotkeys (file + YouTube)
 
+> Status: **COMPLETED** — file and YouTube transcription hotkeys are implemented; auto-copy stayed explicitly out of scope. Moved from `plans/active` on 2026-05-03.
+
 Source: https://github.com/moona3k/macparakeet/issues/108
 
 ## Scope

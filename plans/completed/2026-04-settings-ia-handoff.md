@@ -1,5 +1,7 @@
 # Settings IA Overhaul — Agent Handoff
 
+> **Status:** Archived/superseded. This handoff described the pre-merge `feat/settings-ia` pickup state. Current `main` already has the tabbed Settings shell, search index, and root view model. Remaining Settings IA work, if any, belongs in `plans/active/2026-04-settings-ia-overhaul.md`.
+
 > **For:** the next Claude Code agent picking up this work.
 > **From:** the 2026-04-27 IA design session with Daniel; updated 2026-04-28 after the picker merged, the engine-attribution polish merged, the single-PR strategy was settled, and five design decisions were locked in.
 > **Mission:** Execute the Settings IA Overhaul per `2026-04-settings-ia-overhaul.md`. **One branch, one PR, ordered commits.** Read this brief before doing anything else.

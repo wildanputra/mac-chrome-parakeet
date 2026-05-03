@@ -1,9 +1,9 @@
 # Live Ask product telemetry
 
-**Status:** Planned · blocked on PR #164
+**Status:** Active · unblocked
 **Date:** 2026-04-26
 **ADRs:** ADR-012 (telemetry system), ADR-018 (live Ask tab)
-**Blocked by:** PR #164 (`Correlate operation telemetry`) — adds `ObservabilityOperationContext` and reshapes `TelemetryEvent`. Wait for merge to avoid conflict + rework.
+**Unblocked by:** Operation context plumbing is now present as `ObservabilityOperationContext`. The remaining work is to add the Ask-specific telemetry events and call sites.
 
 ## Why
 

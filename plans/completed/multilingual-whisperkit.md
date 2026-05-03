@@ -1,9 +1,9 @@
 # Plan: MacParakeet multilingual support via WhisperKit
 
-> Status: **ACTIVE**
+> Status: **COMPLETED** — optional WhisperKit STT ships with the v0.6 release scope; moved from `plans/active` on 2026-05-03.
 > Author: Daniel + agent (Claude)
 > Date: 2026-04-27 (expanded from CLI-only to full multilingual: CLI + dictation + meeting recording, single PR)
-> Targets: CLI 1.3.0, MacParakeet v0.7.0
+> Original targets: CLI 1.3.0, MacParakeet v0.7.0. Final release alignment: MacParakeet v0.6.
 
 ---
 

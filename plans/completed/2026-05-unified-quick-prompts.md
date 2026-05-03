@@ -1,8 +1,8 @@
 # Unified Quick Prompts - pin-to-strip mechanic
 
-> Status: **ACTIVE** - 2026-05-03
-> Ship target: **app v0.7.x** (post-v0.7.0)
-> Branch: `feat/unified-quick-prompts`
+> Status: **COMPLETED** - shipped in the v0.6 release scope; moved from `plans/active` on 2026-05-03
+> Original ship target: **app v0.7.x** (post-v0.7.0); final alignment: v0.6
+> Original branch: `feat/unified-quick-prompts`
 > Related: ADR-018 (live meeting Ask), ADR-013 (prompt library pattern), `plans/active/cli-as-canonical-parakeet-surface.md`
 
 ## Current Shape

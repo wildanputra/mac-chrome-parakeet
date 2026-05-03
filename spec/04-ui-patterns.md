@@ -12,8 +12,8 @@ MacParakeet has these primary UI surfaces:
 5. **Meeting Recording Pill** -- Persistent floating pill during meeting recording (sacred geometry icon); shares state with the Transcribe tile
 6. **Meeting Recording Panel** -- Floating Notes / Transcript / Ask panel with audio levels and stop controls
 7. **Menu Bar** -- Quick access and status
-8. **Countdown Toasts** -- Calendar auto-start/auto-stop affordances
-9. **Settings** -- Preferences, permissions, local speech models, calendar, and update controls
+8. **Calendar Countdown Toasts** -- Implemented but hidden from v0.6 by `AppFeatures.calendarEnabled = false`
+9. **Settings** -- Preferences, permissions, local speech models, and update controls; calendar controls are hidden in v0.6
 
 Design philosophy: **Simple, native, stays out of the way.** No chrome, no clutter. The app should feel like part of macOS, not a web app in a wrapper.
 
@@ -63,8 +63,8 @@ Minimum window width: 800pt.
 
 The sidebar uses NavigationSplitView with flat items (icon + label):
 
-- **Transcribe** (`waveform`) -- Capture hub: YouTube card + file drop card + Meeting Recording tile (Labs-gated)
-- **Library** (`square.grid.2x2`) -- All transcriptions; filter chips switch between thumbnail grid (All/YouTube/Local/Favorites) and date-grouped list (Meetings, Labs-badged)
+- **Transcribe** (`waveform`) -- Capture hub: YouTube card + file drop card + Meeting Recording tile
+- **Library** (`square.grid.2x2`) -- All transcriptions; filter chips switch between thumbnail grid (All/YouTube/Local/Favorites) and date-grouped list (Meetings)
 - **Dictations** (`clock.arrow.circlepath`) -- Flat history list with bottom bar player
 - **Vocabulary** (`book.fill`) -- Processing mode, pipeline guide, custom words & snippets management
 - **Feedback** (`bubble.left.and.text.bubble.right`) -- Bug reports, feature requests, community link
@@ -110,7 +110,7 @@ Tapping the tile in idle/recording states, or pressing Stop while recording, cal
 
 ### Library Meetings Filter
 
-When `Library.filter == .meeting`, the view renders a date-grouped list (`Today` / `Yesterday` / `Previous 7 Days` / `Previous 30 Days` / `{Month Year}`) using `MeetingDateGroupHeader` + `MeetingRowCard` instead of the thumbnail grid the other filters use. The Meetings filter chip carries the Labs badge.
+When `Library.filter == .meeting`, the view renders a date-grouped list (`Today` / `Yesterday` / `Previous 7 Days` / `Previous 30 Days` / `{Month Year}`) using `MeetingDateGroupHeader` + `MeetingRowCard` instead of the thumbnail grid the other filters use.
 
 ---
 
@@ -684,9 +684,16 @@ Row anatomy:
 
 ---
 
-## Settings (v0.1 + v0.2)
+## Settings (v0.6)
 
-Settings open in the content area when "Settings" is selected in the sidebar. Tab-based layout using a segmented picker or vertical tab list.
+Settings open in the content area when "Settings" is selected in the sidebar. The current information architecture is a four-tab shell with a persistent header, search field, and status-aware tab badges:
+
+- **Modes** — Audio Input, Dictation, Transcription, and Meeting Recording cards. Calendar controls are folded into Meeting Recording but hidden in v0.6 while `AppFeatures.calendarEnabled = false`.
+- **Engine** — Speech engine selector, Whisper language picker, and local model status/management.
+- **AI** — Optional provider setup for summaries, transcript chat, prompt actions, and live Ask.
+- **System** — Startup, permissions, storage, updates, privacy/telemetry, onboarding reset, about, and fenced Reset & Cleanup actions.
+
+`SettingsRootViewModel` owns active-tab persistence and search state. `SettingsSearchIndex` provides cross-tab search results and hides calendar entries while the calendar feature flag is off. The legacy card sketches below are retained only as historical content references; their grouping is not the current v0.6 IA.
 
 ### General (v0.1)
 
@@ -851,7 +858,7 @@ Note: How It Works, Tips, Custom Words, and Text Snippets sections are only visi
 └───────────────────────────────────────────────────────────┘
 ```
 
-### Speech Recognition (v0.7)
+### Speech Recognition (v0.6)
 
 ```text
 ┌───────────────────────────────────────────────────────────┐

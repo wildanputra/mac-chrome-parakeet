@@ -1,6 +1,6 @@
 # Plan: `--json` output mode for CLI LLM commands
 
-> Status: **IMPLEMENTED for non-streaming JSON in PR #149** — NDJSON streaming deferred
+> Status: **COMPLETED** — non-streaming JSON shipped in PR #149; NDJSON streaming is deferred and not tracked as active work here. Moved from `plans/active` on 2026-05-03.
 > Author: agent (Claude) + Daniel
 > Date: 2026-04-26
 > Related: PR #138 (CLI prompts + JSON sweep, merged), PR #144 (CLI 1.0 + AGENTS.md, merged), PR #147 (1.0.1 transcribe stderr fix, merged), PR #148 (post-1.0 bug cleanup, in review)

@@ -1,6 +1,6 @@
 # Plan: MacParakeet CLI as the canonical Parakeet-on-Apple-Silicon surface
 
-> Status: **ACTIVE** — strategic plan, post-PR-#138, pre-v0.6.0
+> Status: **ACTIVE** — strategic rollout plan. CLI 1.0/AGENTS/integrations work has shipped; remaining work is distribution/website/community rollout around the v0.6 release.
 > Author: agent (Claude) + Daniel
 > Date: 2026-04-25
 > Related: PR #138 (CLI prompts + JSON sweep, merged), PR #141 (gitignore journal/, merged), PR #144 (CLI 1.0 + AGENTS.md + integrations/, merged), PR #145 (rollout artifacts + registry drafts)
@@ -282,5 +282,5 @@ If all stay flat → the thesis didn't validate; cost was small (3-4 days), no r
 - PR #138: CLI prompts subcommand + structured JSON output (merged 2026-04-25)
 - PR #140: Retire legacy `Transcription.summary` mirror (merged 2026-04-25)
 - PR #141: Gitignore `journal/` directory (merged 2026-04-25)
-- `plans/active/cli-prompts-and-json-output.md` — the immediate predecessor plan
+- `plans/completed/cli-prompts-and-json-output.md` — the immediate predecessor plan
 - ADR-013: Prompt Library + Multi-Summary Architecture

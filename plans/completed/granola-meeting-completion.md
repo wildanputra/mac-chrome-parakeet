@@ -1,6 +1,6 @@
 # Granola-style Meeting Recording Completion
 
-**Status:** Active (Ask half shipped 2026-04-24; Calendar half remaining)
+**Status:** Completed for the v0.6 shipping surface. Live Ask, meeting recording, notepad, recovery, and prompt handoff are shipped; calendar implementation exists but is hidden behind `AppFeatures.calendarEnabled = false` and is not a v0.6 release blocker. Moved from `plans/active` on 2026-05-03.
 **Date:** 2026-04-19 · Updated 2026-04-24
 **ADRs:** ADR-017 (calendar auto-start), ADR-018 (live Ask tab — Insights dropped per amendment)
 **Blocks:** GitHub #57 "meeting recording v0.6" final closeout

@@ -222,16 +222,16 @@ REQ-MEET-010:
   version: v0.6
   status: implemented
 
-# --- v0.7 Multilingual Speech Recognition ---
+# --- v0.6 Multilingual Speech Recognition ---
 
 REQ-STT-002:
   description: WhisperKit is available as a second speech recognition engine while Parakeet remains the default
-  version: v0.7
+  version: v0.6
   status: implemented
 
 REQ-STT-003:
   description: GUI speech recognition settings persist the selected engine and Whisper default language, and refuse unsafe switches while speech work or a meeting session is active
-  version: v0.7
+  version: v0.6
   status: implemented
 
 REQ-TRANS-002:
@@ -241,7 +241,7 @@ REQ-TRANS-002:
 
 REQ-MEET-007:
   description: Meeting recordings capture the active speech engine and Whisper language at recording start for live preview, metadata, crash recovery, and final transcription
-  version: v0.7
+  version: v0.6
   status: implemented
 
 # --- CLI Public Surface ---

@@ -70,7 +70,7 @@ All ADRs live in `spec/adr/`. These are locked -- they record decisions already 
 | [ADR-014](adr/014-meeting-recording.md) | Meeting recording via ScreenCaptureKit system audio |
 | [ADR-015](adr/015-concurrent-dictation-meeting.md) | Concurrent dictation and meeting recording |
 | [ADR-016](adr/016-centralized-stt-runtime-scheduler.md) | Centralized STT runtime and two-slot scheduler |
-| [ADR-017](adr/017-calendar-meeting-auto-start.md) | Calendar-driven meeting auto-start (Phases 1 + 2 implemented; Phase 3 proposed) |
+| [ADR-017](adr/017-calendar-meeting-auto-start.md) | Calendar-driven meeting auto-start (Phases 1 + 2 implemented in source but hidden from v0.6; Phase 3 proposed) |
 | [ADR-018](adr/018-live-meeting-insights-and-ask.md) | Live meeting Ask tab (Insights dropped per amendment; Ask shipped 2026-04-24) |
 | [ADR-019](adr/019-crash-resilient-meeting-recording.md) | Crash-resilient meeting recording via fragmented MP4 + session lock files (implemented 2026-04-25) |
 | [ADR-020](adr/020-live-meeting-notepad-and-memo-summaries.md) | Live meeting notepad + memo-steered summaries (implemented 2026-04-25) |
@@ -85,8 +85,8 @@ All ADRs live in `spec/adr/`. These are locked -- they record decisions already 
 | v0.3 | YouTube & Export | YouTube transcription, export formats | **Implemented** |
 | v0.4 | Polish & Launch | Diarization, custom hotkey, non-blocking progress, direct distribution | **Implemented** |
 | v0.5 | Data, UI & Prompts | Private dictation, favorites, video player, split-pane detail, library grid, prompt library, multi-summary | **Implemented** |
-| v0.6 | Meeting Recording | System audio + mic capture, concurrent with dictation, local transcription, library integration | **Implemented on main; unreleased** |
-| v0.7 | Multilingual STT | Optional WhisperKit engine, language picker, CLI engine selection, meeting engine pinning | **Implemented on main; unreleased** |
+| v0.6 | Meeting Recording + Multilingual STT | System audio + mic capture, concurrent with dictation, local transcription, library integration, optional WhisperKit engine | **Release scope** |
+| v0.7 | Post-v0.6 polish | Follow-up scope TBD after v0.6 ships; calendar remains hidden until explicitly enabled | **Planned** |
 
 ## Version Progress
 
@@ -180,7 +180,7 @@ Dictation + transcription + history + settings. Get audio in, text out, pasted i
 - [x] Migration from `transcriptions.summary` → `summaries`
 - [x] Auto-run uses selected prompt cards; zero auto-run cards is supported
 
-### v0.6 Meeting Recording (Implemented on main; unreleased)
+### v0.6 Meeting Recording + Multilingual STT (Release scope)
 
 - [x] System audio capture via ScreenCaptureKit audio (macOS 14.2+)
 - [x] Mic + system audio dual-stream recording (`MeetingAudioCaptureService`)
@@ -188,10 +188,10 @@ Dictation + transcription + history + settings. Get audio in, text out, pasted i
 - [x] `MeetingRecordingFlowStateMachine` + coordinator (separate from dictation)
 - [x] Recording pill UI (floating NSPanel with timer + stop button)
 - [x] `sourceType` column on `transcriptions` table (file/youtube/meeting)
-- [x] "Meetings" sidebar item + "Record Meeting" in menu bar
+- [x] Meeting Recording tile on Transcribe + "Record Meeting" in menu bar
 - [x] Library filter for meeting transcriptions
 - [x] Screen Recording permission handling (required, no mic-only fallback)
-- [x] Batch transcription after recording stops (Parakeet STT)
+- [x] Batch transcription after recording stops (local STT using the pinned engine)
 - [x] Meeting recordings get prompt library, multi-summary, chat, and export automatically
 - [x] Live transcript preview via AudioChunker (chunked transcription during recording)
 - [x] Joined mic/system frame pairing with VPIO-preferred meeting mic capture
@@ -207,21 +207,24 @@ Dictation + transcription + history + settings. Get audio in, text out, pasted i
 - [x] Live panel tabs: Transcript / Ask (ADR-018; Insights dropped per amendment 2026-04-24)
 - [x] Live Ask chat with thinking-partner quick prompts + pinned after-response pills + persist-on-finalize handoff
 - [x] Customizable Ask quick prompts: GRDB-backed unified prompt library with pinning, Ask Prompts sheet, and `macparakeet-cli quick-prompts` import/export
-- [x] Calendar-driven reminders (ADR-017 Phase 1): EventKit integration + onboarding + settings + per-calendar include list
-- [x] Pre-meeting macOS notifications at configurable lead time (off / 1 / 5 / 10 min)
-- [x] Auto-start countdown toast (ADR-017 Phase 2): 5s cancellable, top-center, non-activating
-- [x] Auto-stop toast at calendar event end (ADR-017 Phase 2): 30s, "Keep Recording" cancels
-- [x] Calendar event title applied to auto-started recordings (instead of date-based default)
 - [x] Crash-resilient meeting recovery (ADR-019): session lock files, launch/settings recovery affordance, recovered badge
 - [x] Fragmented MP4 meeting writer (ADR-019): 1s fragments, playable source audio after kill-9 up to the last fragment
 - [x] Live meeting notepad (ADR-020): Notes/Transcript/Ask three-tab layout with Notes default (⌘1/⌘2/⌘3), debounced auto-save through `MeetingRecordingService.updateNotes`, lock-file extension carries notes through crash recovery, soft-cap warning at 7,500 words
 - [x] Memo-steered summary infrastructure (ADR-020): `{{userNotes}}` + `{{transcript}}` template variables via `PromptTemplateRenderer` (single-pass, simultaneous), `userNotesSnapshot` captured on the `PromptResult` row at generation time. *Note: the "Memo-Steered Notes" built-in prompt that exercised this path was reverted on 2026-05-02 (see ADR-020 amendment) — the template variables remain available for custom prompts.*
 - [x] Slash commands in Notes pane (ADR-020): `/action`, `/decision`, `/now` with in-view ZStack overlay (NSPanel-safe — never SwiftUI `.popover`), arrow-key + Return + Esc nav via `.onKeyPress`
 - [x] Plain-noun tab strip with one ambient indicator (ADR-020 §1, amended 2026-05-02): `Notes`, `Transcript`, `Ask` plus a breathing dot on Ask while `chatViewModel.isStreaming`; `ViewThatFits` collapses the dot into the tooltip at the 360px floor
-- [x] Rich pre-meeting countdown toast for calendar starts (ADR-020): attendees + service icon row + steering hint pointing the user at the Notes tab. Manual-trigger toasts unchanged
 - [x] STT failure copy refinement (ADR-020): "Recording Error" → "Meeting interrupted" + Library-recovery hint wrapper around the technical detail
 
-### v0.7 Multilingual STT (Implemented on main; unreleased)
+Calendar-related code is present but **not shipped in v0.6**. `AppFeatures.calendarEnabled = false` hides the onboarding step, Settings subsection, search entry, reminder notifications, auto-start countdown, auto-stop countdown, and coordinator polling until the flow has hands-on end-to-end validation:
+
+- [x] Calendar-driven reminders (ADR-017 Phase 1): EventKit integration + onboarding + settings + per-calendar include list
+- [x] Pre-meeting macOS notifications at configurable lead time (off / 1 / 5 / 10 min)
+- [x] Auto-start countdown toast (ADR-017 Phase 2): 5s cancellable, top-center, non-activating
+- [x] Auto-stop toast at calendar event end (ADR-017 Phase 2): 30s, "Keep Recording" cancels
+- [x] Calendar event title applied to auto-started recordings instead of date-based default
+- [x] Rich pre-meeting countdown toast for calendar starts (ADR-020): attendees + service icon row + steering hint pointing the user at the Notes tab. Manual-trigger toasts unchanged
+
+### v0.6 Optional WhisperKit STT
 
 - [x] WhisperKit dependency and `WhisperEngine` wrapper with local model cache at `~/Library/Application Support/MacParakeet/models/stt/whisper/`
 - [x] `SpeechEnginePreference` and `SpeechEngineSelection` persisted through `UserDefaults`

@@ -1,21 +1,29 @@
 # Settings IA Overhaul — Premium Enterprise-Grade UX
 
-> **Status:** Active. Drafted 2026-04-27 after IA conversation with Daniel. Updated 2026-04-28 with the single-PR strategy and five design decisions on previously-open questions.
-> **Scope:** Refactor MacParakeet Settings from a 1411-line single-scroll-15-cards panel into a tabbed, searchable, status-aware Settings surface that feels Linear-grade. Sub-VM split is forced by the IA, not the other way around.
+> **Status:** Partially implemented on `main`; still active only for remaining polish and decomposition. The tabbed `Modes / Engine / AI / System` shell, search index, tab persistence, and major card moves are in source. Remaining work should be scoped to follow-up polish, doc sync, and any still-worthwhile view-model decomposition.
+> **Scope:** Refactor MacParakeet Settings from the old single-scroll card stack into a tabbed, searchable, status-aware Settings surface that feels Linear-grade. The original sub-VM split remains a follow-up goal, not a prerequisite for v0.6.
 > **Owner:** Daniel.
-> **Branch:** `feat/settings-ia` — one branch, one final PR to `main`, ordered commits along the way (no long-lived integration branch with internal PRs).
+> **Branch:** Current work is on `main`; the original `feat/settings-ia` handoff is archived in `plans/completed/2026-04-settings-ia-handoff.md`.
 
 ---
 
 ## 1. Problem & North Star
 
-### Today
+### Original baseline
 
 - `Sources/MacParakeet/Views/Settings/SettingsView.swift` — 1,411 lines, 15 cards in one vertical `ScrollView`, ordered by implementation history rather than user intent.
 - `Sources/MacParakeetViewModels/SettingsViewModel.swift` — 1,265 lines, ~80 fields, six mutually exclusive `Task { }` blocks fired from `.onAppear`.
 - 28+ user-facing toggles/actions, no search, no findability beyond manual scroll.
 - Storage card mixes read-only configuration (audio retention) with three catastrophic destructive actions (Clear All Dictations, Reset Lifetime Stats, Clear YouTube Audio).
 - Permissions live in their own card *and* are duplicated implicitly in per-mode cards (no consolidated dashboard mental model, no contextual chip pattern).
+
+### Current main
+
+- `SettingsView` has a persistent header shell with tab bar + search.
+- `SettingsTab` defines the four top-level destinations: `Modes`, `Engine`, `AI`, and `System`.
+- `SettingsRootViewModel` owns active-tab persistence and search state.
+- `SettingsSearchIndex` provides indexed results across all four tabs, with calendar entries hidden while `AppFeatures.calendarEnabled = false`.
+- Calendar controls are folded into the Meeting Recording card but hidden in v0.6 by the feature flag.
 
 ### Target experience
 

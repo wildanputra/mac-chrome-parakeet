@@ -67,8 +67,8 @@ See [00-vision.md](./00-vision.md) for positioning and market context.
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  v0.6 - "Meeting Recording"                                      │
-│  "Record meetings locally, transcribe with local STT"            │
+│  v0.6 - "Meeting Recording + Multilingual STT"                   │
+│  "Record meetings locally, add optional WhisperKit coverage"     │
 ├─────────────────────────────────────────────────────────────────┤
 │  • Meeting recording (system audio + mic with echo mitigation)    │
 │  • Concurrent with dictation (ADR-015) — dictate during meetings │
@@ -77,17 +77,11 @@ See [00-vision.md](./00-vision.md) for positioning and market context.
 │  • Prompt library + multi-summary work automatically             │
 │  • Screen Recording permission flow                               │
 │  • Headphones guidance copy for cleanest speaker separation       │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  v0.7 - "Multilingual STT"                                       │
-│  "Keep Parakeet fast, add local Whisper for more languages"      │
-├─────────────────────────────────────────────────────────────────┤
 │  • WhisperKit engine option for non-Parakeet languages           │
 │  • Settings engine picker + Whisper language picker              │
 │  • CLI --engine parakeet|whisper --language                      │
 │  • Meeting engine/language pinning for live + recovery + final   │
+│  • Calendar auto-start implemented but hidden behind feature flag │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -1511,9 +1505,9 @@ Prompt library and multi-summary system. Users control how AI processes transcri
 
 ---
 
-## v0.6 — Meeting Recording (Implemented on main; unreleased)
+## v0.6 — Meeting Recording + Multilingual STT
 
-The v0.6 release ships system audio + mic capture (ADR-014, ADR-015), the centralized STT runtime (ADR-016), calendar-driven auto-start (ADR-017), the live Ask tab (ADR-018), crash-resilient recording (ADR-019), and the live notepad plus `{{userNotes}}` plumbing from ADR-020. The full v0.6 backlog lives in `spec/README.md`; the F-numbered entries below cover the ADR-020 feature surface that this PR introduces.
+The v0.6 release ships system audio + mic capture (ADR-014, ADR-015), the centralized STT runtime (ADR-016), optional WhisperKit multilingual STT (ADR-021), the live Ask tab (ADR-018), crash-resilient recording (ADR-019), and the live notepad plus `{{userNotes}}` plumbing from ADR-020. Calendar-driven auto-start (ADR-017) is implemented in source but hidden from v0.6 by `AppFeatures.calendarEnabled = false`. The full v0.6 backlog lives in `spec/README.md`; the F-numbered entries below cover the ADR-020 feature surface that this PR introduces.
 
 Meeting transcription uses the current speech engine captured at recording start. Parakeet remains the default; WhisperKit can be selected before starting a meeting for languages outside Parakeet coverage.
 
