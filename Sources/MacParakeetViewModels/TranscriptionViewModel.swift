@@ -48,10 +48,14 @@ public final class TranscriptionViewModel {
     public var transcriptions: [Transcription] = []
     public var currentTranscription: Transcription? {
         didSet {
-            refreshPromptResultStatus()
-            if currentTranscription == nil {
+            let transcriptionChanged = oldValue?.id != currentTranscription?.id
+            if transcriptionChanged {
+                selectedTab = .transcript
+            }
+            if transcriptionChanged || currentTranscription == nil {
                 hasConversations = false
             }
+            refreshPromptResultStatus()
         }
     }
     public var pendingDeleteTranscription: Transcription?

@@ -34,7 +34,7 @@ struct MeetingRecordingTile: View {
         .scaleEffect(isHovered && interactive ? 1.005 : 1.0)
         .animation(DesignSystem.Animation.hoverTransition, value: isHovered)
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(interactive ? .isButton : [])
         .accessibilityLabel(accessibilityLabel)
         .accessibilityHint(accessibilityHint)
     }

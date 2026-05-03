@@ -536,6 +536,37 @@ final class TranscriptionViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.errorMessage)
     }
 
+    func testSelectingDifferentTranscriptionResetsTabAndConversationState() {
+        let first = Transcription(fileName: "first.mp3", rawTranscript: "First", status: .completed)
+        let second = Transcription(fileName: "second.mp3", rawTranscript: "Second", status: .completed)
+
+        viewModel.currentTranscription = first
+        viewModel.selectedTab = .chat
+        viewModel.hasConversations = true
+
+        viewModel.presentCompletedTranscription(second, autoSave: false, runAutoPrompts: false)
+
+        XCTAssertEqual(viewModel.currentTranscription?.id, second.id)
+        XCTAssertEqual(viewModel.selectedTab, .transcript)
+        XCTAssertFalse(viewModel.hasConversations)
+    }
+
+    func testRefreshingSameTranscriptionDoesNotResetSelectedTab() {
+        let id = UUID()
+        let first = Transcription(id: id, fileName: "first.mp3", rawTranscript: "First", status: .completed)
+        let refreshed = Transcription(id: id, fileName: "renamed.mp3", rawTranscript: "First", status: .completed)
+
+        viewModel.currentTranscription = first
+        viewModel.selectedTab = .chat
+        viewModel.hasConversations = true
+
+        viewModel.currentTranscription = refreshed
+
+        XCTAssertEqual(viewModel.currentTranscription?.fileName, "renamed.mp3")
+        XCTAssertEqual(viewModel.selectedTab, .chat)
+        XCTAssertTrue(viewModel.hasConversations)
+    }
+
     // MARK: - File Drop
 
     func testHandleFileDropReturnsFalseWhenAlreadyTranscribing() {
