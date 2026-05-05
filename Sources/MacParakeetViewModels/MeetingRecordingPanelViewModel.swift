@@ -42,7 +42,7 @@ public final class MeetingRecordingPanelViewModel {
     public var systemLevel: Float = 0
     public var previewLines: [MeetingRecordingPreviewLine] = []
     public var isTranscriptionLagging: Bool = false
-    public var liveTranscriptStatus: LiveTranscriptStatus = .listening
+    public private(set) var liveTranscriptStatus: LiveTranscriptStatus = .listening
     public var showCopiedConfirmation: Bool = false
     /// Default to `.notes` per ADR-020 §2 — opening the panel should put the
     /// cursor in the notepad, not stare the user down with raw transcript.

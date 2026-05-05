@@ -373,10 +373,17 @@ final class MeetingRecordingFlowCoordinator {
             actionTask = Task { @MainActor in
                 do {
                     try await meetingRecordingService.startRecording(title: title, sourceMode: sourceMode)
+                    let isSpeechModelReady = await self.sttManager?.isReady() ?? true
                     switch self.panelViewModel?.liveTranscriptStatus {
-                    case .some(.startingAudio), .some(.preparingSpeechModel):
+                    case .some(.startingAudio) where isSpeechModelReady:
+                        self.panelViewModel?.updateLiveTranscriptStatus(.listening)
+                    case .some(.startingAudio):
+                        self.panelViewModel?.updateLiveTranscriptStatus(.preparingSpeechModel(message: nil))
+                    case .some(.preparingSpeechModel) where isSpeechModelReady:
                         self.panelViewModel?.updateLiveTranscriptStatus(.listening)
                     case .some(.listening), .some(.live), .some(.previewUnavailable), .none:
+                        break
+                    case .some(.preparingSpeechModel):
                         break
                     }
                     Telemetry.send(.meetingRecordingStarted(trigger: trigger))
