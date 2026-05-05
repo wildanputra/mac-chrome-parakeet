@@ -88,6 +88,7 @@ public actor BinaryBootstrap {
         }
 
         try await installYtDlp(at: targetPath)
+        defaults.set(now(), forKey: Self.ytDlpLastUpdateCheckKey)
         return targetPath
     }
 

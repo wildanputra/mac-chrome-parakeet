@@ -149,7 +149,7 @@ Dictation + transcription + history + settings. Get audio in, text out, pasted i
 #### Video Player & UI Revamp
 
 - [x] YouTube video metadata expansion (thumbnailURL, channelName, videoDescription)
-- [x] Thumbnail cache service (download YouTube thumbnails, FFmpeg frame extraction for local video)
+- [x] Thumbnail cache service (download YouTube thumbnails, embedded local artwork, FFmpeg frame extraction for local video)
 - [x] HLS streaming for YouTube video playback (yt-dlp URL extraction + AVPlayer)
 - [x] AVPlayer SwiftUI wrapper with subtitle overlay
 - [x] MediaPlayerViewModel (state machine, 10Hz time sync, seek, play/pause)

@@ -1450,7 +1450,7 @@ Embedded video/audio playback, split-pane detail view, synced transcript highlig
 **What:** Grid view of all transcriptions with thumbnail cards, filters, search, and sorting.
 
 **Acceptance criteria:**
-- [x] Thumbnail grid layout with cards (YouTube thumbnails downloaded, local video frames extracted via FFmpeg)
+- [x] Thumbnail grid layout with cards (YouTube thumbnails downloaded, embedded local artwork cached, local video frames extracted via FFmpeg)
 - [x] Filter bar: All / YouTube / Local / Favorites
 - [x] Search across transcription titles and content
 - [x] Sort by date (newest/oldest)

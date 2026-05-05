@@ -67,6 +67,14 @@ private actor FailingYouTubeDownloader: YouTubeDownloading {
     }
 }
 
+private struct StubMediaMetadataExtractor: MediaMetadataExtracting {
+    let metadata: MediaMetadata
+
+    func metadata(for fileURL: URL) async -> MediaMetadata {
+        metadata
+    }
+}
+
 private actor NonRoutedSTTTranscriber: STTTranscribing {
     func transcribe(
         audioPath: String,
@@ -202,6 +210,97 @@ final class TranscriptionServiceTests: XCTestCase {
 
         XCTAssertEqual(result.durationMs, 5000)
         XCTAssertEqual(try transcriptionRepo.fetch(id: result.id)?.durationMs, 5000)
+    }
+
+    func testTranscribeFilePersistsEmbeddedMediaMetadataAndArtwork() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("transcription-metadata-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let fileURL = tempDir.appendingPathComponent("downloaded.m4a")
+        try Data("audio".utf8).write(to: fileURL)
+
+        let artwork = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        let thumbnailCache = ThumbnailCacheService(cacheDir: tempDir.appendingPathComponent("thumbs").path)
+        let service = TranscriptionService(
+            audioProcessor: mockAudio,
+            sttTranscriber: mockSTT,
+            transcriptionRepo: transcriptionRepo,
+            mediaMetadataExtractor: StubMediaMetadataExtractor(metadata: MediaMetadata(
+                title: "Episode Title",
+                author: "Show Host",
+                description: "Episode notes",
+                artworkData: artwork,
+                durationMs: 12_000
+            )),
+            thumbnailCache: thumbnailCache
+        )
+        await mockSTT.configure(result: STTResult(
+            text: "short transcript",
+            words: [
+                TimestampedWord(word: "short", startMs: 0, endMs: 900, confidence: 0.95),
+            ]
+        ))
+
+        let result = try await service.transcribe(fileURL: fileURL)
+        let fetched = try XCTUnwrap(transcriptionRepo.fetch(id: result.id))
+        let cachedThumbnail = try XCTUnwrap(thumbnailCache.cachedThumbnail(for: result.id))
+
+        XCTAssertEqual(result.fileName, "Episode Title")
+        XCTAssertEqual(result.channelName, "Show Host")
+        XCTAssertEqual(result.videoDescription, "Episode notes")
+        XCTAssertEqual(result.durationMs, 12_000)
+        XCTAssertEqual(fetched.fileName, "Episode Title")
+        XCTAssertEqual(fetched.channelName, "Show Host")
+        XCTAssertEqual(fetched.videoDescription, "Episode notes")
+        XCTAssertEqual(fetched.durationMs, 12_000)
+        XCTAssertEqual(try Data(contentsOf: cachedThumbnail), artwork)
+    }
+
+    func testTranscribeURLBackfillsMissingMetadataFromDownloadedAudio() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("url-transcription-metadata-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let downloadedURL = try makeTempDownloadedAudio()
+        defer { try? FileManager.default.removeItem(at: downloadedURL) }
+
+        let downloader = MockYouTubeDownloader(result: YouTubeDownloader.DownloadResult(
+            audioFileURL: downloadedURL,
+            title: "",
+            durationSeconds: nil
+        ))
+        let thumbnailCache = ThumbnailCacheService(cacheDir: tempDir.appendingPathComponent("thumbs").path)
+        let service = TranscriptionService(
+            audioProcessor: mockAudio,
+            sttTranscriber: mockSTT,
+            transcriptionRepo: transcriptionRepo,
+            youtubeDownloader: downloader,
+            mediaMetadataExtractor: StubMediaMetadataExtractor(metadata: MediaMetadata(
+                title: "Embedded Video Title",
+                author: "Embedded Channel",
+                description: "Embedded description",
+                artworkData: Data([0xFF, 0xD8, 0xFF, 0xD9]),
+                durationMs: 42_000
+            )),
+            thumbnailCache: thumbnailCache
+        )
+        await mockSTT.configure(result: STTResult(text: "Downloaded transcript"))
+
+        let result = try await service.transcribeURL(urlString: "https://youtu.be/dQw4w9WgXcQ")
+        let fetched = try XCTUnwrap(transcriptionRepo.fetch(id: result.id))
+
+        XCTAssertEqual(result.fileName, "Embedded Video Title")
+        XCTAssertEqual(result.channelName, "Embedded Channel")
+        XCTAssertEqual(result.videoDescription, "Embedded description")
+        XCTAssertEqual(result.durationMs, 42_000)
+        XCTAssertEqual(fetched.fileName, "Embedded Video Title")
+        XCTAssertEqual(fetched.channelName, "Embedded Channel")
+        XCTAssertEqual(fetched.videoDescription, "Embedded description")
+        XCTAssertEqual(fetched.durationMs, 42_000)
+        XCTAssertNotNil(thumbnailCache.cachedThumbnail(for: result.id))
     }
 
     func testTranscribeFileError() async throws {

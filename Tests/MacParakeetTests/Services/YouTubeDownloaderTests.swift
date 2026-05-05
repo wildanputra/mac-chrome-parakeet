@@ -48,6 +48,36 @@ final class YouTubeDownloaderTests: XCTestCase {
         XCTAssertNil(YouTubeDownloader.parseDownloadProgressPercent(from: "some random log line"))
     }
 
+    func testSelectDownloadedAudioFileIgnoresYtDlpPartialArtifacts() {
+        let uuid = UUID().uuidString
+
+        XCTAssertEqual(
+            YouTubeDownloader.selectDownloadedAudioFile(
+                from: [
+                    "\(uuid).m4a.part",
+                    "\(uuid).m4a.ytdl",
+                    "\(uuid).info.json",
+                    "\(uuid).m4a",
+                ],
+                uuid: uuid
+            ),
+            "\(uuid).m4a"
+        )
+    }
+
+    func testSelectDownloadedAudioFileReturnsNilWhenOnlyPartialArtifactsExist() {
+        let uuid = UUID().uuidString
+
+        XCTAssertNil(YouTubeDownloader.selectDownloadedAudioFile(
+            from: [
+                "\(uuid).webm.part",
+                "\(uuid).webm.ytdl",
+                "other-file.webm",
+            ],
+            uuid: uuid
+        ))
+    }
+
     // MARK: - DownloadResult Metadata Fields
 
     func testDownloadResultWithVideoMetadata() {

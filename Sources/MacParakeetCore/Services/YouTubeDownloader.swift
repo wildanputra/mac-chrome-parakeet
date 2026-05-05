@@ -30,6 +30,22 @@ extension YouTubeDownloading {
 }
 
 public actor YouTubeDownloader {
+    private static let downloadTimeout: TimeInterval = 60 * 60
+    private static let audioFileExtensions: Set<String> = [
+        "aac",
+        "aiff",
+        "flac",
+        "m4a",
+        "mka",
+        "mp3",
+        "mp4",
+        "oga",
+        "ogg",
+        "opus",
+        "wav",
+        "webm",
+    ]
+
     public struct DownloadResult: Sendable {
         public let audioFileURL: URL
         public let title: String
@@ -71,12 +87,23 @@ public actor YouTubeDownloader {
         do {
             return try await download(url: url, ytDlpPath: ytDlpPath, onProgress: onProgress)
         } catch {
-            guard Self.isPyInstallerLibraryValidationError(error) else {
+            let originalError = error
+            if Self.isPyInstallerLibraryValidationError(error) {
+                let repairedPath = try await binaryBootstrap.reinstallYtDlpFromBundledSeedOrDownload()
+                return try await download(url: url, ytDlpPath: repairedPath, onProgress: onProgress)
+            }
+
+            guard Self.shouldRetryWithFreshYtDlp(error) else {
                 throw error
             }
 
-            let repairedPath = try await binaryBootstrap.reinstallYtDlpFromBundledSeedOrDownload()
-            return try await download(url: url, ytDlpPath: repairedPath, onProgress: onProgress)
+            let freshPath: String
+            do {
+                freshPath = try await binaryBootstrap.ensureYtDlpAvailable(allowNetworkUpdate: true)
+            } catch {
+                throw originalError
+            }
+            return try await download(url: url, ytDlpPath: freshPath, onProgress: onProgress)
         }
     }
 
@@ -281,7 +308,7 @@ public actor YouTubeDownloader {
         }
 
         try process.run()
-        try await waitForProcess(process, timeout: 600)
+        try await waitForProcess(process, timeout: Self.downloadTimeout)
 
         // Drain remaining data from both pipes
         let stdoutTail = stdoutHandle.readDataToEndOfFile()
@@ -310,13 +337,38 @@ public actor YouTubeDownloader {
             throw YouTubeDownloadError.downloadFailed(Self.normalizeYtDlpError(errorOutput))
         }
 
-        // Find the downloaded file (yt-dlp chooses the extension)
         let files = try fm.contentsOfDirectory(atPath: tempDir)
-        guard let downloadedFile = files.first(where: { $0.hasPrefix(uuid) }) else {
+        guard let downloadedFile = Self.selectDownloadedAudioFile(from: files, uuid: uuid) else {
             throw YouTubeDownloadError.downloadFailed("Downloaded file not found")
         }
 
         return URL(fileURLWithPath: "\(tempDir)/\(downloadedFile)")
+    }
+
+    nonisolated static func selectDownloadedAudioFile(from fileNames: [String], uuid: String) -> String? {
+        let candidates = fileNames
+            .filter { $0.hasPrefix(uuid) }
+            .filter { !isYtDlpTemporaryArtifact($0) }
+
+        if let audioCandidate = candidates.first(where: {
+            audioFileExtensions.contains(URL(fileURLWithPath: $0).pathExtension.lowercased())
+        }) {
+            return audioCandidate
+        }
+
+        return candidates.first
+    }
+
+    private nonisolated static func isYtDlpTemporaryArtifact(_ fileName: String) -> Bool {
+        let lowercased = fileName.lowercased()
+        return lowercased.hasSuffix(".part")
+            || lowercased.contains(".part-")
+            || lowercased.hasSuffix(".ytdl")
+            || lowercased.hasSuffix(".temp")
+            || lowercased.hasSuffix(".tmp")
+            || lowercased.hasSuffix(".frag")
+            || lowercased.hasSuffix(".info.json")
+            || lowercased.hasSuffix(".description")
     }
 
     nonisolated static func parseDownloadProgressPercent(from line: String) -> Int? {
@@ -489,6 +541,15 @@ public actor YouTubeDownloader {
         let normalized = reason.lowercased()
         return normalized.contains("failed to load python shared library")
             || (normalized.contains("pyi-") && normalized.contains("different team ids"))
+    }
+
+    private nonisolated static func shouldRetryWithFreshYtDlp(_ error: Error) -> Bool {
+        switch error {
+        case YouTubeDownloadError.downloadFailed, YouTubeDownloadError.timedOut:
+            return true
+        default:
+            return false
+        }
     }
 
     private func runYtDlp(

@@ -143,7 +143,11 @@ final class AppEnvironment {
             runtimePreferences.processingMode
         }
 
-        youtubeDownloader = YouTubeDownloader()
+        let binaryBootstrap = BinaryBootstrap()
+        youtubeDownloader = YouTubeDownloader(binaryBootstrap: binaryBootstrap)
+        Task.detached(priority: .utility) {
+            await binaryBootstrap.autoUpdateYtDlpIfNeeded()
+        }
         diarizationService = DiarizationService()
 
         let voiceReturnTriggerClosure: @Sendable () -> String? = { [runtimePreferences] in

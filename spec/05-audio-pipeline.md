@@ -77,6 +77,7 @@ Input File → FFmpeg → 16kHz mono WAV → selected local STT engine → Trans
 
 ```
 User selects file
+    → Extract embedded media metadata (title, author, artwork, duration) when present
     → Validate format (check extension + probe with FFmpeg)
     → Validate duration <= max (4 hours default)
     → Convert to 16kHz mono WAV via FFmpeg
@@ -115,6 +116,7 @@ YouTube URL → yt-dlp (audio only) → downloaded audio file → FFmpeg → 16k
 User pastes YouTube URL
     → Validate URL format (single video)
     → Download audio via yt-dlp (emit "Downloading audio... X%")
+    → Merge yt-dlp metadata with embedded audio metadata when needed
     → Convert to 16kHz mono WAV via FFmpeg
     → Send to selected local STT engine (emit "Transcribing... X%")
     → Save transcription (sourceURL set, filePath set only if retention enabled)

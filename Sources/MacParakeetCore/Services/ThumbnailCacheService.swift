@@ -1,6 +1,14 @@
 import Foundation
 import os
 
+public protocol ThumbnailCaching: Sendable {
+    func cachedThumbnail(for transcriptionId: UUID) -> URL?
+    func cacheThumbnailData(_ data: Data, for transcriptionId: UUID) throws -> URL
+    func downloadThumbnail(from urlString: String, for transcriptionId: UUID) async throws -> URL
+    func extractVideoFrame(from videoPath: String, for transcriptionId: UUID) async throws -> URL
+    func deleteThumbnail(for transcriptionId: UUID)
+}
+
 public final class ThumbnailCacheService: Sendable {
     public static let shared = ThumbnailCacheService()
 
@@ -15,6 +23,23 @@ public final class ThumbnailCacheService: Sendable {
     public func cachedThumbnail(for transcriptionId: UUID) -> URL? {
         let path = thumbnailPath(for: transcriptionId)
         return FileManager.default.fileExists(atPath: path.path) ? path : nil
+    }
+
+    public func cacheThumbnailData(_ data: Data, for transcriptionId: UUID) throws -> URL {
+        if let cached = cachedThumbnail(for: transcriptionId) {
+            return cached
+        }
+
+        guard !data.isEmpty else {
+            throw ThumbnailError.emptyData
+        }
+
+        try ensureCacheDir()
+
+        let dest = thumbnailPath(for: transcriptionId)
+        try data.write(to: dest)
+        logger.debug("Cached embedded thumbnail for \(transcriptionId)")
+        return dest
     }
 
     /// Downloads a thumbnail from a URL and caches it locally.
@@ -128,6 +153,7 @@ public enum ThumbnailError: Error, LocalizedError {
     case downloadFailed
     case ffmpegNotFound
     case extractionFailed
+    case emptyData
 
     public var errorDescription: String? {
         switch self {
@@ -135,6 +161,9 @@ public enum ThumbnailError: Error, LocalizedError {
         case .downloadFailed: return "Failed to download thumbnail"
         case .ffmpegNotFound: return "FFmpeg not found for frame extraction"
         case .extractionFailed: return "Failed to extract video frame"
+        case .emptyData: return "Embedded thumbnail data is empty"
         }
     }
 }
+
+extension ThumbnailCacheService: ThumbnailCaching {}

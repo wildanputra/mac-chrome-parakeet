@@ -173,6 +173,8 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
     private let shouldDiarize: @Sendable () -> Bool
     private let youtubeDownloader: YouTubeDownloading?
     private let diarizationService: DiarizationServiceProtocol?
+    private let mediaMetadataExtractor: MediaMetadataExtracting
+    private let thumbnailCache: ThumbnailCaching
 
     public init(
         audioProcessor: AudioProcessorProtocol,
@@ -188,7 +190,9 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         shouldKeepDownloadedAudio: (@Sendable () -> Bool)? = nil,
         shouldDiarize: (@Sendable () -> Bool)? = nil,
         youtubeDownloader: YouTubeDownloading? = nil,
-        diarizationService: DiarizationServiceProtocol? = nil
+        diarizationService: DiarizationServiceProtocol? = nil,
+        mediaMetadataExtractor: MediaMetadataExtracting = AVMediaMetadataExtractor(),
+        thumbnailCache: ThumbnailCaching = ThumbnailCacheService.shared
     ) {
         self.audioProcessor = audioProcessor
         self.sttTranscriber = sttTranscriber
@@ -205,6 +209,8 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         self.shouldDiarize = shouldDiarize ?? { true }
         self.youtubeDownloader = youtubeDownloader
         self.diarizationService = diarizationService
+        self.mediaMetadataExtractor = mediaMetadataExtractor
+        self.thumbnailCache = thumbnailCache
     }
 
     public func transcribe(
@@ -396,7 +402,15 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         sourceType: Transcription.SourceType,
         onProgress: (@Sendable (TranscriptionProgress) -> Void)? = nil
     ) async throws -> Transcription {
-        let fileName = displayFileName ?? storedFileURL?.lastPathComponent ?? fileURL.lastPathComponent
+        let embeddedMetadata = sourceType == .file
+            ? await mediaMetadataExtractor.metadata(for: fileURL)
+            : .empty
+        let fileName = Self.firstNonEmpty(
+            displayFileName,
+            embeddedMetadata.title,
+            storedFileURL?.lastPathComponent,
+            fileURL.lastPathComponent
+        ) ?? fileURL.lastPathComponent
         let fileSize = storedFileURL.flatMap {
             (try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? Int).flatMap { $0 }
         }
@@ -414,7 +428,10 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 fileName: fileName,
                 filePath: storedFileURL?.path,
                 fileSizeBytes: fileSize,
+                durationMs: embeddedMetadata.durationMs,
                 status: .processing,
+                channelName: embeddedMetadata.author,
+                videoDescription: embeddedMetadata.description,
                 sourceType: sourceType
             )
             do {
@@ -428,16 +445,18 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 )
                 throw error
             }
+            cacheEmbeddedArtworkIfPresent(embeddedMetadata, for: transcription.id)
             Telemetry.send(.transcriptionStarted(source: source, audioDurationSeconds: nil))
 
-            // Extract thumbnail from video files (non-blocking)
-            if Self.isVideoFile(fileURL) {
+            // Extract a representative frame when no embedded artwork was available.
+            if embeddedMetadata.artworkData == nil, Self.isVideoFile(fileURL) {
                 let transcriptionId = transcription.id
                 let path = fileURL.path
                 let logger = self.logger
+                let thumbnailCache = self.thumbnailCache
                 Task.detached(priority: .utility) {
                     do {
-                        _ = try await ThumbnailCacheService.shared.extractVideoFrame(from: path, for: transcriptionId)
+                        _ = try await thumbnailCache.extractVideoFrame(from: path, for: transcriptionId)
                     } catch {
                         logger.error("transcription_thumbnail_extract_failed id=\(transcriptionId, privacy: .public) error_type=\(Self.errorType(for: error), privacy: .public) error_detail=\(error.localizedDescription, privacy: .private)")
                     }
@@ -529,15 +548,27 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 throw error
             }
             let keepDownloadedAudio = shouldKeepDownloadedAudio()
+            let embeddedMetadata = await mediaMetadataExtractor.metadata(for: downloadResult.audioFileURL)
+            let title = Self.firstNonEmpty(
+                downloadResult.title == "Untitled" ? nil : downloadResult.title,
+                embeddedMetadata.title,
+                downloadResult.title
+            ) ?? "Untitled"
+            let durationMs = downloadResult.durationSeconds
+                .map { max(0, $0) * 1000 }
+                ?? embeddedMetadata.durationMs
+            let channelName = Self.firstNonEmpty(downloadResult.channelName, embeddedMetadata.author)
+            let videoDescription = Self.firstNonEmpty(downloadResult.videoDescription, embeddedMetadata.description)
 
             var transcription = Transcription(
-                fileName: downloadResult.title,
+                fileName: title,
                 filePath: keepDownloadedAudio ? downloadResult.audioFileURL.path : nil,
+                durationMs: durationMs,
                 status: .processing,
                 sourceURL: urlString,
                 thumbnailURL: downloadResult.thumbnailURL,
-                channelName: downloadResult.channelName,
-                videoDescription: downloadResult.videoDescription,
+                channelName: channelName,
+                videoDescription: videoDescription,
                 sourceType: .youtube
             )
             do {
@@ -552,6 +583,9 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 )
                 throw error
             }
+            if downloadResult.thumbnailURL == nil {
+                cacheEmbeddedArtworkIfPresent(embeddedMetadata, for: transcription.id)
+            }
             Telemetry.send(.transcriptionStarted(
                 source: .youtube,
                 audioDurationSeconds: downloadResult.durationSeconds.map(Double.init)
@@ -561,9 +595,10 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
             if let thumbURL = downloadResult.thumbnailURL {
                 let transcriptionId = transcription.id
                 let logger = self.logger
+                let thumbnailCache = self.thumbnailCache
                 Task.detached(priority: .utility) {
                     do {
-                        _ = try await ThumbnailCacheService.shared.downloadThumbnail(from: thumbURL, for: transcriptionId)
+                        _ = try await thumbnailCache.downloadThumbnail(from: thumbURL, for: transcriptionId)
                     } catch {
                         logger.error("transcription_thumbnail_download_failed id=\(transcriptionId, privacy: .public) error_type=\(Self.errorType(for: error), privacy: .public) error_detail=\(error.localizedDescription, privacy: .private)")
                     }
@@ -932,7 +967,9 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
             transcription.language = result.language ?? transcription.language
             transcription.engine = result.engine.rawValue
             transcription.engineVariant = result.engineVariant
-            transcription.durationMs = words.map(\.endMs).max()
+            if let speechDurationMs = words.map(\.endMs).max() {
+                transcription.durationMs = max(transcription.durationMs ?? 0, speechDurationMs)
+            }
 
             let diarizationApplied: Bool
             if let diarizationService, shouldDiarize() {
@@ -1084,6 +1121,15 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         transcription.isTranscriptEdited = false
         transcription.updatedAt = Date()
         return transcription
+    }
+
+    private func cacheEmbeddedArtworkIfPresent(_ metadata: MediaMetadata, for transcriptionID: UUID) {
+        guard let artworkData = metadata.artworkData else { return }
+        do {
+            _ = try thumbnailCache.cacheThumbnailData(artworkData, for: transcriptionID)
+        } catch {
+            logger.error("transcription_embedded_thumbnail_cache_failed id=\(transcriptionID, privacy: .public) error_type=\(Self.errorType(for: error), privacy: .public) error_detail=\(error.localizedDescription, privacy: .private)")
+        }
     }
 
     private static func commonDetectedLanguage(
@@ -1270,6 +1316,16 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
     }
 
     private static let videoExtensions: Set<String> = ["mp4", "mov", "mkv", "avi", "webm", "m4v", "flv", "wmv"]
+
+    private static func firstNonEmpty(_ values: String?...) -> String? {
+        for value in values {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let trimmed, !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return nil
+    }
 
     private static func isVideoFile(_ url: URL) -> Bool {
         videoExtensions.contains(url.pathExtension.lowercased())

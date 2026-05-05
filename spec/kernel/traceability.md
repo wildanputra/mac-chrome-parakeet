@@ -50,6 +50,7 @@ This matrix traces each requirement ID from `requirements.yaml` to its implement
 | REQ-DICT-005 | `MacParakeetCore/Database/DictationRepository.swift` | `DictationRepositoryTests.swift` |
 | REQ-DATA-003 | `MacParakeetCore/Database/ChatConversationRepository.swift`, `MacParakeetCore/Models/ChatConversation.swift` | `ChatConversationRepositoryTests.swift`, `TranscriptChatViewModelTests.swift` |
 | REQ-YT-002 | `MacParakeetCore/Database/TranscriptionRepository.swift` | `TranscriptionRepositoryTests.swift` |
+| REQ-TRANS-003 | `MacParakeetCore/Services/MediaMetadataExtractor.swift`, `MacParakeetCore/Services/TranscriptionService.swift`, `MacParakeetCore/Services/ThumbnailCacheService.swift` | `MediaMetadataExtractorTests.swift`, `TranscriptionServiceTests.swift`, `ThumbnailCacheServiceTests.swift` |
 | REQ-DATA-004 | `MacParakeetCore/Database/TranscriptionRepository.swift` | `TranscriptionRepositoryTests.swift` |
 
 ## v0.5 Video Player & UI Revamp
