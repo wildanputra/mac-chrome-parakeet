@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 import os
 
@@ -67,6 +68,9 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
         category: "AVAudioEngineMicrophonePlatform"
     )
     private let queue = DispatchQueue(label: "com.macparakeet.shared-mic-platform")
+    private let defaultInputListenerQueue = DispatchQueue(
+        label: "com.macparakeet.shared-mic-platform.default-input-listener"
+    )
     private let deviceAttemptsBuilder: DeviceAttemptsBuilder?
     private let inputDeviceSetter: InputDeviceSetter
     private let engineStarter: EngineStarter?
@@ -82,6 +86,7 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
     /// format change, sample-rate change), which is the most likely
     /// trigger for the silent tap-stall under investigation.
     private var configurationChangeObserver: NSObjectProtocol?
+    private var defaultInputChangeObserver: AudioObjectPropertyListenerBlock?
 
     public init(
         deviceAttemptsBuilder: DeviceAttemptsBuilder? = nil,
@@ -341,10 +346,12 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
         }
         running = true
         installConfigurationChangeObserverLocked()
+        installDefaultInputChangeObserverLocked()
     }
 
     private func tearDownLocked() {
         removeConfigurationChangeObserverLocked()
+        removeDefaultInputChangeObserverLocked()
         let inputNode = audioEngine.inputNode
         try? catchingObjCException {
             inputNode.removeTap(onBus: 0)
@@ -367,6 +374,7 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
     /// hand back a fresh engine for the next try).
     private func resetEngineLocked() {
         removeConfigurationChangeObserverLocked()
+        removeDefaultInputChangeObserverLocked()
         try? catchingObjCException {
             audioEngine.stop()
         }
@@ -377,6 +385,7 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
 
     private func replaceEngineAfterFailureLocked() {
         removeConfigurationChangeObserverLocked()
+        removeDefaultInputChangeObserverLocked()
         try? catchingObjCException {
             audioEngine.stop()
         }
@@ -426,6 +435,49 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
             NotificationCenter.default.removeObserver(token)
             configurationChangeObserver = nil
         }
+    }
+
+    private func installDefaultInputChangeObserverLocked() {
+        guard defaultInputChangeObserver == nil else { return }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let block: AudioObjectPropertyListenerBlock = { _, _ in
+            AudioCaptureDiagnostics.append(
+                "audio_default_input_changed \(AudioCaptureDiagnostics.defaultInputDeviceSummary())"
+            )
+        }
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            defaultInputListenerQueue,
+            block
+        )
+        guard status == noErr else {
+            AudioCaptureDiagnostics.append(
+                "audio_default_input_listener_failed status=\(status)"
+            )
+            return
+        }
+        defaultInputChangeObserver = block
+    }
+
+    private func removeDefaultInputChangeObserverLocked() {
+        guard let block = defaultInputChangeObserver else { return }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        AudioObjectRemovePropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            defaultInputListenerQueue,
+            block
+        )
+        defaultInputChangeObserver = nil
     }
 }
 
