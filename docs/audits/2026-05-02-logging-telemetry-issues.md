@@ -1,5 +1,6 @@
 # Logging & Telemetry Follow-Up Tracker -- 2026-05-02
 
+> Status: **ACTIVE** - Follow-up tracker for the 2026-05-02 telemetry/logging review.
 > Source review: [`2026-05-02-logging-telemetry-review.md`](2026-05-02-logging-telemetry-review.md)
 > Scope: MacParakeet app telemetry/logging plus the self-hosted telemetry
 > ingestion Worker in `macparakeet-website`.

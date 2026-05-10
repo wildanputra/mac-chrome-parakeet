@@ -41,7 +41,7 @@ Parakeet remains the default because it is faster, lower-latency, and lower-memo
 Each ML workload runs on the chip it was designed for:
 
 ```
-CPU:  MacParakeet app (UI, hotkeys, clipboard, history)
+CPU:  MacParakeet app (UI, shortcuts, clipboard, history)
 ANE:  Parakeet STT (via FluidAudio/CoreML) — dedicated ML accelerator
 CPU/GPU/CoreML as selected by WhisperKit: optional multilingual STT
 ```
@@ -54,7 +54,7 @@ The default Parakeet path runs on dedicated silicon, leaving CPU and GPU free fo
 
 ### Overview
 
-[FluidAudio](https://github.com/FluidInference/FluidAudio) is an open-source Swift SDK by FluidInference that runs Parakeet TDT on Apple's Neural Engine via CoreML. Apache 2.0 licensed. ~1,500 GitHub stars, 34 releases, 20+ production apps.
+[FluidAudio](https://github.com/FluidInference/FluidAudio) is an open-source Swift SDK by FluidInference that runs Parakeet TDT on Apple's Neural Engine via CoreML. It is Apache 2.0 licensed and is the active runtime integration point for MacParakeet's default STT path.
 
 **SwiftPM dependency:** Use the `FluidAudio` product only — NOT `FluidAudioEspeak` (GPL-3.0, includes Kokoro TTS via ESpeakNG). PocketTTS (GPL-free) is already included in the core `FluidAudio` product since v0.12.0.
 

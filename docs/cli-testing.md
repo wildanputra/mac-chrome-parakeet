@@ -25,7 +25,7 @@ This script builds the latest debug binary, stops stale `/Applications`/`dist` a
 ```
 macparakeet-cli
 ├── transcribe <input> [options]         Transcribe a file or YouTube URL
-│   └── --engine parakeet|whisper [--language <code>]
+│   └── --engine parakeet|whisper [--language <code>] [--youtube-audio-quality app-default|m4a|best-available]
 ├── history                              View and manage history
 │   ├── dictations [--limit] [--json]    List recent dictations (default)
 │   ├── transcriptions [--limit] [--json]  List recent transcriptions
@@ -65,6 +65,15 @@ macparakeet-cli
 │   ├── delete <id-or-name>              Delete custom prompt (built-ins protected)
 │   ├── restore-defaults                 Re-show all built-in prompts
 │   └── run <id-or-name> --transcription <id> [--no-store] [--stream] [--extra ...]
+├── quick-prompts                        Manage live meeting Ask quick prompts
+│   ├── list [--pinned true|false] [--visible-only] [--json]
+│   ├── show <id-or-label> [--json]
+│   ├── add --label X (--prompt Y | --from-file path) [--group X] [--pinned] [--hidden]
+│   ├── set <id-or-label> [--label X] [--prompt Y] [--group X] [--sort-order N] [--visible|--hidden]
+│   ├── delete <id-or-label>
+│   ├── pin <id-or-label> / unpin <id-or-label>
+│   ├── restore-defaults [--id UUID]
+│   └── export [--out path] [--pinned true|false] [--include-builtins] / import <path> [--mode merge|replace]
 ├── meetings                             Inspect and manage local meeting recordings
 │   ├── list [--limit] [--json]
 │   ├── show <meeting> [--json]
@@ -97,7 +106,8 @@ Uses app defaults for processing mode and YouTube audio retention.
 ```bash
 swift run macparakeet-cli transcribe "<FILE_OR_YOUTUBE_URL>" \
   --mode app-default \
-  --downloaded-audio app-default
+  --downloaded-audio app-default \
+  --youtube-audio-quality app-default
 ```
 
 ### 2) Deterministic Mode (recommended for CI/agent reproducibility)
@@ -107,7 +117,8 @@ Explicitly pins behavior.
 ```bash
 swift run macparakeet-cli transcribe "<FILE_OR_YOUTUBE_URL>" \
   --mode raw \
-  --downloaded-audio delete
+  --downloaded-audio delete \
+  --youtube-audio-quality m4a
 ```
 
 Or clean mode with retained downloads:
@@ -115,8 +126,14 @@ Or clean mode with retained downloads:
 ```bash
 swift run macparakeet-cli transcribe "<FILE_OR_YOUTUBE_URL>" \
   --mode clean \
-  --downloaded-audio keep
+  --downloaded-audio keep \
+  --youtube-audio-quality best-available
 ```
+
+`--youtube-audio-quality app-default` follows the GUI setting. `m4a` matches
+the app's default compatibility-first selector. `best-available` asks `yt-dlp`
+for the best audio stream and then lets the normal conversion pipeline prepare
+the STT input.
 
 ### Speech Engine Selection
 
@@ -464,6 +481,27 @@ swift run macparakeet-cli prompts run "Blog Post" \
 
 `prompts run` writes the model output to **stdout** and the "Saved PromptResult X"
 confirmation to **stderr**, so `> result.txt` captures only the prompt output.
+
+## Quick Prompts
+
+Quick prompts power the live meeting Ask tab shortcut pills. The CLI mirrors
+the GUI model so agents can seed, pin, hide, export, and import those prompts
+without launching the app.
+
+```bash
+swift run macparakeet-cli quick-prompts list --visible-only
+swift run macparakeet-cli quick-prompts show "Catch me up"
+
+swift run macparakeet-cli quick-prompts add \
+  --label "Risks?" \
+  --prompt "Identify risks, blockers, and open questions from the current meeting context." \
+  --pinned
+
+swift run macparakeet-cli quick-prompts pin "Risks?"
+swift run macparakeet-cli quick-prompts set "Risks?" --group "CHALLENGE"
+swift run macparakeet-cli quick-prompts export --out quick-prompts.json --include-builtins
+swift run macparakeet-cli quick-prompts import quick-prompts.json --mode merge --json
+```
 
 ## Feedback
 

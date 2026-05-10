@@ -436,8 +436,8 @@ YouTube:   yt-dlp (standalone) → .m4a → AudioFileConverter (FFmpeg binary) �
 ## Related Documents
 
 - [Open Source Models Landscape (Feb 2026)](./open-source-models-landscape-2026.md) — full STT/LLM/MLX ecosystem research
-- [ADR-001: Parakeet TDT as Primary STT](../spec/adr/001-parakeet-stt.md) — original STT decision (model choice unchanged, runtime changes). Needs amendment post-migration.
-- [Distribution & Signing](./distribution.md) — current distribution approach (will simplify after migration)
+- [ADR-001: Parakeet TDT as Primary STT](../../spec/adr/001-parakeet-stt.md) — original STT decision (model choice unchanged, runtime changes). Needs amendment post-migration.
+- [Distribution & Signing](../distribution.md) — current distribution approach (will simplify after migration)
 
 ## Sources
 

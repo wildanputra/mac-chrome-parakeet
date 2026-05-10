@@ -824,6 +824,7 @@ migrator.registerMigration("v0.7-prompts-and-summaries") { db in
 // v0.8 — dictations.engine/engineVariant and transcriptions.engine/engineVariant
 // v0.9 — transcriptions.derivedTitle and transcriptions.derivedSnippet
 // v0.10 — quick_prompts (v0.6 Live Ask product surface)
+// v0.10 — transcription library indexes (sourceType/favorite/status + createdAt)
 ```
 
 ### Migration Rules
@@ -871,6 +872,7 @@ migrator.registerMigration("v0.7-prompts-and-summaries") { db in
 | `transcriptions.derivedTitle` | v0.9 | Cached display title derived from transcript content |
 | `transcriptions.derivedSnippet` | v0.9 | Cached display preview snippet derived from transcript content |
 | `quick_prompts` | v0.10 | User-customizable live Ask tab shortcut pills; v0.6 product feature |
+| `idx_transcriptions_source_type_created_at` / `idx_transcriptions_favorite_created_at` / `idx_transcriptions_status_created_at` | v0.10 | Library filter/sort indexes for source type, favorites, and status |
 
 ### Tables NOT Planned (YAGNI)
 

@@ -263,7 +263,7 @@ The primary concurrency use case remains meeting recording + dictation. File tra
 | Permission | Why | When Requested | Fallback |
 |------------|-----|----------------|----------|
 | Microphone | Dictation recording | First dictation attempt | Show permission dialog with instructions |
-| Accessibility | Global hotkey detection + text insertion | First dictation attempt | Show System Settings deep link |
+| Accessibility | Global shortcut detection + text insertion | First dictation attempt | Show System Settings deep link |
 | Screen & System Audio Recording | Meeting recording (system audio capture via ScreenCaptureKit) | First meeting recording attempt | Show error + "Open System Settings" button, block recording |
 
 ### Permission Flow

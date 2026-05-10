@@ -95,7 +95,7 @@ Skipping sets `calendarAutoStartMode = .off` explicitly so re-enabling later goe
 
 ### 10. Hotkey / manual start still works independently
 
-Nothing about this ADR removes the manual flow. The meeting hotkey, the menu bar "Record Meeting" item, and the Meetings panel's record button all continue to work even with auto-start fully on. If a user starts a recording manually and a calendar event's auto-start fires mid-call, the coordinator observes that a recording is already active and **no-ops** (does not restart, does not double-notify).
+Nothing about this ADR removes the manual flow. The meeting hotkey, the menu bar "Start Recording" item, and the Meetings panel's record button all continue to work even with auto-start fully on. If a user starts a recording manually and a calendar event's auto-start fires mid-call, the coordinator observes that a recording is already active and **no-ops** (does not restart, does not double-notify).
 
 ## Architecture
 
