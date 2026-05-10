@@ -1274,14 +1274,18 @@ final class MeetingRecordingServiceTests: XCTestCase {
         // with `noAudioCaptured` on a clean session folder.
         try await Task.sleep(for: .milliseconds(50))
 
-        // Hold the recording in pause for 500ms so the accumulated paused
-        // duration is comfortably measurable even under CI load. Tighter
-        // budgets (200ms) flake on busy machines because Task.sleep can
-        // wake slightly early and the actor mailbox order around start
-        // adds ~50ms of pre-pause "active" time.
+        // Hold the recording in pause for 1s so the accumulated paused
+        // duration is comfortably measurable even under heavy CI load.
+        // The previous 500ms / 0.3s-slack combo flaked on GitHub macOS
+        // runners because the pre-pause buffer yield + actor mailbox
+        // drain can spike to ~220ms (only ~50-100ms locally) — that left
+        // negative margin against a wallclock of ~510ms minus 300ms slack.
+        // Doubling the pause and the slack keeps the proof strength
+        // ("at least 600ms of pause was carved out") while leaving 400ms
+        // of headroom for scheduler/actor jitter.
         let startedAt = Date()
         await service.pauseRecording()
-        try await Task.sleep(for: .milliseconds(500))
+        try await Task.sleep(for: .milliseconds(1000))
         await service.resumeRecording()
 
         let output = try await service.stopRecording()
@@ -1294,12 +1298,12 @@ final class MeetingRecordingServiceTests: XCTestCase {
             totalWallclock,
             "Paused interval must be subtracted from the persisted duration"
         )
-        // The pause was 500ms — assert at least 300ms was carved out
-        // (gives 200ms of headroom for scheduler jitter on top of the
-        // expected 200ms gap).
+        // The pause was 1000ms — assert at least 600ms was carved out
+        // (60% of the pause window), still proving subtraction happened
+        // while leaving CI-friendly headroom for pre-pause overhead.
         XCTAssertLessThan(
             output.durationSeconds,
-            totalWallclock - 0.3
+            totalWallclock - 0.6
         )
 
         await service.completeTranscription(for: output)
@@ -1325,9 +1329,12 @@ final class MeetingRecordingServiceTests: XCTestCase {
 
         let startedAt = Date()
         await service.pauseRecording()
-        try await Task.sleep(for: .milliseconds(500))
+        try await Task.sleep(for: .milliseconds(1000))
         // Stop without resuming — the in-flight pause must still be
-        // subtracted from the persisted duration.
+        // subtracted from the persisted duration. Pause is held 1s with
+        // 0.6s of carved-out slack — same CI-resilience math as the
+        // resume-sibling test above (see comment there for the rationale
+        // behind doubling from the original 500ms / 0.3s budget).
         let output = try await service.stopRecording()
         defer { try? FileManager.default.removeItem(at: output.folderURL) }
         let stoppedAt = Date()
@@ -1335,7 +1342,7 @@ final class MeetingRecordingServiceTests: XCTestCase {
 
         XCTAssertLessThan(
             output.durationSeconds,
-            totalWallclock - 0.3,
+            totalWallclock - 0.6,
             "Stopping while paused must still subtract the in-flight pause interval"
         )
 
