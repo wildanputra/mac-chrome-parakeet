@@ -17,7 +17,7 @@ Mic Input → SharedMicrophoneStream tap → temp WAV → selected local STT eng
 - **Shared mic engine**: `AudioRecorder` subscribes to the process-wide `SharedMicrophoneStream` with `wantsVPIO: false`
 - The stream owns the underlying `AVAudioEngine` input-node tap and handles device fallback centrally
 - **Output format**: temporary WAV, 16kHz mono Float32
-- **Minimum sample threshold**: 16,000 samples required before sending to STT. Header-only and near-empty recordings are rejected before they reach the speech engine.
+- **Minimum sample threshold**: 4,800 samples (0.3 seconds at 16kHz) required before sending to STT, mirroring FluidAudio's ASR guard. Header-only and near-empty recordings are rejected before they reach the speech engine.
 - Dictation always extracts channel 0 before conversion so VPIO duplex layouts produce the post-AEC mono stream instead of channel-mixed reference audio.
 - Dictation does not use the meeting crash-recovery lock-file pipeline. The current implementation writes a temp WAV and either moves it into retained storage or deletes it after processing.
 
@@ -40,7 +40,7 @@ User triggers dictation
     → Convert samples to 16kHz mono Float32
     → Write to temp WAV
     → User stops dictation (or release-to-stop)
-    → Validate sample count >= 16,000
+    → Validate sample count >= 4,800
     → Send to selected local STT engine through STTScheduler
     → Move WAV to dictations/ for storage (if enabled)
     → Clean up temp WAV (if storage disabled)

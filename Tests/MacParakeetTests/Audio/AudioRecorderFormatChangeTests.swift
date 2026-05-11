@@ -36,6 +36,43 @@ final class AudioRecorderFormatChangeTests: XCTestCase {
         )
     }
 
+    func testSharedModeStopAcceptsFluidAudioMinimumSamples() async throws {
+        let platform = AudioRecorderBlockingPlatform()
+        let stream = SharedMicrophoneStream(platform: platform, bufferSize: 1024)
+        let recorder = AudioRecorder(
+            sharedStream: stream,
+            permissionProvider: { true }
+        )
+
+        try await recorder.start()
+        platform.deliverBuffer(try makeMonoFloatBuffer(frameCount: 4_800))
+
+        let url = try await recorder.stop()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    func testSharedModeStopRejectsBelowFluidAudioMinimumSamples() async throws {
+        let platform = AudioRecorderBlockingPlatform()
+        let stream = SharedMicrophoneStream(platform: platform, bufferSize: 1024)
+        let recorder = AudioRecorder(
+            sharedStream: stream,
+            permissionProvider: { true }
+        )
+
+        try await recorder.start()
+        platform.deliverBuffer(try makeMonoFloatBuffer(frameCount: 4_799))
+
+        do {
+            _ = try await recorder.stop()
+            XCTFail("stop() should reject recordings below FluidAudio's current 0.3s floor")
+        } catch AudioProcessorError.insufficientSamples {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected stop error: \(error)")
+        }
+    }
+
     func testSharedModeStopDuringStartAbortsPendingSubscription() async throws {
         let platform = AudioRecorderBlockingPlatform()
         let stream = SharedMicrophoneStream(platform: platform, bufferSize: 1024)
@@ -219,6 +256,33 @@ final class AudioRecorderFormatChangeTests: XCTestCase {
             )
         )
     }
+
+    private func makeMonoFloatBuffer(
+        frameCount: Int,
+        sampleRate: Double = 16_000,
+        sampleValue: Float = 0.25
+    ) throws -> AVAudioPCMBuffer {
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: sampleRate,
+                channels: 1,
+                interleaved: false
+            )
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(frameCount)
+            )
+        )
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        let samples = try XCTUnwrap(buffer.floatChannelData?[0])
+        for index in 0..<frameCount {
+            samples[index] = sampleValue
+        }
+        return buffer
+    }
 }
 
 private final class AudioRecorderBlockingPlatform: MicrophoneEnginePlatform, @unchecked Sendable {
@@ -258,5 +322,10 @@ private final class AudioRecorderBlockingPlatform: MicrophoneEnginePlatform, @un
             _isRunning = false
             _tapHandler = nil
         }
+    }
+
+    func deliverBuffer(_ buffer: AVAudioPCMBuffer) {
+        let handler = lock.withLock { _tapHandler }
+        handler?(buffer, AVAudioTime(hostTime: 1))
     }
 }

@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreAudio
+import FluidAudio
 import Foundation
 import os
 import OSLog
@@ -106,9 +107,13 @@ public actor AudioRecorder {
     /// caller of `stop()` just asked to end.
     private var startCallGeneration: Int = 0
 
-    /// Minimum samples before sending to STT.
-    /// FluidAudio requires at least 1 second of 16kHz audio (16,000 samples).
-    private static let minimumSamples = 16_000
+    private static let outputSampleRate = ASRConstants.sampleRate
+
+    /// Minimum samples before sending to STT. Mirrors FluidAudio's ASR guard,
+    /// currently 0.3 seconds at 16 kHz.
+    private static let minimumSamples = ASRConstants.minimumRequiredSamples(
+        forSampleRate: outputSampleRate
+    )
 
     /// Time after `engine_started` to wait for the first buffer before
     /// emitting `dictation_capture_no_buffers_within_timeout`. Mirrors the
@@ -180,7 +185,7 @@ public actor AudioRecorder {
 
         guard let outputFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
-            sampleRate: 16000,
+            sampleRate: Double(Self.outputSampleRate),
             channels: 1,
             interleaved: false
         ) else {
@@ -441,7 +446,7 @@ public actor AudioRecorder {
     }
 
     /// Stop recording and return the path to the recorded WAV file.
-    /// Throws `insufficientSamples` if the recording is shorter than 1 second.
+    /// Throws `insufficientSamples` if the recording is shorter than the STT minimum.
     public func stop() throws -> URL {
         if starting, !recording {
             // `start()` awaits the stream subscription. A stop/cancel during
@@ -487,7 +492,7 @@ public actor AudioRecorder {
         let sampleCount = sampleCounter.withLock { $0 }
         let metrics = runtimeMetrics.withLock { $0 }
         let fileBytes = Self.fileSizeBytes(at: url)
-        let duration = Double(sampleCount) / 16_000.0
+        let duration = Double(sampleCount) / Double(Self.outputSampleRate)
         logger.debug("stop sampleCount=\(sampleCount, privacy: .public)")
         AudioCaptureDiagnostics.append(
             "dictation_capture_stop sample_count=\(sampleCount) duration_s=\(String(format: "%.3f", duration)) file_bytes=\(fileBytes.map(String.init) ?? "unknown") input_buffers=\(metrics.inputBufferCount) output_buffers=\(metrics.outputBufferCount) input_frames=\(metrics.inputFrameCount) max_rms=\(String(format: "%.6f", metrics.maxRMS)) max_level=\(String(format: "%.3f", metrics.maxAudioLevel)) non_silent_buffers=\(metrics.nonSilentBufferCount) missing_float_buffers=\(metrics.missingFloatChannelDataBufferCount) invalid_format_buffers=\(metrics.invalidFormatBufferCount)"
