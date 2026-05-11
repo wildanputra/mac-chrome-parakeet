@@ -10,7 +10,10 @@ import MacParakeetViewModels
 private struct ExportConfirmation: Identifiable {
     let id = UUID()
     let url: URL
-    let format: String
+    /// Full heading shown in the confirmation popover, e.g.
+    /// "Exported Markdown" or "Saved Audio". The popover renders this
+    /// verbatim so callers control the verb-noun phrasing.
+    let title: String
 }
 
 private struct RetranscriptionConfirmation: Identifiable {
@@ -433,6 +436,29 @@ struct TranscriptResultView: View {
             .parakeetAction(.secondary)
             .popover(isPresented: $showingExportOptions, arrowEdge: .top) {
                 exportOptionsPopover
+            }
+
+            if activeTranscription.sourceType == .meeting {
+                let audioAvailable = MeetingAudioFile.isAvailable(for: activeTranscription)
+                Menu {
+                    Button {
+                        MeetingAudioActions.revealInFinder(activeTranscription)
+                    } label: {
+                        Label("Show in Finder", systemImage: "folder")
+                    }
+                    Button {
+                        saveMeetingAudioFromActionBar()
+                    } label: {
+                        Label("Save Audio As…", systemImage: "square.and.arrow.down")
+                    }
+                } label: {
+                    Label("Audio", systemImage: "waveform")
+                }
+                .parakeetAction(.secondary)
+                .disabled(!audioAvailable)
+                .help(audioAvailable
+                      ? "Reveal or save the meeting audio file"
+                      : "Audio file is not available yet")
             }
 
             if onRetranscribe != nil, let filePath = transcription.filePath,
@@ -2601,7 +2627,7 @@ struct TranscriptResultView: View {
                     .foregroundStyle(DesignSystem.Colors.successGreen)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Exported \(confirmation.format)")
+                    Text(confirmation.title)
                         .font(DesignSystem.Typography.body.bold())
                     Text(confirmation.url.lastPathComponent)
                         .font(DesignSystem.Typography.caption)
@@ -2651,7 +2677,10 @@ struct TranscriptResultView: View {
             exportErrorMessage = nil
             SoundManager.shared.play(.transcriptionComplete)
             dismissTask?.cancel()
-            exportConfirmation = ExportConfirmation(url: fileURL, format: format.displayName)
+            exportConfirmation = ExportConfirmation(
+                url: fileURL,
+                title: "Exported \(format.displayName)"
+            )
             dismissTask = Task { @MainActor in
                 try? await Task.sleep(for: .seconds(5.0))
                 guard !Task.isCancelled else { return }
@@ -2678,7 +2707,10 @@ struct TranscriptResultView: View {
             exportErrorMessage = nil
             SoundManager.shared.play(.transcriptionComplete)
             dismissTask?.cancel()
-            exportConfirmation = ExportConfirmation(url: fileURL, format: format.displayName)
+            exportConfirmation = ExportConfirmation(
+                url: fileURL,
+                title: "Exported \(format.displayName)"
+            )
             dismissTask = Task { @MainActor in
                 try? await Task.sleep(for: .seconds(5.0))
                 guard !Task.isCancelled else { return }
@@ -2693,6 +2725,39 @@ struct TranscriptResultView: View {
         }
     }
 
+    /// Drives the "Save Audio As…" item in the meeting action bar's
+    /// Audio menu. Reuses the existing exportConfirmation popover on
+    /// success and the existing exportErrorMessage alert on failure.
+    private func saveMeetingAudioFromActionBar() {
+        let source = activeTranscription
+        Task { @MainActor in
+            do {
+                let outcome = try await MeetingAudioActions.runSaveAudioPanel(for: source)
+                switch outcome {
+                case .saved(let destination):
+                    SoundManager.shared.play(.transcriptionComplete)
+                    dismissTask?.cancel()
+                    exportConfirmation = ExportConfirmation(
+                        url: destination,
+                        title: "Saved Audio"
+                    )
+                    dismissTask = Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(5.0))
+                        guard !Task.isCancelled else { return }
+                        exportConfirmation = nil
+                    }
+                case .cancelled:
+                    break
+                case .sourceUnavailable:
+                    exportErrorMessage = "The meeting audio file is no longer available."
+                    SoundManager.shared.play(.errorSoft)
+                }
+            } catch {
+                exportErrorMessage = error.localizedDescription
+                SoundManager.shared.play(.errorSoft)
+            }
+        }
+    }
 
     private func formatTimestamp(ms: Int) -> String {
         let totalSeconds = ms / 1000

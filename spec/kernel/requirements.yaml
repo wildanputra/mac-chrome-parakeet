@@ -237,6 +237,11 @@ REQ-MEET-011:
   version: v0.6
   status: implemented
 
+REQ-MEET-012:
+  description: A finalized meeting's source audio file is reachable from the GUI via "Show in Finder" and "Save Audio As…" actions in both the Library Meetings list row context menu and the meeting detail-view action bar
+  version: v0.6
+  status: implemented
+
 # --- v0.6 Multilingual Speech Recognition ---
 
 REQ-STT-002:

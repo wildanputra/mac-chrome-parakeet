@@ -13,6 +13,7 @@ struct TranscriptionLibraryView: View {
     var onSelect: (Transcription) -> Void
 
     @State private var pendingDelete: Transcription?
+    @State private var audioSaveErrorMessage: String?
 
     private var visibleLibraryFilters: [LibraryFilter] {
         LibraryFilter.allCases.filter { filter in
@@ -122,6 +123,19 @@ struct TranscriptionLibraryView: View {
                 Text("\"\(pending.fileName)\" will be permanently deleted.")
             }
         }
+        .alert(
+            "Save Failed",
+            isPresented: Binding(
+                get: { audioSaveErrorMessage != nil },
+                set: { if !$0 { audioSaveErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                audioSaveErrorMessage = nil
+            }
+        } message: {
+            Text(audioSaveErrorMessage ?? "Unable to save meeting audio.")
+        }
     }
 
     private var thumbnailGrid: some View {
@@ -182,6 +196,34 @@ struct TranscriptionLibraryView: View {
             Label("Open", systemImage: "doc.text")
         }
 
+        if transcription.sourceType == .meeting {
+            let audioAvailable = MeetingAudioFile.isAvailable(for: transcription)
+
+            Divider()
+
+            Button {
+                MeetingAudioActions.revealInFinder(transcription)
+            } label: {
+                Label("Show in Finder", systemImage: "folder")
+            }
+            .disabled(!audioAvailable)
+            .help(audioAvailable
+                  ? "Reveal the meeting audio file in Finder"
+                  : "Audio file is not available yet")
+
+            Button {
+                saveMeetingAudio(transcription)
+            } label: {
+                Label("Save Audio As…", systemImage: "square.and.arrow.down")
+            }
+            .disabled(!audioAvailable)
+            .help(audioAvailable
+                  ? "Save a copy of the meeting audio to a chosen location"
+                  : "Audio file is not available yet")
+        }
+
+        Divider()
+
         Button {
             viewModel.toggleFavorite(transcription)
         } label: {
@@ -197,6 +239,16 @@ struct TranscriptionLibraryView: View {
             pendingDelete = transcription
         } label: {
             Label("Delete", systemImage: "trash")
+        }
+    }
+
+    private func saveMeetingAudio(_ transcription: Transcription) {
+        Task { @MainActor in
+            do {
+                _ = try await MeetingAudioActions.runSaveAudioPanel(for: transcription)
+            } catch {
+                audioSaveErrorMessage = error.localizedDescription
+            }
         }
     }
 
