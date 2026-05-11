@@ -46,12 +46,27 @@ public struct ObservabilityOperationContext: Sendable, Equatable {
 public enum Observability {
     @TaskLocal public static var currentOperationContext: ObservabilityOperationContext?
 
-    public static func withOperationContext<T>(
+    public static func withOperationContext<T: Sendable>(
         _ context: ObservabilityOperationContext,
         isolation: isolated (any Actor)? = #isolation,
         operation: () async throws -> T
     ) async rethrows -> T {
-        try await $currentOperationContext.withValue(context, operation: operation, isolation: isolation)
+        if #available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *) {
+            return try await $currentOperationContext.withValue(
+                context,
+                operation: operation,
+                isolation: isolation
+            )
+        } else {
+            // macOS 14.x: skip the TaskLocal binding to avoid the Swift 6
+            // back-deployment shim for `TaskLocal.withValue(_:operation:isolation:)`,
+            // which a v0.6.4 crash cluster traces to. Children that call
+            // `childOperationContext()` will start a fresh workflow root;
+            // parent-child telemetry stitching weakens on macOS 14.x but the
+            // app no longer crashes.
+            // See journal/2026-05-11-v0.6.4-macos14-taskdealloc-crash-loop.md.
+            return try await operation()
+        }
     }
 
     public static func childOperationContext(startedAt: Date = Date()) -> ObservabilityOperationContext {
