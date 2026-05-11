@@ -61,6 +61,14 @@ final class LocalCLIExecutorTests: XCTestCase {
         XCTAssertNil(store.load())
     }
 
+    func testDefaultTimeoutAndTimeoutDescription() {
+        XCTAssertEqual(LocalCLIConfig.defaultTimeout, 45)
+        XCTAssertEqual(
+            LocalCLIError.timeout(seconds: LocalCLIConfig.defaultTimeout).errorDescription,
+            "Timed out after 45s. Verify the command runs successfully in a terminal and is logged in if required."
+        )
+    }
+
     // MARK: - Templates
 
     func testTemplateDefaults() {

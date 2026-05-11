@@ -9,7 +9,7 @@ public struct LocalCLIConfig: Codable, Sendable, Equatable {
     public let timeoutSeconds: Double
 
     public static let minimumTimeout: Double = 5
-    public static let defaultTimeout: Double = 120
+    public static let defaultTimeout: Double = 45
 
     public init(commandTemplate: String, timeoutSeconds: Double = Self.defaultTimeout) {
         self.commandTemplate = commandTemplate
@@ -75,7 +75,7 @@ public enum LocalCLIError: Error, LocalizedError, Sendable {
         case .commandNotFound(let details):
             return "CLI command not found. Ensure it is installed and on your PATH. Details: \(details)"
         case .timeout(let seconds):
-            return "CLI command timed out after \(Int(seconds)) seconds."
+            return "Timed out after \(Int(seconds))s. Verify the command runs successfully in a terminal and is logged in if required."
         case .drainTimeout:
             return "CLI command exited, but its output pipes did not close in time."
         case .nonZeroExit(let code, let stderr):
