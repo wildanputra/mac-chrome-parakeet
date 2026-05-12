@@ -660,13 +660,43 @@ private struct TopAppRow: View {
                 .monospacedDigit()
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.vertical, 6)
         .background(
+            // Bumped from opacity 0.05 → 0.10 so the hover state is actually
+            // perceptible in dark mode. The brand accent at low opacity
+            // reinforces "this is interactive" without claiming it's a
+            // primary surface.
             RoundedRectangle(cornerRadius: 8)
-                .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
+                .fill(
+                    isHovered
+                        ? DesignSystem.Colors.accent.opacity(0.08)
+                        : Color.clear
+                )
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(
+                    isHovered ? DesignSystem.Colors.accent.opacity(0.18) : Color.clear,
+                    lineWidth: 0.5
+                )
+        )
+        .help(detailTooltip(resolved: resolved))
         .animation(.easeOut(duration: 0.15), value: isHovered)
         .onHover { isHovered = $0 }
+    }
+
+    /// Tooltip body surfaced on hover. The row visually shows app name + bar
+    /// + percent; this fills in the numbers a curious user would actually
+    /// want to know — exact dictation count, total words spoken, and an
+    /// average so they can compare apps at different scales.
+    private func detailTooltip(resolved: String) -> String {
+        let dictationsLabel = "\(entry.count) dictation\(entry.count == 1 ? "" : "s")"
+        let wordsLabel = "\(entry.words.compactFormatted) word\(entry.words == 1 ? "" : "s")"
+        guard entry.count > 0 else {
+            return "\(resolved) — \(dictationsLabel)"
+        }
+        let avg = Int((Double(entry.words) / Double(entry.count)).rounded())
+        return "\(resolved) — \(dictationsLabel) · \(wordsLabel) · avg \(avg) words/dictation"
     }
 
     private func formatPercent(_ value: Double) -> String {
