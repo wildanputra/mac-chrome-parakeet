@@ -38,6 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dictationFlowCoordinator: DictationFlowCoordinator?
     private var meetingRecordingFlowCoordinator: MeetingRecordingFlowCoordinator?
     private var meetingAutoStartCoordinator: MeetingAutoStartCoordinator?
+    /// Transforms spike (see `AppFeatures.transformsSpikeEnabled` and
+    /// `docs/research/transforms-design-2026-05.md`). Always created; `start()`
+    /// is a no-op when the flag is off so the binary surface stays clean.
+    private var transformsSpikeCoordinator: TransformsSpikeCoordinator?
     private var hasPresentedHotkeyUnavailableAlert = false
     private var hasPresentedHotkeyConflictAlert = false
     private var environmentSetupTask: Task<Void, Never>?
@@ -273,6 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dictationFlowCoordinator?.hideIdlePill()
         hotkeyCoordinator?.stopAll()
         meetingAutoStartCoordinator?.stop()
+        transformsSpikeCoordinator?.stop()
         settingsObserverCoordinator.stopObserving()
         environmentSetupTask?.cancel()
         speechPreWarmTask?.cancel()
@@ -383,6 +388,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         meetingRecordingFlowCoordinator = runtime.meetingRecordingFlowCoordinator
         hotkeyCoordinator = runtime.hotkeyCoordinator
         meetingAutoStartCoordinator = runtime.meetingAutoStartCoordinator
+
+        // Transforms spike — registers Opt+Ctrl+1 only when the feature flag
+        // is on (see `AppFeatures.transformsSpikeEnabled`). Always-created so
+        // we can `stop()` it cleanly during termination even if the flag
+        // flipped after launch.
+        let configStore = env.llmConfigStore
+        let llmService = env.llmService
+        let spike = TransformsSpikeCoordinator(llmServiceProvider: { [weak configStore, llmService] in
+            guard let configStore else { return nil }
+            return (try? configStore.loadConfig()) != nil ? llmService : nil
+        })
+        spike.start()
+        transformsSpikeCoordinator = spike
 
         menuBarCoordinator.refreshHotkeyTitle()
         menuBarCoordinator.refreshMeetingHotkeyShortcut()

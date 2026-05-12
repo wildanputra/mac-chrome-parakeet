@@ -20,4 +20,14 @@ public enum AppFeatures {
     /// point release once the auto-start flow has been exercised against real
     /// calendars.
     public static let calendarEnabled: Bool = false
+
+    /// Transforms spike (docs/research/transforms-design-2026-05.md, Phase 1
+    /// AX-coverage spike). When `false`, the entire Transforms pipeline is
+    /// hidden: no Opt+Ctrl+1 hotkey, no SelectionCaptureService/Executor wiring
+    /// from AppEnvironment, no floating progress panel. Flipping to `true` is
+    /// development-only — the spike is intentionally rough (hardcoded Polish
+    /// prompt, no management UI, hardcoded hotkey including Ctrl to avoid
+    /// collisions during dev). Used to answer the single question: does the
+    /// macOS AX API reliably return selected text in mainstream apps?
+    public static let transformsSpikeEnabled: Bool = false
 }

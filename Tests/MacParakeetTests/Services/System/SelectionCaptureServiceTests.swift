@@ -1,0 +1,173 @@
+import AppKit
+@preconcurrency import ApplicationServices
+import XCTest
+@testable import MacParakeetCore
+
+final class SelectionCaptureServiceTests: XCTestCase {
+    func testCaptureReturnsFailedWhenAccessibilityNotAuthorized() async {
+        let backend = FakeSelectionCaptureBackend(isTrusted: false)
+        let service = SelectionCaptureService(backend: backend)
+
+        let result = await service.captureSelection()
+
+        switch result {
+        case .failed(let error):
+            XCTAssertEqual(error, .accessibilityNotAuthorized)
+        default:
+            XCTFail("Expected .failed(.accessibilityNotAuthorized), got \(result.pathTag)")
+        }
+    }
+
+    func testCaptureReturnsAxWhenSelectedTextAttributeNonEmpty() async {
+        let backend = FakeSelectionCaptureBackend(
+            isTrusted: true,
+            focusedElement: AXUIElementCreateSystemWide(),
+            selectedText: "Hello world"
+        )
+        let service = SelectionCaptureService(backend: backend)
+
+        let result = await service.captureSelection()
+
+        switch result {
+        case .ax(let text, _):
+            XCTAssertEqual(text, "Hello world")
+        default:
+            XCTFail("Expected .ax, got \(result.pathTag)")
+        }
+    }
+
+    func testCaptureFallsBackToClipboardWhenAxEmptyAndPasteboardChanges() async {
+        let backend = FakeSelectionCaptureBackend(
+            isTrusted: true,
+            focusedElement: AXUIElementCreateSystemWide(),
+            selectedText: nil,
+            initialChangeCount: 1,
+            pasteboardAfterCmdC: "Clipboard selection",
+            changeCountAfterCmdC: 2
+        )
+        let service = SelectionCaptureService(
+            backend: backend,
+            clipboardPollTimeout: .milliseconds(200),
+            pollIntervalNanos: 1_000_000
+        )
+
+        let result = await service.captureSelection()
+
+        switch result {
+        case .clipboard(let text, let snapshot):
+            XCTAssertEqual(text, "Clipboard selection")
+            XCTAssertEqual(snapshot.originalChangeCount, 1)
+        default:
+            XCTFail("Expected .clipboard, got \(result.pathTag)")
+        }
+    }
+
+    func testCaptureReturnsEmptyWhenClipboardDidNotChange() async {
+        let backend = FakeSelectionCaptureBackend(
+            isTrusted: true,
+            focusedElement: AXUIElementCreateSystemWide(),
+            selectedText: nil,
+            initialChangeCount: 5,
+            pasteboardAfterCmdC: "ignored",
+            changeCountAfterCmdC: 5  // No change
+        )
+        let service = SelectionCaptureService(
+            backend: backend,
+            clipboardPollTimeout: .milliseconds(60),
+            pollIntervalNanos: 1_000_000
+        )
+
+        let result = await service.captureSelection()
+
+        switch result {
+        case .empty:
+            break
+        default:
+            XCTFail("Expected .empty, got \(result.pathTag)")
+        }
+    }
+
+    func testCaptureSnapshotIsCarriedForRestore() async {
+        let placeholder = NSPasteboardItem()
+        placeholder.setString("original", forType: .string)
+        let backend = FakeSelectionCaptureBackend(
+            isTrusted: true,
+            focusedElement: AXUIElementCreateSystemWide(),
+            selectedText: nil,
+            initialChangeCount: 7,
+            snapshotItems: [placeholder],
+            pasteboardAfterCmdC: "after",
+            changeCountAfterCmdC: 8
+        )
+        let service = SelectionCaptureService(
+            backend: backend,
+            clipboardPollTimeout: .milliseconds(60),
+            pollIntervalNanos: 1_000_000
+        )
+
+        let result = await service.captureSelection()
+
+        guard case .clipboard(_, let snapshot) = result else {
+            XCTFail("Expected .clipboard, got \(result.pathTag)")
+            return
+        }
+        XCTAssertEqual(snapshot.originalChangeCount, 7)
+        XCTAssertEqual(snapshot.items?.count, 1)
+    }
+}
+
+// MARK: - Fake Backend
+
+final class FakeSelectionCaptureBackend: SelectionCaptureBackend, @unchecked Sendable {
+    private let trusted: Bool
+    private let focused: AXUIElement?
+    private let selectedTextValue: String?
+    private var changeCount: Int
+    private let pasteboardAfterCmdC: String?
+    private let changeCountAfterCmdC: Int?
+    private let snapshotItems: [NSPasteboardItem]?
+
+    init(
+        isTrusted: Bool,
+        focusedElement: AXUIElement? = nil,
+        selectedText: String? = nil,
+        initialChangeCount: Int = 0,
+        snapshotItems: [NSPasteboardItem]? = nil,
+        pasteboardAfterCmdC: String? = nil,
+        changeCountAfterCmdC: Int? = nil
+    ) {
+        self.trusted = isTrusted
+        self.focused = focusedElement
+        self.selectedTextValue = selectedText
+        self.changeCount = initialChangeCount
+        self.snapshotItems = snapshotItems
+        self.pasteboardAfterCmdC = pasteboardAfterCmdC
+        self.changeCountAfterCmdC = changeCountAfterCmdC
+    }
+
+    func isAccessibilityTrusted() -> Bool { trusted }
+    func focusedElement() -> AXUIElement? { focused }
+    func selectedText(of element: AXUIElement) -> String? { selectedTextValue }
+
+    @MainActor
+    func snapshotPasteboard() -> PasteboardSnapshot {
+        PasteboardSnapshot(items: snapshotItems, originalChangeCount: changeCount)
+    }
+
+    @MainActor
+    func currentPasteboardString() -> String? {
+        pasteboardAfterCmdC
+    }
+
+    @MainActor
+    func currentPasteboardChangeCount() -> Int {
+        changeCount
+    }
+
+    @MainActor
+    func postCmdC() throws {
+        if let newCount = changeCountAfterCmdC {
+            changeCount = newCount
+        }
+    }
+}
