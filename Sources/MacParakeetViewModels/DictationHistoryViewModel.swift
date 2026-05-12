@@ -209,7 +209,10 @@ public final class DictationHistoryViewModel {
     }
 
     public func copyToClipboard(_ dictation: Dictation) {
-        let text = dictation.cleanTranscript ?? dictation.rawTranscript
+        // Use `displayText` so the "Undo AI edit" per-row override is honored
+        // — copying a row showing raw text should copy raw text, not the
+        // suppressed cleaned version.
+        let text = dictation.displayText
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         Telemetry.send(.copyToClipboard(source: .history))
@@ -221,6 +224,31 @@ public final class DictationHistoryViewModel {
             guard !Task.isCancelled else { return }
             self.copiedDictationId = nil
         }
+    }
+
+    // MARK: - Undo AI edit
+
+    /// Toggle the per-row "Undo AI edit" override. Flipping to `true` shows
+    /// `rawTranscript` on history / copy / export surfaces; flipping back to
+    /// `false` re-applies the cleaned version. Persisted via the repository.
+    public func toggleDisplayRawTranscript(for dictation: Dictation) {
+        guard let repo = dictationRepo else { return }
+        guard dictation.hasAIEdit else { return }
+        let newValue = !dictation.displayRawTranscript
+        do {
+            _ = try repo.setDisplayRawTranscript(id: dictation.id, value: newValue)
+            // Intentionally no telemetry event: adding a `TelemetryEventName`
+            // case would require a companion update to the Cloudflare Worker
+            // allowlist (the Worker rejects the entire batch on unknown
+            // events). Keeping this PR scoped to Undo AI edit — telemetry can
+            // be added as a follow-up if usage signal is needed.
+        } catch {
+            logger.error("Failed to toggle displayRawTranscript for \(dictation.id): \(error.localizedDescription)")
+            return
+        }
+        // Reload without bouncing stats — the toggle leaves duration/wordCount
+        // untouched, so the lifetime/daily counters can't have shifted.
+        loadDictations(shouldRefreshStats: false)
     }
 
     // MARK: - Playback

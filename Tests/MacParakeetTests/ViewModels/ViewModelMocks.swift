@@ -76,6 +76,16 @@ final class MockDictationRepository: DictationRepositoryProtocol, @unchecked Sen
         resetLifetimeStatsCalled = true
     }
 
+    var setDisplayRawTranscriptCalls: [(id: UUID, value: Bool)] = []
+    @discardableResult
+    func setDisplayRawTranscript(id: UUID, value: Bool) throws -> Bool {
+        setDisplayRawTranscriptCalls.append((id, value))
+        guard let idx = dictations.firstIndex(where: { $0.id == id }) else { return false }
+        dictations[idx].displayRawTranscript = value
+        dictations[idx].updatedAt = Date()
+        return true
+    }
+
     func stats() throws -> DictationStats {
         statsCallCount += 1
         let completed = dictations.filter { $0.status == .completed }

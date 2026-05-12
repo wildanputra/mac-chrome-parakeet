@@ -196,4 +196,79 @@ final class DictationRepositoryTests: XCTestCase {
         let fetched = try repo.fetch(id: dictation.id)
         XCTAssertEqual(fetched?.rawTranscript, "Updated")
     }
+
+    // MARK: - Undo AI edit (displayRawTranscript)
+
+    func testDisplayRawTranscriptDefaultsFalse() throws {
+        let dictation = Dictation(
+            durationMs: 1000,
+            rawTranscript: "Hello world",
+            cleanTranscript: "Hello, world."
+        )
+        try repo.save(dictation)
+
+        let fetched = try repo.fetch(id: dictation.id)
+        XCTAssertEqual(fetched?.displayRawTranscript, false, "New rows default to showing the cleaned text")
+        XCTAssertEqual(fetched?.displayText, "Hello, world.")
+    }
+
+    func testSetDisplayRawTranscriptPersists() throws {
+        let dictation = Dictation(
+            durationMs: 1000,
+            rawTranscript: "um hello world",
+            cleanTranscript: "Hello, world."
+        )
+        try repo.save(dictation)
+
+        let updated = try repo.setDisplayRawTranscript(id: dictation.id, value: true)
+        XCTAssertTrue(updated, "setDisplayRawTranscript returns true when the row exists")
+
+        let afterUndo = try repo.fetch(id: dictation.id)
+        XCTAssertEqual(afterUndo?.displayRawTranscript, true)
+        XCTAssertEqual(afterUndo?.displayText, "um hello world", "Once raw is forced, displayText returns rawTranscript")
+        XCTAssertEqual(afterUndo?.cleanTranscript, "Hello, world.", "Cleaned text is preserved so the undo is reversible")
+        XCTAssertEqual(afterUndo?.hasAIEdit, true, "hasAIEdit stays true so the affordance keeps reading 'Re-apply'")
+    }
+
+    func testSetDisplayRawTranscriptIsReversible() throws {
+        let dictation = Dictation(
+            durationMs: 1000,
+            rawTranscript: "raw",
+            cleanTranscript: "Cleaned."
+        )
+        try repo.save(dictation)
+
+        _ = try repo.setDisplayRawTranscript(id: dictation.id, value: true)
+        _ = try repo.setDisplayRawTranscript(id: dictation.id, value: false)
+
+        let restored = try repo.fetch(id: dictation.id)
+        XCTAssertEqual(restored?.displayRawTranscript, false)
+        XCTAssertEqual(restored?.displayText, "Cleaned.", "Re-apply restores the AI-edited text")
+    }
+
+    func testSetDisplayRawTranscriptUnknownIdReturnsFalse() throws {
+        let updated = try repo.setDisplayRawTranscript(id: UUID(), value: true)
+        XCTAssertFalse(updated, "Unknown id should report no-op")
+    }
+
+    func testSetDisplayRawTranscriptDoesNotPerturbLifetimeStats() throws {
+        let dictation = Dictation(
+            durationMs: 4_000,
+            rawTranscript: "raw",
+            cleanTranscript: "Cleaned.",
+            wordCount: 3
+        )
+        try repo.save(dictation)
+
+        let before = try repo.stats()
+
+        _ = try repo.setDisplayRawTranscript(id: dictation.id, value: true)
+        _ = try repo.setDisplayRawTranscript(id: dictation.id, value: false)
+
+        let after = try repo.stats()
+        XCTAssertEqual(before.totalCount, after.totalCount)
+        XCTAssertEqual(before.totalDurationMs, after.totalDurationMs)
+        XCTAssertEqual(before.totalWords, after.totalWords)
+        XCTAssertEqual(before.longestDurationMs, after.longestDurationMs)
+    }
 }

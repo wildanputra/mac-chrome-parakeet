@@ -139,4 +139,72 @@ final class DictationModelTests: XCTestCase {
         let d = Dictation(durationMs: 100, rawTranscript: "")
         XCTAssertTrue(d.rawTranscript.isEmpty)
     }
+
+    // MARK: - displayText / hasAIEdit / displayRawTranscript
+
+    func testDisplayTextDefaultsToCleanWhenPresent() {
+        let d = Dictation(
+            durationMs: 1000,
+            rawTranscript: "raw",
+            cleanTranscript: "cleaned"
+        )
+        XCTAssertEqual(d.displayText, "cleaned")
+        XCTAssertTrue(d.hasAIEdit)
+        XCTAssertFalse(d.displayRawTranscript)
+    }
+
+    func testDisplayTextFallsBackToRawWhenNoClean() {
+        let d = Dictation(durationMs: 1000, rawTranscript: "only raw")
+        XCTAssertEqual(d.displayText, "only raw")
+        XCTAssertFalse(d.hasAIEdit)
+    }
+
+    func testDisplayTextRespectsDisplayRawTranscriptOverride() {
+        let d = Dictation(
+            durationMs: 1000,
+            rawTranscript: "raw text",
+            cleanTranscript: "cleaned text",
+            displayRawTranscript: true
+        )
+        XCTAssertEqual(d.displayText, "raw text")
+        XCTAssertTrue(d.hasAIEdit, "hasAIEdit is independent of the override")
+    }
+
+    func testHasAIEditFalseWhenCleanEqualsRaw() {
+        // When the cleanup pipeline runs but produces no changes (e.g. raw
+        // already had no fillers), cleanTranscript == rawTranscript. There's
+        // nothing meaningful to undo, so hasAIEdit should be false.
+        let d = Dictation(
+            durationMs: 1000,
+            rawTranscript: "same",
+            cleanTranscript: "same"
+        )
+        XCTAssertFalse(d.hasAIEdit)
+        XCTAssertEqual(d.displayText, "same")
+    }
+
+    func testLegacyDictationDecodesWithDefaultDisplayRawTranscript() throws {
+        // Snapshot serialized before v0.12 has no `displayRawTranscript` key;
+        // decode-if-present must fall back to false to preserve current behavior.
+        let json = """
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "createdAt": "2026-05-12T00:00:00Z",
+          "durationMs": 1000,
+          "rawTranscript": "raw",
+          "cleanTranscript": "cleaned",
+          "processingMode": "clean",
+          "status": "completed",
+          "updatedAt": "2026-05-12T00:00:00Z",
+          "hidden": false,
+          "wordCount": 1
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(Dictation.self, from: json)
+        XCTAssertEqual(decoded.displayRawTranscript, false)
+        XCTAssertEqual(decoded.displayText, "cleaned")
+    }
 }

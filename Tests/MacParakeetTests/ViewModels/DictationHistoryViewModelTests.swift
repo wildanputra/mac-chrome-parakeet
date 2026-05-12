@@ -339,6 +339,65 @@ final class DictationHistoryViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.stats.isEmpty)
     }
 
+    // MARK: - Undo AI edit
+
+    func testToggleDisplayRawTranscriptFlipsAndPersists() {
+        let dictation = Dictation(
+            durationMs: 1000,
+            rawTranscript: "um hello world",
+            cleanTranscript: "Hello, world."
+        )
+        mockRepo.dictations = [dictation]
+        viewModel.configure(dictationRepo: mockRepo)
+
+        viewModel.toggleDisplayRawTranscript(for: dictation)
+
+        XCTAssertEqual(mockRepo.setDisplayRawTranscriptCalls.count, 1)
+        XCTAssertEqual(mockRepo.setDisplayRawTranscriptCalls.first?.value, true)
+
+        let reloaded = viewModel.groupedDictations.flatMap(\.1).first { $0.id == dictation.id }
+        XCTAssertEqual(reloaded?.displayRawTranscript, true)
+        XCTAssertEqual(reloaded?.displayText, "um hello world", "displayText should now return raw")
+    }
+
+    func testToggleDisplayRawTranscriptIsReversible() {
+        let dictation = Dictation(
+            durationMs: 1000,
+            rawTranscript: "raw",
+            cleanTranscript: "Cleaned."
+        )
+        mockRepo.dictations = [dictation]
+        viewModel.configure(dictationRepo: mockRepo)
+
+        // Undo
+        viewModel.toggleDisplayRawTranscript(for: dictation)
+        // Reload picks up the mutated row from the mock
+        var current = viewModel.groupedDictations.flatMap(\.1).first { $0.id == dictation.id }
+        XCTAssertEqual(current?.displayRawTranscript, true)
+
+        // Re-apply
+        viewModel.toggleDisplayRawTranscript(for: current!)
+        current = viewModel.groupedDictations.flatMap(\.1).first { $0.id == dictation.id }
+        XCTAssertEqual(current?.displayRawTranscript, false)
+        XCTAssertEqual(current?.displayText, "Cleaned.")
+    }
+
+    func testToggleDisplayRawTranscriptIsNoOpWithoutAIEdit() {
+        // No cleanTranscript == no AI edit to undo. The toggle should refuse
+        // to act so the UI never lands in a state where "Undo AI edit" toggles
+        // a meaningless flag.
+        let dictation = Dictation(
+            durationMs: 1000,
+            rawTranscript: "raw only"
+        )
+        mockRepo.dictations = [dictation]
+        viewModel.configure(dictationRepo: mockRepo)
+
+        viewModel.toggleDisplayRawTranscript(for: dictation)
+
+        XCTAssertTrue(mockRepo.setDisplayRawTranscriptCalls.isEmpty, "Should not call repo when there's no AI edit to undo")
+    }
+
     // MARK: - Helpers
 
     private func totalDictationCount() -> Int {

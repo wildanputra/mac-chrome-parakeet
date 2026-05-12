@@ -291,7 +291,8 @@ final class MenuBarCoordinator: NSObject, NSMenuDelegate {
         guard let env = environmentProvider() else { return }
         Task {
             guard let dictation = (try? env.dictationRepo.fetchAll(limit: 1))?.first else { return }
-            let text = dictation.cleanTranscript ?? dictation.rawTranscript
+            // displayText honors the per-row "Undo AI edit" override.
+            let text = dictation.displayText
             await pasteFromMenu(text: text, clipboardService: env.clipboardService)
         }
     }
@@ -301,7 +302,7 @@ final class MenuBarCoordinator: NSObject, NSMenuDelegate {
               let id = sender.representedObject as? UUID else { return }
         Task {
             guard let dictation = try? env.dictationRepo.fetch(id: id) else { return }
-            let text = dictation.cleanTranscript ?? dictation.rawTranscript
+            let text = dictation.displayText
             await pasteFromMenu(text: text, clipboardService: env.clipboardService)
         }
     }
@@ -380,7 +381,7 @@ final class MenuBarCoordinator: NSObject, NSMenuDelegate {
 
         let submenu = NSMenu()
         for dictation in dictations {
-            let text = (dictation.cleanTranscript ?? dictation.rawTranscript)
+            let text = dictation.displayText
                 .replacingOccurrences(of: "\n", with: " ")
             let truncated = text.count > 40 ? String(text.prefix(40)) + "…" : text
             let item = NSMenuItem(

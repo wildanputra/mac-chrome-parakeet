@@ -21,6 +21,13 @@ public struct Dictation: Codable, Identifiable, Sendable {
     /// Engine-specific model variant id (e.g. the Whisper model id).
     /// `nil` for engines without variants and for legacy rows.
     public var engineVariant: String?
+    /// "Undo AI edit" toggle. When `true`, surfaces (`displayText`, history
+    /// copy, recent-paste menu, export) show `rawTranscript` even when a
+    /// `cleanTranscript` exists. Reversible — flipping back to `false`
+    /// restores the AI-edited text without recomputing it. Defaults to
+    /// `false` for new rows and for legacy rows backfilled by the
+    /// `v0.12-dictation-display-raw` migration.
+    public var displayRawTranscript: Bool
 
     public enum ProcessingMode: String, Codable, Sendable {
         case raw
@@ -65,7 +72,8 @@ public struct Dictation: Codable, Identifiable, Sendable {
         hidden: Bool = false,
         wordCount: Int = 0,
         engine: String? = nil,
-        engineVariant: String? = nil
+        engineVariant: String? = nil,
+        displayRawTranscript: Bool = false
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -82,6 +90,68 @@ public struct Dictation: Codable, Identifiable, Sendable {
         self.wordCount = wordCount
         self.engine = engine
         self.engineVariant = engineVariant
+        self.displayRawTranscript = displayRawTranscript
+    }
+
+    // MARK: - Codable
+
+    private enum CodingKeys: String, CodingKey {
+        case id, createdAt, durationMs, rawTranscript, cleanTranscript
+        case audioPath, pastedToApp, processingMode, status, errorMessage
+        case updatedAt, hidden, wordCount, engine, engineVariant
+        case displayRawTranscript
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        durationMs = try container.decode(Int.self, forKey: .durationMs)
+        rawTranscript = try container.decode(String.self, forKey: .rawTranscript)
+        cleanTranscript = try container.decodeIfPresent(String.self, forKey: .cleanTranscript)
+        audioPath = try container.decodeIfPresent(String.self, forKey: .audioPath)
+        pastedToApp = try container.decodeIfPresent(String.self, forKey: .pastedToApp)
+        processingMode = try container.decode(ProcessingMode.self, forKey: .processingMode)
+        status = try container.decode(DictationStatus.self, forKey: .status)
+        errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        hidden = try container.decode(Bool.self, forKey: .hidden)
+        wordCount = try container.decode(Int.self, forKey: .wordCount)
+        engine = try container.decodeIfPresent(String.self, forKey: .engine)
+        engineVariant = try container.decodeIfPresent(String.self, forKey: .engineVariant)
+        // Decode-if-present so legacy serialized snapshots (in-flight Codable
+        // payloads, tests) round-trip without explicitly setting the field.
+        displayRawTranscript = try container.decodeIfPresent(Bool.self, forKey: .displayRawTranscript) ?? false
+    }
+}
+
+// MARK: - Display helpers
+
+public extension Dictation {
+    /// Text shown in history, copied to the clipboard from history, pasted by
+    /// the menu-bar "recent dictations" submenu, and exported. Honors the
+    /// `displayRawTranscript` override added by the "Undo AI edit" feature.
+    ///
+    /// When `displayRawTranscript == true`, callers see `rawTranscript` even
+    /// if a `cleanTranscript` exists — the cleaned version is preserved on the
+    /// row so the override is reversible.
+    var displayText: String {
+        if displayRawTranscript {
+            return rawTranscript
+        }
+        return cleanTranscript ?? rawTranscript
+    }
+
+    /// True when the dictation has an AI-edited / deterministically-cleaned
+    /// version that differs from the raw STT output. Drives whether the
+    /// "Undo AI edit" affordance is offered on a row.
+    ///
+    /// `processingMode` isn't checked here — what matters is "is there a
+    /// distinct cleaned version we could revert from?" not "what mode was
+    /// selected at capture time."
+    var hasAIEdit: Bool {
+        guard let clean = cleanTranscript else { return false }
+        return clean != rawTranscript
     }
 }
 
@@ -108,5 +178,6 @@ extension Dictation: FetchableRecord, PersistableRecord {
         case id, createdAt, durationMs, rawTranscript, cleanTranscript
         case audioPath, pastedToApp, processingMode, status, errorMessage, updatedAt
         case hidden, wordCount, engine, engineVariant
+        case displayRawTranscript
     }
 }

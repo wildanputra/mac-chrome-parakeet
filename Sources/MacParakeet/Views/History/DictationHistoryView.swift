@@ -141,7 +141,8 @@ struct DictationHistoryView: View {
                             onDelete: {
                                 viewModel.pendingDeleteDictation = dictation
                             },
-                            onDownloadAudio: { viewModel.downloadAudio(for: dictation) }
+                            onDownloadAudio: { viewModel.downloadAudio(for: dictation) },
+                            onToggleAIEdit: { viewModel.toggleDisplayRawTranscript(for: dictation) }
                         )
                         .padding(.horizontal, DesignSystem.Spacing.lg)
                         .padding(.bottom, DesignSystem.Spacing.sm)
@@ -188,7 +189,7 @@ struct DictationHistoryView: View {
             }
             .buttonStyle(.plain)
 
-            Text(dictation.cleanTranscript ?? dictation.rawTranscript)
+            Text(dictation.displayText)
                 .lineLimit(1)
                 .font(DesignSystem.Typography.body)
                 .foregroundStyle(.primary)
@@ -243,6 +244,7 @@ struct DictationCardRow: View {
     var onCopy: () -> Void
     var onDelete: () -> Void
     var onDownloadAudio: (() -> Void)?
+    var onToggleAIEdit: (() -> Void)?
 
     @State private var isHovered = false
 
@@ -287,6 +289,18 @@ struct DictationCardRow: View {
                             .padding(.horizontal, 5)
                             .padding(.vertical, 2)
                             .background(Capsule().fill(DesignSystem.Colors.successGreen.opacity(0.12)))
+                    } else if dictation.displayRawTranscript && dictation.hasAIEdit {
+                        // Subtle "raw" affordance so users can see at a glance
+                        // which rows are showing the un-AI-edited transcript.
+                        // Muted styling (not coral/green) to keep the row calm
+                        // — this is a state indicator, not a CTA.
+                        Text("Raw")
+                            .font(DesignSystem.Typography.micro)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.primary.opacity(0.06)))
+                            .accessibilityLabel("Showing raw transcript")
                     }
                 }
 
@@ -310,8 +324,11 @@ struct DictationCardRow: View {
 
                     CardMenuButton(
                         hasAudio: dictation.audioPath != nil,
+                        hasAIEdit: dictation.hasAIEdit,
+                        isShowingRaw: dictation.displayRawTranscript,
                         onDownloadAudio: { onDownloadAudio?() },
-                        onDelete: { onDelete() }
+                        onDelete: { onDelete() },
+                        onToggleAIEdit: { onToggleAIEdit?() }
                     )
                 }
             }
@@ -350,7 +367,7 @@ struct DictationCardRow: View {
     // MARK: - Highlighted Transcript
 
     private var highlightedTranscript: AttributedString {
-        let text = dictation.cleanTranscript ?? dictation.rawTranscript
+        let text = dictation.displayText
         let attributed = NSMutableAttributedString(string: text)
 
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -422,8 +439,11 @@ private struct CardActionButton: View {
 
 private struct CardMenuButton: View {
     let hasAudio: Bool
+    let hasAIEdit: Bool
+    let isShowingRaw: Bool
     let onDownloadAudio: () -> Void
     let onDelete: () -> Void
+    let onToggleAIEdit: () -> Void
 
     var body: some View {
         CardActionButton(icon: "ellipsis", color: .secondary) {
@@ -437,6 +457,18 @@ private struct CardMenuButton: View {
         if hasAudio {
             let downloadAction = onDownloadAudio
             menu.addItem(CallbackMenuItem(title: "Export Audio", icon: "square.and.arrow.up", action: downloadAction))
+        }
+
+        // Undo AI edit: only present rows whose cleaned text actually differs
+        // from the raw STT output. Label flips so the menu item describes the
+        // next action, not the current state.
+        if hasAIEdit {
+            let title = isShowingRaw ? "Re-apply AI edit" : "Undo AI edit"
+            let icon = isShowingRaw ? "wand.and.stars" : "arrow.uturn.backward"
+            menu.addItem(CallbackMenuItem(title: title, icon: icon, action: onToggleAIEdit))
+        }
+
+        if !menu.items.isEmpty {
             menu.addItem(.separator())
         }
 

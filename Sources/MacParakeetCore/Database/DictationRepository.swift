@@ -16,6 +16,17 @@ public protocol DictationRepositoryProtocol: Sendable {
     /// Symmetric counterpart to `deleteAll()` (rows deleted, stats preserved).
     func resetLifetimeStats() throws
 
+    /// "Undo AI edit" toggle. Persists the per-row `displayRawTranscript`
+    /// override that controls whether downstream surfaces display
+    /// `rawTranscript` over `cleanTranscript`. Does not touch lifetime/daily
+    /// stats — the dictation's `durationMs` / `wordCount` are unchanged and a
+    /// view-only flag should not perturb counters.
+    ///
+    /// Returns `true` if the row was found and updated, `false` if no
+    /// matching dictation exists.
+    @discardableResult
+    func setDisplayRawTranscript(id: UUID, value: Bool) throws -> Bool
+
     // Daily rollup reads (Stats tab). The rollup is private write-side state —
     // only the read surface is exposed here. Conformers MUST implement these
     // explicitly: no default no-op implementations, because a "silently returns
@@ -257,6 +268,26 @@ public final class DictationRepository: DictationRepositoryProtocol {
     public func deleteHidden() throws {
         try dbQueue.write { db in
             try db.execute(sql: "DELETE FROM dictations WHERE hidden = 1")
+        }
+    }
+
+    /// Persists the per-row `displayRawTranscript` override ("Undo AI edit").
+    /// Uses GRDB's keyed update path (not raw SQL with UUID) per the project
+    /// gotcha note in CLAUDE.md: GRDB stores UUIDs via Codable encoding which
+    /// can differ from `uuidString`. Also bumps `updatedAt` so the change is
+    /// reflected if anything downstream sorts by it.
+    @discardableResult
+    public func setDisplayRawTranscript(id: UUID, value: Bool) throws -> Bool {
+        try dbQueue.write { db in
+            guard var dictation = try Dictation.fetchOne(db, key: id) else {
+                return false
+            }
+            // No-op short-circuit so we don't bump updatedAt for repeat clicks.
+            guard dictation.displayRawTranscript != value else { return true }
+            dictation.displayRawTranscript = value
+            dictation.updatedAt = Date()
+            try dictation.update(db)
+            return true
         }
     }
 

@@ -625,6 +625,21 @@ public final class DatabaseManager: Sendable {
             try DictationRepository.backfillDailyStats(db: db)
         }
 
+        // v0.12 — "Undo AI edit" per-row override. When true, history /
+        // history-copy / menu-bar-paste / export surfaces show `rawTranscript`
+        // even if `cleanTranscript` is non-nil. Reversible — the cleaned
+        // value stays on the row. Pre-check column existence so a hand-restored
+        // DB (or one whose grdb_migrations row was lost) doesn't fail with
+        // `duplicate column` on re-run.
+        migrator.registerMigration("v0.12-dictation-display-raw") { db in
+            let existingColumns = try db.columns(in: "dictations").map(\.name)
+            if !existingColumns.contains("displayRawTranscript") {
+                try db.alter(table: "dictations") { t in
+                    t.add(column: "displayRawTranscript", .boolean).notNull().defaults(to: false)
+                }
+            }
+        }
+
         try migrator.migrate(dbQueue)
         try reconcileBuiltInPrompts()
         try reconcileBuiltInQuickPrompts()

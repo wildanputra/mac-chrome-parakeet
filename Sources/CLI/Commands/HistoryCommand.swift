@@ -60,7 +60,9 @@ struct DictationsSubcommand: ParsableCommand {
             for d in dictations {
                 let date = formatter.string(from: d.createdAt)
                 let seconds = d.durationMs / 1000
-                let text = d.cleanTranscript ?? d.rawTranscript
+                // displayText honors the per-row "Undo AI edit" override so
+                // the CLI matches what the GUI shows for the same row.
+                let text = d.displayText
                 let preview = text.count > 80 ? String(text.prefix(80)) + "..." : text
                 print("[\(date)] (\(seconds)s) \(preview)  (\(d.id.uuidString.prefix(8)))")
             }
@@ -168,7 +170,7 @@ struct SearchSubcommand: ParsableCommand {
 
             for d in results {
                 let date = formatter.string(from: d.createdAt)
-                let text = d.cleanTranscript ?? d.rawTranscript
+                let text = d.displayText
                 let preview = text.count > 80 ? String(text.prefix(80)) + "..." : text
                 print("[\(date)] \(preview)")
             }
