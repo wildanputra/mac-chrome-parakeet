@@ -114,6 +114,40 @@ final class SelectionCaptureServiceTests: XCTestCase {
         XCTAssertEqual(snapshot.originalChangeCount, 7)
         XCTAssertEqual(snapshot.items?.count, 1)
     }
+
+    /// Regression: when Cmd+C moves `changeCount` but the resulting
+    /// pasteboard content isn't text (image, file, etc.), the service used
+    /// to return `.empty` without restoring the snapshot — silently
+    /// destroying the user's pre-hijack clipboard. The fix restores the
+    /// snapshot before bailing.
+    func testCaptureRestoresClipboardWhenChangeMovedButNoText() async {
+        let placeholder = NSPasteboardItem()
+        placeholder.setString("original-user-content", forType: .string)
+        let backend = FakeSelectionCaptureBackend(
+            isTrusted: true,
+            focusedElement: AXUIElementCreateSystemWide(),
+            selectedText: nil,
+            initialChangeCount: 4,
+            snapshotItems: [placeholder],
+            pasteboardAfterCmdC: nil,           // image/file → no text
+            changeCountAfterCmdC: 5             // but Cmd+C did write something
+        )
+        let service = SelectionCaptureService(
+            backend: backend,
+            clipboardPollTimeout: .milliseconds(60),
+            pollIntervalNanos: 1_000_000
+        )
+
+        let result = await service.captureSelection()
+
+        switch result {
+        case .empty:
+            break
+        default:
+            XCTFail("Expected .empty, got \(result.pathTag)")
+        }
+        XCTAssertEqual(backend.restoreCount(), 1, "Snapshot must be restored — user's pre-hijack clipboard had non-text content we'd otherwise have lost")
+    }
 }
 
 // MARK: - Fake Backend
@@ -126,6 +160,7 @@ final class FakeSelectionCaptureBackend: SelectionCaptureBackend, @unchecked Sen
     private let pasteboardAfterCmdC: String?
     private let changeCountAfterCmdC: Int?
     private let snapshotItems: [NSPasteboardItem]?
+    private var restoreCalls: Int = 0
 
     init(
         isTrusted: Bool,
@@ -170,4 +205,11 @@ final class FakeSelectionCaptureBackend: SelectionCaptureBackend, @unchecked Sen
             changeCount = newCount
         }
     }
+
+    @MainActor
+    func restoreSnapshot(_ snapshot: PasteboardSnapshot) {
+        restoreCalls += 1
+    }
+
+    func restoreCount() -> Int { restoreCalls }
 }

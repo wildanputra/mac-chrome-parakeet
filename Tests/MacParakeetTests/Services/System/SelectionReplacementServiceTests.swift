@@ -94,6 +94,29 @@ final class SelectionReplacementServiceTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
     }
+
+    /// Regression: if the user copies content during the post-paste window,
+    /// we must NOT restore the saved snapshot — that would silently destroy
+    /// what they just put on the clipboard. The fix gates `restoreSnapshot`
+    /// on `currentChangeCount() == ourChangeCount`.
+    func testReplaceSkipsRestoreWhenUserCopiesMidTransform() async throws {
+        let backend = FakeSelectionReplacementBackend(
+            isTrusted: true,
+            axWriteSucceeds: false,
+            pasteboardWriteSucceeds: true,
+            simulateUserCopyAfterWrite: true
+        )
+        let service = SelectionReplacementService(backend: backend, postPasteDelay: .milliseconds(1))
+        let snapshot = PasteboardSnapshot(items: nil, originalChangeCount: 42)
+
+        _ = try await service.replace(
+            with: "polished",
+            in: .clipboard(text: "raw", savedClipboard: snapshot)
+        )
+
+        XCTAssertEqual(backend.cmdVPostCount(), 1, "Paste should still happen — we only suppress restore")
+        XCTAssertEqual(backend.restoreCount(), 0, "Restore must be skipped — user wrote to clipboard mid-transform")
+    }
 }
 
 // MARK: - Fake Backend
@@ -104,6 +127,7 @@ final class FakeSelectionReplacementBackend: SelectionReplacementBackend, @unche
     private let trusted: Bool
     private let axWriteSucceedsValue: Bool
     private let pasteboardWriteSucceedsValue: Bool
+    private let simulateUserCopyAfterWrite: Bool
     private let lock = OSAllocatedUnfairLock<State>(initialState: State())
 
     private struct State {
@@ -111,16 +135,24 @@ final class FakeSelectionReplacementBackend: SelectionReplacementBackend, @unche
         var clipboardTexts: [String] = []
         var cmdVPosts: Int = 0
         var restoreSnapshots: [PasteboardSnapshot] = []
+        /// Simulated pasteboard changeCount. Bumped on `writePasteboardString`
+        /// (mirroring `setString`'s behavior in production) and optionally
+        /// bumped a second time on the second `currentChangeCount` read to
+        /// simulate a concurrent user copy mid-transform.
+        var changeCount: Int = 0
+        var currentChangeCountCallNumber: Int = 0
     }
 
     init(
         isTrusted: Bool,
         axWriteSucceeds: Bool = false,
-        pasteboardWriteSucceeds: Bool = true
+        pasteboardWriteSucceeds: Bool = true,
+        simulateUserCopyAfterWrite: Bool = false
     ) {
         self.trusted = isTrusted
         self.axWriteSucceedsValue = axWriteSucceeds
         self.pasteboardWriteSucceedsValue = pasteboardWriteSucceeds
+        self.simulateUserCopyAfterWrite = simulateUserCopyAfterWrite
     }
 
     func isAccessibilityTrusted() -> Bool { trusted }
@@ -132,13 +164,34 @@ final class FakeSelectionReplacementBackend: SelectionReplacementBackend, @unche
 
     @MainActor
     func writePasteboardString(_ text: String) -> Bool {
-        lock.withLock { $0.clipboardTexts.append(text) }
+        lock.withLock { state in
+            state.clipboardTexts.append(text)
+            if pasteboardWriteSucceedsValue {
+                state.changeCount += 1
+            }
+        }
         return pasteboardWriteSucceedsValue
     }
 
     @MainActor
     func postCmdV() throws {
         lock.withLock { $0.cmdVPosts += 1 }
+    }
+
+    @MainActor
+    func currentChangeCount() -> Int {
+        let simulateBump = simulateUserCopyAfterWrite
+        return lock.withLock { state in
+            state.currentChangeCountCallNumber += 1
+            // Service reads currentChangeCount twice: once right after our
+            // own write (to capture ourChangeCount) and once during the
+            // restore check. The simulated "user copied mid-transform"
+            // scenario bumps on the second call.
+            if simulateBump && state.currentChangeCountCallNumber >= 2 {
+                return state.changeCount + 1
+            }
+            return state.changeCount
+        }
     }
 
     @MainActor

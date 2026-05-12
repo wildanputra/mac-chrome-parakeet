@@ -118,6 +118,13 @@ protocol SelectionCaptureBackend: Sendable {
     /// Post a synthetic Cmd+C event pair.
     @MainActor
     func postCmdC() throws
+
+    /// Restore a previously-captured pasteboard snapshot. Called when the
+    /// hijack succeeded in moving the change count but didn't yield text
+    /// content (image / file etc.) — without this, the user's pre-hijack
+    /// clipboard is silently destroyed.
+    @MainActor
+    func restoreSnapshot(_ snapshot: PasteboardSnapshot)
 }
 
 // MARK: - Service
@@ -196,20 +203,26 @@ public actor SelectionCaptureService {
         // with the pasteboard mutating mid-Cmd+C.
         let deadline = ContinuousClock.now + clipboardPollTimeout
         while ContinuousClock.now < deadline {
+            if Task.isCancelled {
+                await restoreSnapshotOnMain(snapshot)
+                return .empty
+            }
             let now = await currentChangeCountOnMain()
             if now != snapshot.originalChangeCount {
                 if let text = await currentStringOnMain(), !text.isEmpty {
                     return .clipboard(text: text, savedClipboard: snapshot)
                 }
                 // Change count moved but no string available (image, file, etc.).
-                // Restore snapshot ourselves and treat as empty — there's
-                // nothing for the LLM to transform.
+                // Cmd+C *did* write — the user's pre-hijack clipboard is now
+                // gone unless we put it back. Restore before bailing.
+                await restoreSnapshotOnMain(snapshot)
                 return .empty
             }
             try? await Task.sleep(nanoseconds: pollIntervalNanos)
         }
 
-        // No change count delta — selection was empty.
+        // No change count delta — selection was empty. Pasteboard wasn't
+        // touched (Cmd+C with no selection is a no-op) so nothing to restore.
         return .empty
     }
 
@@ -231,6 +244,11 @@ public actor SelectionCaptureService {
     @MainActor
     private func postCmdCOnMain() throws {
         try backend.postCmdC()
+    }
+
+    @MainActor
+    private func restoreSnapshotOnMain(_ snapshot: PasteboardSnapshot) {
+        backend.restoreSnapshot(snapshot)
     }
 }
 
@@ -317,5 +335,15 @@ struct SystemSelectionCaptureBackend: SelectionCaptureBackend, @unchecked Sendab
         keyUp.flags = .maskCommand
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
+    }
+
+    @MainActor
+    func restoreSnapshot(_ snapshot: PasteboardSnapshot) {
+        guard let items = snapshot.items, !items.isEmpty else {
+            pasteboard.clearContents()
+            return
+        }
+        pasteboard.clearContents()
+        pasteboard.writeObjects(items)
     }
 }

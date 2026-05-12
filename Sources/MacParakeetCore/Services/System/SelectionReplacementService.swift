@@ -40,9 +40,14 @@ public enum SelectionReplacementError: Error, LocalizedError, Sendable {
 
 protocol SelectionReplacementBackend: Sendable {
     func isAccessibilityTrusted() -> Bool
-    /// Attempt to write the new text via AX. Returns `true` on success
-    /// (set + verifying read-back returned the same text). Returns `false`
-    /// when AX rejects the write or the read-back doesn't match.
+    /// Attempt to write the new text via AX. Returns `true` when
+    /// `AXUIElementSetAttributeValue(kAXSelectedTextAttribute, …)` returns
+    /// `.success`. We deliberately do NOT verify via a re-read: substring
+    /// "contains" verification false-positives when the inserted text
+    /// already appeared elsewhere in the field, and reading `kAXValue` is
+    /// brittle (many web/Electron fields don't expose it). Apps where AX
+    /// claims success but doesn't actually update will surface in the smoke
+    /// matrix and we'll fall back to clipboard-paste for those.
     func writeSelectionViaAX(_ text: String, element: AXUIElement) -> Bool
 
     @MainActor
@@ -50,6 +55,13 @@ protocol SelectionReplacementBackend: Sendable {
 
     @MainActor
     func postCmdV() throws
+
+    /// Current `NSPasteboard.changeCount`. Used by the restore guard to
+    /// detect whether the user copied something else during the
+    /// paste-and-restore window — if so, we preserve their newer content
+    /// instead of clobbering it with our stale snapshot.
+    @MainActor
+    func currentChangeCount() -> Int
 
     @MainActor
     func restoreSnapshot(_ snapshot: PasteboardSnapshot)
@@ -138,9 +150,15 @@ public actor SelectionReplacementService {
         newText: String,
         snapshot: PasteboardSnapshot
     ) async throws {
-        let pasteboardWriteSucceeded = await writePasteboardStringOnMain(newText)
-        guard pasteboardWriteSucceeded else {
-            // Try to put the user's clipboard back even on this failure.
+        // Write our payload and capture the changeCount *after* the write —
+        // that's the value the restore guard compares against. If anyone
+        // else (the user) writes to the clipboard between now and the
+        // restore step, the count will be higher and we'll preserve their
+        // newer content instead of clobbering it.
+        guard let ourChangeCount = await writeAndCaptureChangeCountOnMain(newText) else {
+            // Write failed before we put anything user-relevant on the
+            // clipboard. Restore unconditionally — we may have already
+            // called clearContents().
             await restoreSnapshotOnMain(snapshot)
             throw SelectionReplacementError.pasteboardWriteFailed
         }
@@ -148,10 +166,10 @@ public actor SelectionReplacementService {
         do {
             try await postCmdVOnMain()
         } catch let error as SelectionReplacementError {
-            await restoreSnapshotOnMain(snapshot)
+            await restoreIfSafe(snapshot, ourChangeCount: ourChangeCount)
             throw error
         } catch {
-            await restoreSnapshotOnMain(snapshot)
+            await restoreIfSafe(snapshot, ourChangeCount: ourChangeCount)
             throw SelectionReplacementError.eventPostingFailed
         }
 
@@ -159,12 +177,13 @@ public actor SelectionReplacementService {
         // saved snapshot. Short enough that the user doesn't see a stale
         // pasteboard, long enough that slow apps (Slack, Mail) finish.
         try? await Task.sleep(for: postPasteDelay)
-        await restoreSnapshotOnMain(snapshot)
+        await restoreIfSafe(snapshot, ourChangeCount: ourChangeCount)
     }
 
     @MainActor
-    private func writePasteboardStringOnMain(_ text: String) -> Bool {
-        backend.writePasteboardString(text)
+    private func writeAndCaptureChangeCountOnMain(_ text: String) -> Int? {
+        guard backend.writePasteboardString(text) else { return nil }
+        return backend.currentChangeCount()
     }
 
     @MainActor
@@ -175,6 +194,24 @@ public actor SelectionReplacementService {
     @MainActor
     private func restoreSnapshotOnMain(_ snapshot: PasteboardSnapshot) {
         backend.restoreSnapshot(snapshot)
+    }
+
+    /// Only restore the saved snapshot if the pasteboard's changeCount is
+    /// still the one we set when we wrote our paste payload. A higher count
+    /// means the user copied something else during our paste window — we
+    /// preserve their content rather than reverting to our stale snapshot.
+    private func restoreIfSafe(_ snapshot: PasteboardSnapshot, ourChangeCount: Int) async {
+        let now = await currentChangeCountOnMain()
+        if now == ourChangeCount {
+            await restoreSnapshotOnMain(snapshot)
+        } else {
+            logger.notice("transforms-spike: skipping clipboard restore — user copied content mid-transform (ours=\(ourChangeCount, privacy: .public), now=\(now, privacy: .public))")
+        }
+    }
+
+    @MainActor
+    private func currentChangeCountOnMain() -> Int {
+        backend.currentChangeCount()
     }
 }
 
@@ -195,34 +232,32 @@ struct SystemSelectionReplacementBackend: SelectionReplacementBackend, @unchecke
     }
 
     func writeSelectionViaAX(_ text: String, element: AXUIElement) -> Bool {
+        // Trust the AX setStatus directly. The earlier post-write
+        // `value.contains(text)` verification looked safer but actually
+        // false-positively reported success whenever the inserted text
+        // already appeared anywhere else in the field — masking a real
+        // AX-write failure and skipping the clipboard fallback that would
+        // have worked. Apps that silently accept-and-discard
+        // `kAXSelectedTextAttribute` writes will show up in the smoke matrix
+        // as "AX capture Y, AX write Y, selection wasn't actually replaced"
+        // and we'll downgrade those to clipboard-only in Phase 2.
         let setStatus = AXUIElementSetAttributeValue(
             element,
             kAXSelectedTextAttribute as CFString,
             text as CFString
         )
-        guard setStatus == .success else {
-            return false
-        }
-        // Verify by reading back the value attribute (best-effort — if the
-        // field doesn't expose `kAXValue`, we just trust the set succeeded).
-        var raw: CFTypeRef?
-        let readStatus = AXUIElementCopyAttributeValue(
-            element,
-            kAXValueAttribute as CFString,
-            &raw
-        )
-        if readStatus == .success, let raw, let value = raw as? String {
-            // The field's full value should *contain* the inserted text. Equality
-            // is too strict because the host app may already have surrounding text.
-            return value.contains(text) || value == text
-        }
-        return true
+        return setStatus == .success
     }
 
     @MainActor
     func writePasteboardString(_ text: String) -> Bool {
         pasteboard.clearContents()
         return pasteboard.setString(text, forType: .string)
+    }
+
+    @MainActor
+    func currentChangeCount() -> Int {
+        pasteboard.changeCount
     }
 
     @MainActor

@@ -27,6 +27,13 @@ final class TransformsSpikeCoordinator {
     private var panelController: TransformSpikeProgressPanelController?
     private var executor: TransformExecutor?
     private var inFlightTask: Task<Void, Never>?
+    /// Per-run identity for the cancellation guard. When the user re-triggers
+    /// the hotkey mid-flight we cancel the old `inFlightTask` and start a
+    /// new one — but the old task's terminal `do/catch` may still run after
+    /// cancellation lands, and without this guard it would close the *new*
+    /// run's panel and nil out the new `inFlightTask`. Every UI / state
+    /// mutation in the task body is gated on `activeRunID == myRunID`.
+    private var activeRunID: UUID?
 
     init(llmServiceProvider: @escaping () -> LLMServiceProtocol?) {
         self.llmServiceProvider = llmServiceProvider
@@ -86,23 +93,43 @@ final class TransformsSpikeCoordinator {
         let executor = TransformExecutor(llmService: llmService)
         self.executor = executor
 
+        let runID = UUID()
+        activeRunID = runID
+
         panelController?.show(label: "Polishing…")
 
         inFlightTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer {
+                // Only clear `inFlightTask` if this run is still the active
+                // one. Otherwise the new run's task pointer (set by the
+                // outer code that started it) would be nil'd out by our
+                // late completion.
+                if self.activeRunID == runID {
+                    self.inFlightTask = nil
+                }
+            }
             do {
                 _ = try await executor.run(
                     prompt: TransformSpikePrompts.polish,
                     onProgress: { [weak self] progress in
                         // Progress callback fires on the executor's actor
-                        // context. Hop to main for any UI updates.
-                        Task { @MainActor [weak self] in
-                            self?.handleProgress(progress)
+                        // context. Hop to main only when the UI cares —
+                        // the spike's UI only reacts to terminal `.failed`
+                        // events. Spawning a Task per LLM-streaming token
+                        // would be wasteful (and the bot reviewers flagged
+                        // it).
+                        if case .failed = progress {
+                            Task { @MainActor [weak self] in
+                                self?.handleProgress(progress)
+                            }
                         }
                     }
                 )
+                guard self.activeRunID == runID else { return }
                 self.panelController?.done(message: "Done")
             } catch let error as TransformExecutorError {
+                guard self.activeRunID == runID else { return }
                 switch error {
                 case .cancelled:
                     self.panelController?.close()
@@ -110,9 +137,9 @@ final class TransformsSpikeCoordinator {
                     self.panelController?.fail(message: error.localizedDescription)
                 }
             } catch {
+                guard self.activeRunID == runID else { return }
                 self.panelController?.fail(message: error.localizedDescription)
             }
-            self.inFlightTask = nil
         }
     }
 

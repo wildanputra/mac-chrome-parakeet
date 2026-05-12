@@ -175,6 +175,18 @@ public actor TransformExecutor {
         onProgress(.llmCompleted(accumulated))
 
         // 3. Replace.
+        //
+        // Final cancellation gate. Past this point the replace+restore path
+        // is *not* honored mid-flight: aborting once we've written the new
+        // text to the clipboard and posted Cmd+V leaves the host app in a
+        // partial state (paste happened, restore didn't), so we run replace
+        // to completion and only honor cancel before it begins.
+        do {
+            try Task.checkCancellation()
+        } catch {
+            onProgress(.failed(TransformExecutorError.cancelled.localizedDescription))
+            throw TransformExecutorError.cancelled
+        }
         onProgress(.pasting)
         let path: SelectionReplacementPath
         do {
