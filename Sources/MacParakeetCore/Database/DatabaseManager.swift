@@ -607,6 +607,24 @@ public final class DatabaseManager: Sendable {
             """)
         }
 
+        // v0.11 — Per-day dictation rollup (Stats tab heatmap, current/longest
+        // streak). Keyed by local-calendar day so the heatmap reflects what the
+        // user actually experienced. Survives `Clear History` for the same
+        // reason `lifetime_dictation_stats` does (issue #124) — the user can
+        // wipe transcripts without losing their streak. Backfilled from
+        // existing completed rows in Swift so we use `Calendar.current` rather
+        // than SQLite's UTC-leaning `date()` function.
+        migrator.registerMigration("v0.11-daily-dictation-stats") { db in
+            try db.create(table: "daily_dictation_stats") { t in
+                t.column("day", .text).primaryKey()       // YYYY-MM-DD, local day
+                t.column("count", .integer).notNull().defaults(to: 0)
+                t.column("words", .integer).notNull().defaults(to: 0)
+                t.column("durationMs", .integer).notNull().defaults(to: 0)
+                t.column("updatedAt", .text).notNull()
+            }
+            try DictationRepository.backfillDailyStats(db: db)
+        }
+
         try migrator.migrate(dbQueue)
         try reconcileBuiltInPrompts()
         try reconcileBuiltInQuickPrompts()

@@ -118,6 +118,11 @@ struct SettingsView: View {
                 activeTab: tabBindingExitingSearch,
                 tabBadges: tabBadges
             )
+            // The tab bar's labels are non-negotiable — when the window is
+            // narrow, the search field gives ground first. Without this
+            // priority, the HStack distributes width proportionally and the
+            // tab bar gets compressed alongside the search field.
+            .layoutPriority(1)
 
             Spacer(minLength: DesignSystem.Spacing.md)
 

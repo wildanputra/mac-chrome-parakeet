@@ -5,33 +5,37 @@ import MacParakeetViewModels
 
 struct DictationHistoryView: View {
     @Bindable var viewModel: DictationHistoryViewModel
-    @State private var isHistoryHeaderHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
-            if viewModel.groupedDictations.isEmpty {
-                historyHeader
-                    .padding(.horizontal, DesignSystem.Spacing.lg)
-                    .padding(.top, DesignSystem.Spacing.md)
-                    .padding(.bottom, DesignSystem.Spacing.sm)
-                emptyState
-            } else {
-                dictationList
-            }
+            subTabPicker
 
-            if let error = viewModel.playbackError {
-                playbackErrorBanner(error)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            Group {
+                switch viewModel.selectedSubTab {
+                case .history:
+                    historyTabContent
+                case .stats:
+                    DictationStatsView(viewModel: viewModel)
+                }
             }
+            .frame(maxHeight: .infinity)
 
-            if let playing = viewModel.playingDictation {
-                bottomBarPlayer(playing)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            // Playback chrome only applies on the History tab.
+            if viewModel.selectedSubTab == .history {
+                if let error = viewModel.playbackError {
+                    playbackErrorBanner(error)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                if let playing = viewModel.playingDictation {
+                    bottomBarPlayer(playing)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
         }
         .searchable(text: $viewModel.searchText, prompt: "Search dictations...")
         .animation(DesignSystem.Animation.contentSwap, value: viewModel.playingDictationId)
         .animation(DesignSystem.Animation.contentSwap, value: viewModel.playbackError != nil)
+        .animation(DesignSystem.Animation.contentSwap, value: viewModel.selectedSubTab)
         .alert(
             "Delete Dictation?",
             isPresented: Binding(
@@ -50,190 +54,27 @@ struct DictationHistoryView: View {
         }
     }
 
-    // MARK: - Stats Header
+    // MARK: - Sub-tab Picker
 
-    private var historyHeader: some View {
-        let stats = viewModel.stats
-
-        return VStack(alignment: .leading, spacing: 0) {
-            // Title row
-            HStack(alignment: .center, spacing: DesignSystem.Spacing.sm) {
-                BreathWaveLogo(size: 18, tint: DesignSystem.Colors.accent)
-                    .frame(width: 30, height: 30)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(DesignSystem.Colors.accent.opacity(0.12))
-                    )
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Your Voice Stats")
-                        .font(DesignSystem.Typography.sectionTitle)
-                    if stats.isEmpty {
-                        Text("Start dictating to see your stats")
-                            .font(DesignSystem.Typography.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Spacer()
-            }
-
-            // Stat cards
-            if !stats.isEmpty {
-                expandedStatsPanel(stats)
-            }
+    private var subTabPicker: some View {
+        HStack {
+            DictationSubTabPicker(selection: $viewModel.selectedSubTab)
+            Spacer()
         }
-        .padding(DesignSystem.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: DesignSystem.Layout.cardCornerRadius)
-                .fill(DesignSystem.Colors.cardBackground)
-                .cardShadow(isHistoryHeaderHovered ? DesignSystem.Shadows.cardHover : DesignSystem.Shadows.cardRest)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignSystem.Layout.cardCornerRadius)
-                .strokeBorder(
-                    isHistoryHeaderHovered ? DesignSystem.Colors.accent.opacity(0.2) : DesignSystem.Colors.border.opacity(0.6),
-                    lineWidth: 0.5
-                )
-        )
-        .onHover { hovering in
-            withAnimation(DesignSystem.Animation.hoverTransition) {
-                isHistoryHeaderHovered = hovering
-            }
-        }
+        .padding(.horizontal, DesignSystem.Spacing.lg)
+        .padding(.top, DesignSystem.Spacing.md)
+        .padding(.bottom, DesignSystem.Spacing.sm)
     }
 
-    // MARK: - Stats Panel
+    // MARK: - History Tab Content
 
-    private func expandedStatsPanel(_ stats: DictationStats) -> some View {
-        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
-            // 2x2 grid of stat cards
-            LazyVGrid(
-                columns: [
-                    GridItem(.flexible(), spacing: DesignSystem.Spacing.sm),
-                    GridItem(.flexible(), spacing: DesignSystem.Spacing.sm)
-                ],
-                spacing: DesignSystem.Spacing.sm
-            ) {
-                statCard(
-                    label: "TOTAL WORDS",
-                    value: stats.totalWords.compactFormatted,
-                    subtitle: wordsComparison(stats),
-                    icon: "text.word.spacing"
-                )
-                statCard(
-                    label: "TIME SPEAKING",
-                    value: stats.totalDurationMs.friendlyDuration,
-                    subtitle: "\(stats.totalCount) dictation\(stats.totalCount == 1 ? "" : "s")",
-                    icon: "clock"
-                )
-                statCard(
-                    label: "VOICE SPEED",
-                    value: stats.averageWPM.formattedWPM,
-                    subtitle: wpmComparison(stats.averageWPM),
-                    icon: "gauge.with.dots.needle.33percent"
-                )
-                statCard(
-                    label: "TIME SAVED",
-                    value: stats.timeSavedMs.friendlyDuration,
-                    subtitle: "vs typing at 40 WPM",
-                    icon: "bolt"
-                )
-            }
-
-            // Streak / this week row
-            if stats.weeklyStreak > 0 || stats.dictationsThisWeek > 0 {
-                HStack(spacing: DesignSystem.Spacing.sm) {
-                    if stats.weeklyStreak > 1 {
-                        Label("\(stats.weeklyStreak)-week streak", systemImage: "flame.fill")
-                            .font(DesignSystem.Typography.caption.weight(.medium))
-                            .foregroundStyle(DesignSystem.Colors.accent)
-                    }
-                    if stats.dictationsThisWeek > 0 {
-                        Text("\(stats.dictationsThisWeek) this week")
-                            .font(DesignSystem.Typography.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-            }
-
-            // Fun comparison banner
-            if let banner = funComparisonBanner(stats) {
-                HStack(spacing: DesignSystem.Spacing.sm) {
-                    Text(banner)
-                        .font(DesignSystem.Typography.caption.weight(.medium))
-                        .foregroundStyle(DesignSystem.Colors.accent)
-                    Spacer()
-                }
-                .padding(.horizontal, DesignSystem.Spacing.md)
-                .padding(.vertical, DesignSystem.Spacing.sm)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(DesignSystem.Colors.accent.opacity(0.08))
-                )
-            }
+    @ViewBuilder
+    private var historyTabContent: some View {
+        if viewModel.groupedDictations.isEmpty {
+            emptyState
+        } else {
+            dictationList
         }
-    }
-
-    private func statCard(label: String, value: String, subtitle: String, icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(DesignSystem.Colors.accent)
-                Text(label)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            Text(value)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-                .contentTransition(.numericText())
-            Text(subtitle)
-                .font(DesignSystem.Typography.micro)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(DesignSystem.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: DesignSystem.Layout.rowCornerRadius)
-                .fill(DesignSystem.Colors.surfaceElevated)
-        )
-    }
-
-    // MARK: - Fun Comparisons
-
-    private func wordsComparison(_ stats: DictationStats) -> String {
-        if stats.totalWords >= 80_000 {
-            let books = stats.booksEquivalent
-            return String(format: "%.1f novel\(books >= 1.5 ? "s" : "") worth", books)
-        } else if stats.totalWords >= 200 {
-            let emails = Int(stats.emailsEquivalent)
-            return "\(emails) email\(emails == 1 ? "" : "s") worth"
-        }
-        return "\(stats.totalWords) word\(stats.totalWords == 1 ? "" : "s") total"
-    }
-
-    private func wpmComparison(_ wpm: Double) -> String {
-        switch wpm {
-        case ..<80: return "Thoughtful pace"
-        case 80..<120: return "Conversational pace"
-        case 120..<160: return "Brisk speaker"
-        case 160..<200: return "Fast talker"
-        default: return "Lightning speed"
-        }
-    }
-
-    private func funComparisonBanner(_ stats: DictationStats) -> String? {
-        if stats.booksEquivalent >= 1.0 {
-            return String(format: "You've dictated %.1f novel\(stats.booksEquivalent >= 1.5 ? "s" : "")!", stats.booksEquivalent)
-        } else if stats.emailsEquivalent >= 50 {
-            return "That's \(Int(stats.emailsEquivalent)) emails worth of voice!"
-        } else if stats.totalWords >= 1000 {
-            return "Over \(stats.totalWords.compactFormatted) words and counting!"
-        }
-        return nil
     }
 
     // MARK: - Empty State
@@ -270,11 +111,6 @@ struct DictationHistoryView: View {
 
     private var dictationList: some View {
         ScrollView {
-            historyHeader
-                .padding(.horizontal, DesignSystem.Spacing.lg)
-                .padding(.top, DesignSystem.Spacing.md)
-                .padding(.bottom, DesignSystem.Spacing.sm)
-
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(viewModel.groupedDictations, id: \.0) { dateHeader, dictations in
                     HStack(alignment: .firstTextBaseline, spacing: DesignSystem.Spacing.sm) {

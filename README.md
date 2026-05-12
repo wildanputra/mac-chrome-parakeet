@@ -30,15 +30,23 @@
 </p>
 
 <p align="center">
-  <img src="Assets/screenshots/transcribe.png?v=3" width="720" alt="MacParakeet — Transcribe view with YouTube and file input">
+  <img src="Assets/screenshots/transcribe.png?v=4" width="720" alt="MacParakeet — Transcribe tab with YouTube, file drop, and Record Meeting tile">
 </p>
 
 <p align="center">
-  <img src="Assets/screenshots/library.png?v=3" width="720" alt="MacParakeet — Transcription library with thumbnails">
+  <img src="Assets/screenshots/library.png?v=4" width="720" alt="MacParakeet — Transcription library with thumbnails">
 </p>
 
 <p align="center">
-  <img src="Assets/screenshots/dictations.png?v=3" width="720" alt="MacParakeet — Dictation history and voice stats">
+  <img src="Assets/screenshots/dictations.png?v=4" width="720" alt="MacParakeet — Dictation Stats with streak heatmap and top apps">
+</p>
+
+<p align="center">
+  <img src="Assets/screenshots/meeting-recording.png?v=4" width="720" alt="MacParakeet — Live meeting recording with floating pill and Notes/Transcript/Ask panel">
+</p>
+
+<p align="center">
+  <img src="Assets/screenshots/meeting-ask.png?v=4" width="720" alt="MacParakeet — Ask tab summarizing a live meeting with quick-prompt starters">
 </p>
 
 ---

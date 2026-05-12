@@ -11,7 +11,15 @@ public final class DictationHistoryViewModel {
     private let logger = Logger(subsystem: "com.macparakeet.viewmodels", category: "DictationHistory")
     public var groupedDictations: [(String, [Dictation])] = []
     public var searchText: String = "" {
-        didSet { debounceSearch() }
+        didSet {
+            // Search is a History-tab affordance. Typing while on Stats would
+            // otherwise feel broken (no visible filtering happens), so flip
+            // the user back to History where their results actually appear.
+            if !searchText.isEmpty && selectedSubTab != .history {
+                selectedSubTab = .history
+            }
+            debounceSearch()
+        }
     }
     private var searchDebounceTask: Task<Void, Never>?
 
@@ -41,6 +49,38 @@ public final class DictationHistoryViewModel {
     // MARK: - Stats
 
     public var stats: DictationStats = .empty
+
+    // MARK: - Sub-tabs
+
+    public enum SubTab: String, CaseIterable, Sendable {
+        case history
+        case stats
+    }
+
+    public var selectedSubTab: SubTab = .history {
+        didSet {
+            if selectedSubTab == .stats {
+                refreshStatsTabData()
+            }
+        }
+    }
+
+    // MARK: - Stats Tab Data
+
+    /// 26 weeks × 7 days = 182 days, dense (zero-filled).
+    public static let heatmapDayCount = 26 * 7
+
+    public var dailyStats: [DailyDictationStat] = []
+    public var currentStreak: Int = 0
+    public var longestStreak: Int = 0
+    public var topApps: [TopAppEntry] = []
+
+    public struct TopAppEntry: Sendable, Hashable, Identifiable {
+        public let bundleID: String
+        public let count: Int
+        public let words: Int
+        public var id: String { bundleID }
+    }
 
     // MARK: - Copy Confirmation
 
@@ -128,6 +168,32 @@ public final class DictationHistoryViewModel {
         } catch {
             logger.error("Failed to load dictation stats: \(error.localizedDescription)")
             stats = .empty
+        }
+
+        // Stats sub-tab data is only refreshed eagerly when the user is
+        // already viewing it, so we don't pay for heatmap reads on every
+        // dictation save when the user is on the History tab. The next
+        // sub-tab switch will pull fresh data.
+        if selectedSubTab == .stats {
+            refreshStatsTabData()
+        }
+    }
+
+    public func refreshStatsTabData() {
+        guard let repo = dictationRepo else { return }
+        do {
+            dailyStats = try repo.dailyStats(daysBack: Self.heatmapDayCount)
+            currentStreak = try repo.currentDailyStreak()
+            longestStreak = try repo.longestDailyStreak()
+            topApps = try repo.topApps(limit: 5).map {
+                TopAppEntry(bundleID: $0.app, count: $0.count, words: $0.words)
+            }
+        } catch {
+            logger.error("Failed to load stats-tab data: \(error.localizedDescription)")
+            dailyStats = []
+            currentStreak = 0
+            longestStreak = 0
+            topApps = []
         }
     }
 

@@ -15,6 +15,16 @@ public protocol DictationRepositoryProtocol: Sendable {
     /// Zero the lifetime stats counter row without touching any dictation rows.
     /// Symmetric counterpart to `deleteAll()` (rows deleted, stats preserved).
     func resetLifetimeStats() throws
+
+    // Daily rollup reads (Stats tab). The rollup is private write-side state —
+    // only the read surface is exposed here. Conformers MUST implement these
+    // explicitly: no default no-op implementations, because a "silently returns
+    // empty" default would let a mock or alternate conformer ship a blank Stats
+    // tab with no compile-time signal.
+    func dailyStats(daysBack days: Int) throws -> [DailyDictationStat]
+    func currentDailyStreak() throws -> Int
+    func longestDailyStreak() throws -> Int
+    func topApps(limit: Int) throws -> [(app: String, count: Int, words: Int)]
 }
 
 public struct DictationStats: Sendable, Equatable {
@@ -123,11 +133,30 @@ public final class DictationRepository: DictationRepositoryProtocol {
                     wordDelta: dictation.wordCount - prior.wordCount,
                     newDurationMs: dictation.durationMs
                 )
+                // Daily stats: apply the delta to the row's original day. The
+                // app treats `Dictation.createdAt` as immutable once a row is
+                // .completed (no current code path mutates it). If a future
+                // feature ever changes createdAt across a day boundary, this
+                // path would leave the old day's count stale and never bump
+                // the new day — add a same-day move handler before shipping
+                // that feature.
+                try Self.applyDailyDelta(
+                    db: db,
+                    day: prior.createdAt,
+                    durationDelta: dictation.durationMs - prior.durationMs,
+                    wordDelta: dictation.wordCount - prior.wordCount
+                )
             case (_, .completed):
                 // Fresh insert at .completed, or transition (.recording / .processing /
                 // .error → .completed). Increment by the full row.
                 try Self.incrementLifetimeStats(
                     db: db,
+                    durationMs: dictation.durationMs,
+                    wordCount: dictation.wordCount
+                )
+                try Self.incrementDailyStats(
+                    db: db,
+                    day: dictation.createdAt,
                     durationMs: dictation.durationMs,
                     wordCount: dictation.wordCount
                 )
@@ -378,6 +407,282 @@ public final class DictationRepository: DictationRepositoryProtocol {
                 """,
             arguments: [now]
         )
+    }
+
+    // MARK: - Daily stats helpers (Stats tab heatmap, current/longest streak)
+
+    /// Formats a date as `YYYY-MM-DD` in the user's local calendar. The day
+    /// rollup uses local time so the heatmap reflects "what days did you
+    /// dictate" as the user experienced them — not UTC days, which would split
+    /// a late-night session in PT across two squares.
+    static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
+        let comps = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", comps.year ?? 0, comps.month ?? 0, comps.day ?? 0)
+    }
+
+    /// Hot-path increment for a newly-completed dictation. UPSERT — creates the
+    /// day row if absent or bumps the existing one. No invariant guard like
+    /// lifetime stats: the row's absence is the expected initial state.
+    static func incrementDailyStats(
+        db: Database,
+        day date: Date,
+        durationMs: Int,
+        wordCount: Int,
+        now: Date = Date()
+    ) throws {
+        let key = dayKey(for: date)
+        try db.execute(
+            sql: """
+                INSERT INTO daily_dictation_stats (day, count, words, durationMs, updatedAt)
+                VALUES (?, 1, ?, ?, ?)
+                ON CONFLICT(day) DO UPDATE SET
+                    count       = count + 1,
+                    words       = words + excluded.words,
+                    durationMs  = durationMs + excluded.durationMs,
+                    updatedAt   = excluded.updatedAt
+                """,
+            arguments: [key, wordCount, durationMs, now]
+        )
+    }
+
+    /// Delta apply for an already-counted row whose duration / wordCount
+    /// changed (e.g. a future "edit transcript" path). Total `count` for the
+    /// day is unchanged — only words and duration move. If the day row is
+    /// somehow missing (a row was inserted before this migration shipped and
+    /// the backfill didn't catch it) we silently no-op rather than throw.
+    static func applyDailyDelta(
+        db: Database,
+        day date: Date,
+        durationDelta: Int,
+        wordDelta: Int,
+        now: Date = Date()
+    ) throws {
+        let key = dayKey(for: date)
+        try db.execute(
+            sql: """
+                UPDATE daily_dictation_stats
+                SET words       = MAX(0, words + ?),
+                    durationMs  = MAX(0, durationMs + ?),
+                    updatedAt   = ?
+                WHERE day = ?
+                """,
+            arguments: [wordDelta, durationDelta, now, key]
+        )
+    }
+
+    /// Migration helper: rebuild the daily rollup from existing completed
+    /// dictations. Grouped in Swift (rather than SQL `date(..., 'localtime')`)
+    /// so the bucketing matches `Calendar.current` exactly.
+    ///
+    /// Intentionally module-internal: the function opens with
+    /// `DELETE FROM daily_dictation_stats` and an external caller could wipe a
+    /// user's preserved streak history. Reachable from tests via
+    /// `@testable import MacParakeetCore`.
+    static func backfillDailyStats(db: Database, now: Date = Date()) throws {
+        // Wipe any prior rows so re-running this is idempotent.
+        try db.execute(sql: "DELETE FROM daily_dictation_stats")
+
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT createdAt, durationMs, wordCount
+            FROM dictations
+            WHERE status = 'completed'
+        """)
+
+        var buckets: [String: (count: Int, words: Int, durationMs: Int)] = [:]
+        for row in rows {
+            guard let createdAt = Date.fromDatabaseValue(row["createdAt"] as DatabaseValue) else { continue }
+            let key = dayKey(for: createdAt)
+            let durationMs: Int = row["durationMs"] ?? 0
+            let wordCount: Int = row["wordCount"] ?? 0
+            var bucket = buckets[key] ?? (0, 0, 0)
+            bucket.count += 1
+            bucket.words += wordCount
+            bucket.durationMs += durationMs
+            buckets[key] = bucket
+        }
+
+        for (key, bucket) in buckets {
+            try db.execute(
+                sql: """
+                    INSERT INTO daily_dictation_stats (day, count, words, durationMs, updatedAt)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                arguments: [key, bucket.count, bucket.words, bucket.durationMs, now]
+            )
+        }
+    }
+
+    // MARK: - Daily stats reads (Stats tab)
+
+    /// Fetches the per-day rollup for the trailing `days` window ending today
+    /// (inclusive). Returns a dense array of length `days` with zero-filled
+    /// entries for days that had no dictations — the view can map this 1:1 to
+    /// heatmap cells without re-keying.
+    public func dailyStats(daysBack days: Int) throws -> [DailyDictationStat] {
+        try dailyStats(daysBack: days, now: Date(), calendar: .current)
+    }
+
+    func dailyStats(daysBack days: Int, now: Date, calendar: Calendar) throws -> [DailyDictationStat] {
+        guard days > 0 else { return [] }
+
+        return try dbQueue.read { db in
+            let today = calendar.startOfDay(for: now)
+            guard let start = calendar.date(byAdding: .day, value: -(days - 1), to: today) else { return [] }
+            let startKey = Self.dayKey(for: start, calendar: calendar)
+
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT day, count, words, durationMs
+                    FROM daily_dictation_stats
+                    WHERE day >= ?
+                    """,
+                arguments: [startKey]
+            )
+
+            var byKey: [String: (count: Int, words: Int, durationMs: Int)] = [:]
+            for row in rows {
+                let key: String = row["day"] ?? ""
+                byKey[key] = (row["count"] ?? 0, row["words"] ?? 0, row["durationMs"] ?? 0)
+            }
+
+            var result: [DailyDictationStat] = []
+            result.reserveCapacity(days)
+            for offset in 0..<days {
+                guard let day = calendar.date(byAdding: .day, value: offset, to: start) else { continue }
+                let bucket = byKey[Self.dayKey(for: day, calendar: calendar)] ?? (0, 0, 0)
+                result.append(DailyDictationStat(
+                    day: day,
+                    count: bucket.count,
+                    words: bucket.words,
+                    durationMs: bucket.durationMs
+                ))
+            }
+            return result
+        }
+    }
+
+    /// Current daily streak. Walks back from today (or yesterday if today has
+    /// no dictation yet) counting consecutive days with `count > 0`. Matches
+    /// the typical "don't break the chain" semantic where missing today
+    /// doesn't immediately reset.
+    public func currentDailyStreak() throws -> Int {
+        try currentDailyStreak(now: Date(), calendar: .current)
+    }
+
+    func currentDailyStreak(now: Date, calendar: Calendar) throws -> Int {
+        try dbQueue.read { db in
+            let activeDays = try Self.fetchActiveDays(db: db)
+            return Self.computeCurrentDailyStreak(activeDays: activeDays, now: now, calendar: calendar)
+        }
+    }
+
+    /// Longest all-time daily streak. Computed across every day in
+    /// `daily_dictation_stats` — survives history deletion.
+    public func longestDailyStreak() throws -> Int {
+        try longestDailyStreak(calendar: .current)
+    }
+
+    func longestDailyStreak(calendar: Calendar) throws -> Int {
+        try dbQueue.read { db in
+            let activeDays = try Self.fetchActiveDays(db: db)
+            return Self.computeLongestDailyStreak(activeDays: activeDays, calendar: calendar)
+        }
+    }
+
+    /// Top apps by completed-dictation count, derived from `pastedToApp`.
+    /// Live data — reflects only currently-present dictation rows (clears
+    /// after `Clear History`). Per-app rollup is intentionally not persisted;
+    /// the heatmap is the privileged surface that survives deletion.
+    public func topApps(limit: Int) throws -> [(app: String, count: Int, words: Int)] {
+        let safeLimit = min(max(limit, 0), 1_000)
+        guard safeLimit > 0 else { return [] }
+
+        return try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT pastedToApp, COUNT(*) AS cnt, COALESCE(SUM(wordCount), 0) AS words
+                FROM dictations
+                WHERE status = 'completed'
+                  AND pastedToApp IS NOT NULL
+                  AND TRIM(pastedToApp) != ''
+                GROUP BY pastedToApp
+                ORDER BY cnt DESC, pastedToApp ASC
+                LIMIT ?
+            """, arguments: [safeLimit])
+            return rows.map { row in
+                let app: String = row["pastedToApp"] ?? ""
+                let cnt: Int = row["cnt"] ?? 0
+                let words: Int = row["words"] ?? 0
+                return (app: app, count: cnt, words: words)
+            }
+        }
+    }
+
+    private static func fetchActiveDays(db: Database) throws -> Set<String> {
+        let keys = try String.fetchAll(
+            db,
+            sql: "SELECT day FROM daily_dictation_stats WHERE count > 0"
+        )
+        return Set(keys)
+    }
+
+    /// Pure function for unit tests. Walks back from today (or yesterday if
+    /// today is absent) counting consecutive day keys present in `activeDays`.
+    static func computeCurrentDailyStreak(
+        activeDays: Set<String>,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Int {
+        let todayKey = dayKey(for: now, calendar: calendar)
+        var cursor: Date
+        if activeDays.contains(todayKey) {
+            cursor = calendar.startOfDay(for: now)
+        } else {
+            guard let yesterday = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now)) else {
+                return 0
+            }
+            cursor = yesterday
+        }
+
+        var streak = 0
+        while activeDays.contains(dayKey(for: cursor, calendar: calendar)) {
+            streak += 1
+            guard let prev = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
+            cursor = prev
+        }
+        return streak
+    }
+
+    /// Pure function for unit tests. Longest consecutive-day run across the
+    /// full set of active day keys.
+    static func computeLongestDailyStreak(
+        activeDays: Set<String>,
+        calendar: Calendar = .current
+    ) -> Int {
+        guard !activeDays.isEmpty else { return 0 }
+
+        // Parse keys back to dates once, sort ascending, then scan.
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+
+        let dates = activeDays.compactMap { formatter.date(from: $0) }.sorted()
+        guard !dates.isEmpty else { return 0 }
+
+        var longest = 1
+        var run = 1
+        for i in 1..<dates.count {
+            if let nextDay = calendar.date(byAdding: .day, value: 1, to: dates[i - 1]),
+               calendar.isDate(nextDay, inSameDayAs: dates[i]) {
+                run += 1
+                longest = max(longest, run)
+            } else {
+                run = 1
+            }
+        }
+        return longest
     }
 
     /// Counts words by splitting on whitespace runs. Exact for any input.

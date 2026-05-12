@@ -347,6 +347,29 @@ CREATE TABLE lifetime_dictation_stats (
 
 ---
 
+### `daily_dictation_stats` (v0.11)
+
+Per-day rollup keyed by local-calendar day. Powers the Stats sub-tab heatmap and current/longest daily streaks. Survives `Clear History` for the same reason `lifetime_dictation_stats` does — the user can wipe transcripts without losing their multi-month streak visualization.
+
+```sql
+CREATE TABLE daily_dictation_stats (
+    day        TEXT PRIMARY KEY,                      -- 'YYYY-MM-DD' in user's local calendar
+    count      INTEGER NOT NULL DEFAULT 0,
+    words      INTEGER NOT NULL DEFAULT 0,
+    durationMs INTEGER NOT NULL DEFAULT 0,
+    updatedAt  TEXT    NOT NULL
+);
+```
+
+**Notes:**
+- `day` is the **local** calendar day. SQLite's `date()` defaults to UTC, which would split a late-night PT session across two cells; we compute the key in Swift via `Calendar.current` instead.
+- Hot-path increment lives in `DictationRepository.save()` inside the same write transaction as `lifetime_dictation_stats`. Uses `INSERT … ON CONFLICT(day) DO UPDATE` (UPSERT) — the row's absence is the expected initial state.
+- Edit-transcript path (`(.completed, .completed)` save) calls `applyDailyDelta` against `prior.createdAt`'s day so the delta lands on the day that was originally counted.
+- Backfilled on migration from existing completed `dictations` rows. Grouping done in Swift so it matches `Calendar.current` exactly.
+- Per-app aggregation lives elsewhere (read directly from `dictations.pastedToApp` for the "Where you dictate" card). Only the heatmap is privileged with rollup-table preservation; top-apps clears with history by design.
+
+---
+
 ## Swift Models
 
 All models use GRDB's `Codable` pattern with `FetchableRecord` + `PersistableRecord`.
@@ -825,6 +848,7 @@ migrator.registerMigration("v0.7-prompts-and-summaries") { db in
 // v0.9 — transcriptions.derivedTitle and transcriptions.derivedSnippet
 // v0.10 — quick_prompts (v0.6 Live Ask product surface)
 // v0.10 — transcription library indexes (sourceType/favorite/status + createdAt)
+// v0.11 — daily_dictation_stats
 ```
 
 ### Migration Rules
@@ -861,6 +885,7 @@ migrator.registerMigration("v0.7-prompts-and-summaries") { db in
 | `prompts` | v0.7 | Reusable prompt templates (built-in + custom) |
 | `summaries` | v0.7 | Prompt results per transcription (FK → transcriptions, cascade delete; Swift model `PromptResult`) |
 | `lifetime_dictation_stats` | v0.7.4 | Singleton lifetime voice-stat counters |
+| `daily_dictation_stats` | v0.11 | Per-day rollup powering Stats-tab heatmap + daily streaks |
 | `transcriptions.recoveredFromCrash` | v0.7.5 | Interrupted meeting recovery marker |
 | `transcriptions.isTranscriptEdited` | v0.7.7 | User-edited transcript marker |
 | `transcriptions.userNotes` | v0.8 | Free-form notes captured during meeting recording |

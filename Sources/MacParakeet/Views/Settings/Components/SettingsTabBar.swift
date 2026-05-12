@@ -54,6 +54,7 @@ struct SettingsTabBar: View {
 
                 Text(metadata.title)
                     .font(DesignSystem.Typography.bodySmall.weight(.medium))
+                    .lineLimit(1)
 
                 if let badge {
                     Circle()
@@ -61,6 +62,13 @@ struct SettingsTabBar: View {
                         .frame(width: 5, height: 5)
                 }
             }
+            // Lock the inner content's intrinsic width so the pill never
+            // shrinks below "icon + full label + badge." Without this,
+            // `frame(maxWidth: .infinity)` lets the pill share width equally
+            // across the bar, and a narrow parent collapses each share below
+            // the label width — SwiftUI then word-wraps, then character-wraps.
+            // That's the "Mo / de / s" bug.
+            .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(isActive ? DesignSystem.Colors.textPrimary : DesignSystem.Colors.textSecondary)
             .padding(.horizontal, DesignSystem.Spacing.md)
             .padding(.vertical, 6)

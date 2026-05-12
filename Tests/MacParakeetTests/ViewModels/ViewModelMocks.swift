@@ -99,6 +99,14 @@ final class MockDictationRepository: DictationRepositoryProtocol, @unchecked Sen
             dictationsThisWeek: thisWeek
         )
     }
+
+    // Daily-rollup surface — mock returns empty/zero because no test currently
+    // exercises the Stats tab through this mock. Real semantics are covered by
+    // DailyDictationStatsTests against the production repository.
+    func dailyStats(daysBack days: Int) throws -> [DailyDictationStat] { [] }
+    func currentDailyStreak() throws -> Int { 0 }
+    func longestDailyStreak() throws -> Int { 0 }
+    func topApps(limit: Int) throws -> [(app: String, count: Int, words: Int)] { [] }
 }
 
 // MARK: - MockTranscriptionRepository
