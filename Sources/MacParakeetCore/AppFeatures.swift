@@ -39,9 +39,7 @@ public enum AppFeatures {
     /// Transforms exist in the DB so flipping this flag is a no-data
     /// operation.
     ///
-    /// Default is `false` at merge so the website telemetry-allowlist
-    /// deploy (`transform_executed` / `transform_failed`) can land
-    /// first (ADR-022 §9). Flip to `true` in a follow-up commit once
-    /// the Worker accepts the new events.
-    public static let transformsEnabled: Bool = false
+    /// Enabled once the website telemetry allowlist accepts
+    /// `transform_executed` / `transform_failed` (ADR-022 §9).
+    public static let transformsEnabled: Bool = true
 }
