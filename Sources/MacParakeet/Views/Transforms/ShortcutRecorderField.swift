@@ -13,9 +13,13 @@ struct ShortcutRecorderField: View {
         HStack {
             Group {
                 if let shortcut {
-                    KeycapBadge(shortcut: shortcut)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Shortcut \(shortcut.displayString)")
+                    HStack(spacing: 6) {
+                        KeycapBadge(shortcut: shortcut)
+                        Text(shortcut.keyLabel.uppercased())
+                            .font(DesignSystem.Typography.bodySmall.monospacedDigit())
+                            .foregroundStyle(DesignSystem.Colors.textTertiary)
+                            .accessibilityHidden(true)
+                    }
                 } else {
                     Text(isRecording ? "Press a keyboard combo..." : "Click to add a shortcut")
                         .font(DesignSystem.Typography.body)
@@ -70,10 +74,6 @@ struct ShortcutRecorderField: View {
     private func installMonitor() {
         removeMonitor()
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
-            if Self.shouldCancelRecording(event) {
-                isRecording = false
-                return nil
-            }
             let modifierBits = UInt(event.modifierFlags.intersection([.command, .option, .control, .shift]).rawValue)
             let keyCode = event.keyCode
             let label = labelForKey(event: event)
@@ -126,9 +126,5 @@ struct ShortcutRecorderField: View {
             }
         }
         return "Key \(event.keyCode)"
-    }
-
-    static func shouldCancelRecording(_ event: NSEvent) -> Bool {
-        event.keyCode == 0x35
     }
 }

@@ -65,9 +65,6 @@ public final class TransformsHotkeyRegistry {
             keyCode: shortcut.keyCode,
             modifierBits: cgFlags(for: shortcut.modifiers)
         )
-        if let existingPromptID = dispatchTable[match], existingPromptID != promptID {
-            return
-        }
         dispatchTable[match] = promptID
     }
 
@@ -83,13 +80,11 @@ public final class TransformsHotkeyRegistry {
     /// repository reloads after a save/delete/import.
     public func replaceBindings(_ bindings: [UUID: KeyboardShortcut]) {
         dispatchTable.removeAll(keepingCapacity: true)
-        pressedKeys.removeAll(keepingCapacity: true)
         for (promptID, shortcut) in bindings {
             let match = KeyMatch(
                 keyCode: shortcut.keyCode,
                 modifierBits: cgFlags(for: shortcut.modifiers)
             )
-            guard dispatchTable[match] == nil else { continue }
             dispatchTable[match] = promptID
         }
     }
@@ -161,7 +156,6 @@ public final class TransformsHotkeyRegistry {
 
     func handleEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            pressedKeys.removeAll(keepingCapacity: true)
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
