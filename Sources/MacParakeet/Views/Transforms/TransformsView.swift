@@ -66,10 +66,11 @@ struct TransformsView: View {
                 set: { if !$0 { viewModel.pendingDeleteHistoryEntry = nil } }
             ),
             presenting: viewModel.pendingDeleteHistoryEntry
-        ) { _ in
+        ) { entry in
             Button("Delete", role: .destructive) {
+                viewModel.pendingDeleteHistoryEntry = nil
                 Task {
-                    await viewModel.confirmPendingHistoryDelete()
+                    await viewModel.deleteHistoryEntry(entry)
                 }
             }
             Button("Cancel", role: .cancel) {

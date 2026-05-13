@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import MacParakeetCore
+import MacParakeetViewModels
 import OSLog
 
 /// Wires the productized Transforms feature to the app surface (ADR-022):
@@ -26,6 +27,7 @@ final class TransformsCoordinator {
     private let profileRepository: TransformProfileRepositoryProtocol
     private let historyRepository: TransformHistoryRepositoryProtocol
     private let writingSampleRepository: WritingSampleRepositoryProtocol
+    private let reservedHotkeysProvider: @MainActor () -> [TransformShortcutReservedHotkey]
     private let logger = Logger(subsystem: "com.macparakeet", category: "TransformsCoordinator")
 
     private var registry: TransformsHotkeyRegistry?
@@ -45,19 +47,22 @@ final class TransformsCoordinator {
     /// resolve a `KeyboardShortcut`-triggered ID back to its prompt body
     /// and running label without re-hitting the DB on every keystroke.
     private var promptIndex: [UUID: Prompt] = [:]
+    private var activeBindingIDs: Set<UUID> = []
 
     init(
         llmServiceProvider: @escaping () -> LLMServiceProtocol?,
         promptRepository: PromptRepositoryProtocol,
         profileRepository: TransformProfileRepositoryProtocol,
         historyRepository: TransformHistoryRepositoryProtocol,
-        writingSampleRepository: WritingSampleRepositoryProtocol
+        writingSampleRepository: WritingSampleRepositoryProtocol,
+        reservedHotkeysProvider: @escaping @MainActor () -> [TransformShortcutReservedHotkey] = { [] }
     ) {
         self.llmServiceProvider = llmServiceProvider
         self.promptRepository = promptRepository
         self.profileRepository = profileRepository
         self.historyRepository = historyRepository
         self.writingSampleRepository = writingSampleRepository
+        self.reservedHotkeysProvider = reservedHotkeysProvider
     }
 
     // MARK: - Lifecycle
@@ -90,7 +95,7 @@ final class TransformsCoordinator {
                     self?.reloadBindings()
                 }
             }
-            logger.notice("transforms: registry started with \(self.promptIndex.count, privacy: .public) bindings")
+            logger.notice("transforms: registry started with \(self.activeBindingIDs.count, privacy: .public) bindings")
         } else {
             logger.error("transforms: failed to install registry event tap")
         }
@@ -139,19 +144,39 @@ final class TransformsCoordinator {
 
         promptIndex = Dictionary(uniqueKeysWithValues: prompts.map { ($0.id, $0) })
 
+        let bindings = Self.validatedBindings(
+            for: prompts,
+            reservedHotkeys: reservedHotkeysProvider()
+        )
+        activeBindingIDs = Set(bindings.keys)
+        registry.replaceBindings(bindings)
+    }
+
+    nonisolated static func validatedBindings(
+        for prompts: [Prompt],
+        reservedHotkeys: [TransformShortcutReservedHotkey]
+    ) -> [UUID: KeyboardShortcut] {
+        let collisionChecker = TransformsHotkeyCollisionChecker()
         var bindings: [UUID: KeyboardShortcut] = [:]
         for prompt in prompts {
-            if let shortcut = prompt.shortcut {
-                bindings[prompt.id] = shortcut
+            guard let shortcut = prompt.shortcut else { continue }
+            guard collisionChecker.check(
+                candidate: shortcut,
+                existing: bindings,
+                excludingPromptID: nil,
+                reservedHotkeys: reservedHotkeys
+            ) == nil else {
+                continue
             }
+            bindings[prompt.id] = shortcut
         }
-        registry.replaceBindings(bindings)
+        return bindings
     }
 
     /// True when at least one Transform has a hotkey bound. Used by the
     /// Transforms tab to surface a calmer "no bindings yet" hint state.
     var hasActiveBindings: Bool {
-        promptIndex.values.contains(where: { $0.shortcut != nil })
+        !activeBindingIDs.isEmpty
     }
 
     // MARK: - Trigger handling
@@ -187,8 +212,6 @@ final class TransformsCoordinator {
 
         let runID = UUID()
         activeRunID = runID
-        let sourceApp = Self.currentSourceApp()
-
         panelController?.show(label: prompt.derivedRunningLabel)
 
         let promptBody = assembledPrompt(for: prompt)
@@ -224,15 +247,14 @@ final class TransformsCoordinator {
                 self.panelController?.done(message: "Done")
                 Telemetry.send(.transformExecuted(
                     transformName: telemetryName,
-                    capturePath: result.captureTag == "ax" ? .ax : .clipboard,
+                    capturePath: Self.telemetryCapturePath(for: result.capturePath),
                     replacePath: result.path == .ax ? .ax : .clipboardPaste,
                     llmMs: result.llmElapsedMs,
                     totalMs: result.totalElapsedMs
                 ))
                 self.saveHistory(
                     result: result,
-                    prompt: prompt,
-                    sourceApp: sourceApp
+                    prompt: prompt
                 )
                 self.logger.notice("transforms: \(runningTransformName, privacy: .public) completed")
             } catch let error as TransformExecutorError {
@@ -263,15 +285,18 @@ final class TransformsCoordinator {
         }
     }
 
-    private static func currentSourceApp() -> (bundleID: String?, name: String?) {
-        let app = NSWorkspace.shared.frontmostApplication
-        return (app?.bundleIdentifier, app?.localizedName)
+    private static func telemetryCapturePath(for path: SelectionCapturePath) -> TelemetryTransformCapturePath {
+        switch path {
+        case .ax:
+            return .ax
+        case .clipboard:
+            return .clipboard
+        }
     }
 
     private func saveHistory(
         result: TransformExecutionResult,
-        prompt: Prompt,
-        sourceApp: (bundleID: String?, name: String?)
+        prompt: Prompt
     ) {
         let now = Date()
         let entry = TransformHistoryEntry(
@@ -279,9 +304,9 @@ final class TransformsCoordinator {
             transformName: prompt.name,
             inputText: result.inputText,
             outputText: result.outputText,
-            sourceAppBundleID: sourceApp.bundleID,
-            sourceAppName: sourceApp.name,
-            capturePath: result.captureTag,
+            sourceAppBundleID: result.sourceTarget?.bundleIdentifier,
+            sourceAppName: result.sourceTarget?.localizedName,
+            capturePath: result.capturePath.rawValue,
             replacementPath: result.path.rawValue,
             llmElapsedMs: result.llmElapsedMs,
             totalElapsedMs: result.totalElapsedMs,

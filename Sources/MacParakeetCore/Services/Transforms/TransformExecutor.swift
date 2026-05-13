@@ -37,6 +37,8 @@ public struct TransformExecutionResult: Sendable {
     public let totalElapsedMs: Int
     public let llmElapsedMs: Int
     public let captureTag: String
+    public let capturePath: SelectionCapturePath
+    public let sourceTarget: SelectionCaptureTarget?
 
     public init(
         inputText: String,
@@ -44,7 +46,9 @@ public struct TransformExecutionResult: Sendable {
         path: SelectionReplacementPath,
         totalElapsedMs: Int,
         llmElapsedMs: Int,
-        captureTag: String
+        captureTag: String,
+        capturePath: SelectionCapturePath? = nil,
+        sourceTarget: SelectionCaptureTarget? = nil
     ) {
         self.inputText = inputText
         self.outputText = outputText
@@ -52,6 +56,8 @@ public struct TransformExecutionResult: Sendable {
         self.totalElapsedMs = totalElapsedMs
         self.llmElapsedMs = llmElapsedMs
         self.captureTag = captureTag
+        self.capturePath = capturePath ?? SelectionCapturePath(rawValue: captureTag) ?? .clipboard
+        self.sourceTarget = sourceTarget
     }
 }
 
@@ -131,6 +137,7 @@ public actor TransformExecutor {
             throw TransformExecutorError.cancelled
         }
 
+        let capturePath: SelectionCapturePath
         switch captured {
         case .empty:
             onProgress(.failed(TransformExecutorError.emptySelection.localizedDescription))
@@ -138,8 +145,10 @@ public actor TransformExecutor {
         case .failed(let error):
             onProgress(.failed(error.localizedDescription))
             throw TransformExecutorError.captureFailed(error)
-        default:
-            break
+        case .ax:
+            capturePath = .ax
+        case .clipboard:
+            capturePath = .clipboard
         }
 
         guard let inputText = captured.capturedText, !inputText.isEmpty else {
@@ -229,7 +238,9 @@ public actor TransformExecutor {
             path: path,
             totalElapsedMs: totalMs,
             llmElapsedMs: llmElapsedMs,
-            captureTag: captured.pathTag
+            captureTag: captured.pathTag,
+            capturePath: capturePath,
+            sourceTarget: captured.target
         )
         onProgress(.done(path))
 

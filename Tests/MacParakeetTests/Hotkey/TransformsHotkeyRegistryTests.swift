@@ -96,6 +96,41 @@ final class TransformsHotkeyRegistryTests: XCTestCase {
         XCTAssertTrue(registry.isEmpty)
     }
 
+    func testValidatedRuntimeBindingsSkipReservedHotkeyConflicts() {
+        let opt1 = KeyboardShortcut(
+            modifiers: KeyboardShortcut.ModifierFlag.option.rawValue,
+            keyCode: 0x12,
+            keyLabel: "1"
+        )
+        let opt4 = KeyboardShortcut(
+            modifiers: KeyboardShortcut.ModifierFlag.option.rawValue,
+            keyCode: 0x15,
+            keyLabel: "4"
+        )
+        let conflicting = Prompt(
+            id: UUID(),
+            name: "Conflicting",
+            content: "Body",
+            category: .transform,
+            keyboardShortcut: opt1.encodedString()
+        )
+        let allowed = Prompt(
+            id: UUID(),
+            name: "Allowed",
+            content: "Body",
+            category: .transform,
+            keyboardShortcut: opt4.encodedString()
+        )
+
+        let bindings = TransformsCoordinator.validatedBindings(
+            for: [conflicting, allowed],
+            reservedHotkeys: [reserved("Dictation", opt1.hotkeyTrigger)]
+        )
+
+        XCTAssertNil(bindings[conflicting.id])
+        XCTAssertEqual(bindings[allowed.id], opt4)
+    }
+
     func testHandleKeyUpSwallowsOwnedShortcutEvenAfterModifiersClear() throws {
         let registry = TransformsHotkeyRegistry()
         let id = UUID()

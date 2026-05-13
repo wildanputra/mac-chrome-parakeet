@@ -534,26 +534,59 @@ extension TransformsCommand {
 
 // MARK: - Lookup helper
 
+private let transformIDPrefixMinimumLength = 4
+
 private func findTransform(idOrName: String, repo: PromptRepository) throws -> Prompt {
+    let query = idOrName.trimmingCharacters(in: .whitespacesAndNewlines)
     let all = try repo.fetchVisible(category: .transform)
     // Exact UUID match
-    if let uuid = UUID(uuidString: idOrName), let match = all.first(where: { $0.id == uuid }) {
+    if let uuid = UUID(uuidString: query), let match = all.first(where: { $0.id == uuid }) {
         return match
     }
-    // ID prefix
-    let prefix = idOrName.lowercased()
-    let prefixMatches = all.filter { $0.id.uuidString.lowercased().hasPrefix(prefix) }
-    if prefixMatches.count == 1 {
-        return prefixMatches[0]
+    // Case-insensitive name match. Names win over UUID prefixes so a custom
+    // Transform named "a" cannot be mistaken for an ID prefix.
+    let nameMatches = all.filter { $0.name.caseInsensitiveCompare(query) == .orderedSame }
+    if nameMatches.count == 1 {
+        return nameMatches[0]
     }
-    if prefixMatches.count > 1 {
-        throw CLITransformsError.ambiguous(idOrName, prefixMatches.map(\.name))
+    if nameMatches.count > 1 {
+        throw CLITransformsError.ambiguous(query, nameMatches.map(\.name))
     }
-    // Case-insensitive name match
-    if let nameMatch = all.first(where: { $0.name.caseInsensitiveCompare(idOrName) == .orderedSame }) {
-        return nameMatch
+    // ID prefix. Only UUID-looking input participates, and short prefixes are
+    // rejected instead of silently matching the first visible Transform.
+    if let normalizedPrefix = normalizedUUIDPrefix(query) {
+        guard normalizedPrefix.count >= transformIDPrefixMinimumLength else {
+            throw CLITransformsError.prefixTooShort(
+                min: transformIDPrefixMinimumLength,
+                provided: query
+            )
+        }
+        let prefixMatches = all.filter {
+            $0.id.uuidString
+                .lowercased()
+                .replacingOccurrences(of: "-", with: "")
+                .hasPrefix(normalizedPrefix)
+        }
+        if prefixMatches.count == 1 {
+            return prefixMatches[0]
+        }
+        if prefixMatches.count > 1 {
+            throw CLITransformsError.ambiguous(query, prefixMatches.map(\.name))
+        }
     }
-    throw CLITransformsError.notFound(idOrName)
+    throw CLITransformsError.notFound(query)
+}
+
+private func normalizedUUIDPrefix(_ value: String) -> String? {
+    let dash: UnicodeScalar = "-"
+    let hexCharacters = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+    var normalized = ""
+    for scalar in value.unicodeScalars {
+        if scalar == dash { continue }
+        guard hexCharacters.contains(scalar) else { return nil }
+        normalized.unicodeScalars.append(scalar)
+    }
+    return normalized.isEmpty ? nil : normalized.lowercased()
 }
 
 private func transformHistoryRepo(database: String?) throws -> TransformHistoryRepository {
@@ -718,6 +751,7 @@ struct TransformHistoryClearResult: Encodable {
 enum CLITransformsError: Error, CustomStringConvertible {
     case notFound(String)
     case ambiguous(String, [String])
+    case prefixTooShort(min: Int, provided: String)
     case duplicateName(String)
     case invalidShortcut(String)
     case shortcutMissingModifier
@@ -734,6 +768,8 @@ enum CLITransformsError: Error, CustomStringConvertible {
             return "No Transform found matching “\(q)”."
         case .ambiguous(let q, let names):
             return "“\(q)” matches multiple Transforms: \(names.joined(separator: ", ")). Use a longer ID prefix."
+        case .prefixTooShort(let min, let provided):
+            return "Transform ID prefix “\(provided)” is too short. Use at least \(min) UUID characters, or use the Transform name."
         case .duplicateName(let n):
             return "A prompt named “\(n)” already exists."
         case .invalidShortcut(let s):

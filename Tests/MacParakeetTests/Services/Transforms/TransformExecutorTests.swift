@@ -207,6 +207,8 @@ final class TransformExecutorTests: XCTestCase {
         XCTAssertEqual(result.outputText, "Hi there!")
         XCTAssertEqual(result.path, .ax)
         XCTAssertEqual(result.captureTag, "ax")
+        XCTAssertEqual(result.sourceTarget?.bundleIdentifier, "com.example.Source")
+        XCTAssertEqual(result.sourceTarget?.localizedName, "Source")
 
         let events = recorder.snapshot()
         // Required ordering: capturing → llmStarted → at least one

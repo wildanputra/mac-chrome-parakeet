@@ -293,6 +293,7 @@ enum CLIErrorType {
             case .notFound, .ambiguous:
                 return lookup
             case .duplicateName,
+                 .prefixTooShort,
                  .invalidShortcut,
                  .shortcutMissingModifier,
                  .shortcutMacOSDeadKey,

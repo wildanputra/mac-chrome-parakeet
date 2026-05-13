@@ -33,6 +33,7 @@ final class SelectionCaptureServiceTests: XCTestCase {
             XCTAssertEqual(text, "Hello world")
             XCTAssertEqual(target?.processIdentifier, 1234)
             XCTAssertEqual(target?.bundleIdentifier, "com.example.Source")
+            XCTAssertEqual(target?.localizedName, "Source")
         default:
             XCTFail("Expected .ax, got \(result.pathTag)")
         }
@@ -62,6 +63,7 @@ final class SelectionCaptureServiceTests: XCTestCase {
             XCTAssertEqual(snapshot.temporaryChangeCount, 2)
             XCTAssertEqual(target?.processIdentifier, 1234)
             XCTAssertEqual(target?.bundleIdentifier, "com.example.Source")
+            XCTAssertEqual(target?.localizedName, "Source")
         default:
             XCTFail("Expected .clipboard, got \(result.pathTag)")
         }
@@ -215,7 +217,8 @@ final class FakeSelectionCaptureBackend: SelectionCaptureBackend, @unchecked Sen
     func frontmostApplicationTarget() -> SelectionCaptureTarget? {
         SelectionCaptureTarget(
             processIdentifier: 1234,
-            bundleIdentifier: "com.example.Source"
+            bundleIdentifier: "com.example.Source",
+            localizedName: "Source"
         )
     }
 

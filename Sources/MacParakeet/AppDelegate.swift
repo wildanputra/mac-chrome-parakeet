@@ -107,6 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onboardingWindowController: onboardingWindowController,
         onRefreshHotkeys: { [weak self] in
             self?.hotkeyCoordinator?.refreshAllHotkeys()
+            self?.transformsCoordinator?.reloadBindings()
             self?.menuBarCoordinator.refreshHotkeyTitle()
             self?.menuBarCoordinator.refreshMeetingHotkeyShortcut()
             self?.menuBarCoordinator.refreshTranscriptionHotkeyShortcuts()
@@ -422,7 +423,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             promptRepository: env.promptRepo,
             profileRepository: env.transformProfileRepo,
             historyRepository: env.transformHistoryRepo,
-            writingSampleRepository: env.writingSampleRepo
+            writingSampleRepository: env.writingSampleRepo,
+            reservedHotkeysProvider: { [weak self] in
+                self?.transformReservedHotkeys ?? []
+            }
         )
         transforms.start()
         transformsCoordinator = transforms
@@ -502,6 +506,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleHotkeyTriggerChange() {
         hotkeyCoordinator?.refreshAllHotkeys()
+        transformsCoordinator?.reloadBindings()
         menuBarCoordinator.refreshHotkeyTitle()
         menuBarCoordinator.refreshMeetingHotkeyShortcut()
     }
@@ -525,6 +530,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyCoordinator?.refreshMeetingHotkey()
         hotkeyCoordinator?.refreshFileTranscriptionHotkey()
         hotkeyCoordinator?.refreshYouTubeTranscriptionHotkey()
+        transformsCoordinator?.reloadBindings()
         menuBarCoordinator.refreshMeetingHotkeyShortcut()
         menuBarCoordinator.refreshTranscriptionHotkeyShortcuts()
     }
@@ -553,6 +559,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 handsFree: settingsViewModel.hotkeyTrigger,
                 pushToTalk: settingsViewModel.pushToTalkHotkeyTrigger
             )
+    }
+
+    private var transformReservedHotkeys: [TransformShortcutReservedHotkey] {
+        [
+            TransformShortcutReservedHotkey(name: "Dictation", trigger: settingsViewModel.hotkeyTrigger),
+            TransformShortcutReservedHotkey(name: "Push-to-talk", trigger: settingsViewModel.pushToTalkHotkeyTrigger),
+            TransformShortcutReservedHotkey(name: "Meeting recording", trigger: settingsViewModel.meetingHotkeyTrigger),
+            TransformShortcutReservedHotkey(name: "File transcription", trigger: settingsViewModel.fileTranscriptionHotkeyTrigger),
+            TransformShortcutReservedHotkey(name: "YouTube transcription", trigger: settingsViewModel.youtubeTranscriptionHotkeyTrigger),
+        ].filter { !$0.trigger.isDisabled }
     }
 
     // MARK: - Menu Bar Icon State
