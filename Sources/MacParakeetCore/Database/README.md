@@ -22,6 +22,7 @@ process.
   - `TextSnippetRepository.swift` — snippets (text + action).
   - `PromptRepository.swift` — prompt-library entries.
   - `PromptResultRepository.swift` — saved prompt outputs.
+  - `TransformHistoryRepository.swift` — local-only Transform input/output history.
   - `QuickPromptRepository.swift` — quick-prompt entries (Ask tab).
   - `ChatConversationRepository.swift` — multi-turn chat history.
 

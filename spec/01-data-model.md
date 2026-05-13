@@ -35,6 +35,10 @@ MacParakeet uses **SQLite via GRDB** for all persistent storage. Single database
 └──────────────────┘
 
 ┌──────────────────┐
+│ transform_history│   v0.14 — Local-only Transform input/output history
+└──────────────────┘
+
+┌──────────────────┐
 │  quick_prompts   │   v0.10 migration — v0.6 Live Ask shortcut pills
 └──────────────────┘
 ```
@@ -245,6 +249,8 @@ CREATE TABLE prompts (
     isVisible INTEGER NOT NULL DEFAULT 1,                 -- false = hidden from picker
     isAutoRun INTEGER NOT NULL DEFAULT 0,                 -- true = auto-generate for new transcriptions
     sortOrder INTEGER NOT NULL DEFAULT 0,                 -- Display ordering
+    keyboardShortcut TEXT,                                -- v0.13: JSON KeyboardShortcut for transforms
+    runningLabel TEXT,                                    -- v0.13: optional progress-pill label
     createdAt TEXT NOT NULL,                              -- ISO 8601 timestamp
     updatedAt TEXT NOT NULL                               -- ISO 8601 timestamp
 );
@@ -257,6 +263,7 @@ CREATE UNIQUE INDEX idx_prompts_name ON prompts(name COLLATE NOCASE);
 - `isBuiltIn` prompts are seeded from `Prompt.builtInPrompts()` during migration. The repository layer enforces the hide-only invariant (delete returns `false` for built-in prompts).
 - `isAutoRun` is independent of `isVisible`, but repository/UI behavior forces auto-run prompts visible while auto-run is enabled.
 - `category` currently stores the raw value `"summary"` for compatibility, while the Swift enum case is `Prompt.Category.result`.
+- `.transform` rows use `keyboardShortcut` and `runningLabel`; `.result` rows ignore both columns.
 - Built-ins currently come from `Prompt.builtInPrompts()` in Swift. "Summary" is the lone auto-run built-in for users who have not disabled every auto-run prompt. ("Memo-Steered Notes" was a second auto-run built-in introduced in ADR-020 and reverted on 2026-05-02 — see ADR-020 amendment.)
 
 ---
@@ -287,6 +294,38 @@ CREATE INDEX idx_summaries_transcription_id ON summaries(transcriptionId);
 - `promptName` and `promptContent` are snapshots, not references to the `prompts` table. Editing or deleting a prompt after generation doesn't change the result's metadata.
 - `userNotesSnapshot` captures `Transcription.userNotes` at generation time so later note edits do not rewrite historical prompt results.
 - Migration from existing data: legacy `transcriptions.summary` values migrate into `summaries` with classic "Summary" prompt metadata, then the legacy column is dropped by `v0.7.6-drop-legacy-transcription-summary`.
+
+---
+
+### `transform_history` (v0.14)
+
+Stores local-only history for completed GUI Transform runs. This is intentionally persisted by default, like dictation history, because selecting text and running a Transform is high-intent user activity. Users can delete individual entries or clear the table.
+
+```sql
+CREATE TABLE transform_history (
+    id                 TEXT PRIMARY KEY,                  -- UUID string
+    transformId        TEXT,                              -- Prompt UUID snapshot; nullable for future/imported runs
+    transformName      TEXT NOT NULL,                     -- Snapshot: Transform name at run time
+    inputText          TEXT NOT NULL,                     -- Selected text before the Transform
+    outputText         TEXT NOT NULL,                     -- LLM output pasted/written back
+    sourceAppBundleID  TEXT,                              -- Frontmost app bundle ID at trigger time
+    sourceAppName      TEXT,                              -- Frontmost app display name at trigger time
+    capturePath        TEXT NOT NULL,                     -- ax | clipboard
+    replacementPath    TEXT NOT NULL,                     -- ax | clipboardPaste
+    llmElapsedMs       INTEGER NOT NULL DEFAULT 0,
+    totalElapsedMs     INTEGER NOT NULL DEFAULT 0,
+    createdAt          TEXT NOT NULL,                     -- ISO 8601 timestamp
+    updatedAt          TEXT NOT NULL                      -- ISO 8601 timestamp
+);
+
+CREATE INDEX idx_transform_history_created_at ON transform_history(createdAt);
+CREATE INDEX idx_transform_history_transform_id ON transform_history(transformId);
+```
+
+**Notes:**
+- No foreign key to `prompts`: deleting a custom Transform should not delete the user's local run history.
+- History content never leaves the device through telemetry. Telemetry for Transforms continues to exclude input/output text.
+- The UI reads a recent window for performance, but the table is not automatically pruned.
 
 ---
 
@@ -582,6 +621,8 @@ struct Prompt: Codable, Identifiable, Sendable {
     var sortOrder: Int
     var createdAt: Date
     var updatedAt: Date
+    var keyboardShortcut: String?
+    var runningLabel: String?
 
     enum Category: String, Codable, Sendable {
         case result = "summary"
@@ -614,6 +655,33 @@ struct PromptResult: Codable, Identifiable, Sendable {
 
 extension PromptResult: FetchableRecord, PersistableRecord {
     static let databaseTableName = "summaries"
+}
+```
+
+### TransformHistoryEntry
+
+```swift
+import Foundation
+import GRDB
+
+struct TransformHistoryEntry: Codable, Identifiable, Sendable {
+    var id: UUID
+    var transformId: UUID?
+    var transformName: String
+    var inputText: String
+    var outputText: String
+    var sourceAppBundleID: String?
+    var sourceAppName: String?
+    var capturePath: String
+    var replacementPath: String
+    var llmElapsedMs: Int
+    var totalElapsedMs: Int
+    var createdAt: Date
+    var updatedAt: Date
+}
+
+extension TransformHistoryEntry: FetchableRecord, PersistableRecord {
+    static let databaseTableName = "transform_history"
 }
 ```
 
@@ -849,6 +917,9 @@ migrator.registerMigration("v0.7-prompts-and-summaries") { db in
 // v0.10 — quick_prompts (v0.6 Live Ask product surface)
 // v0.10 — transcription library indexes (sourceType/favorite/status + createdAt)
 // v0.11 — daily_dictation_stats
+// v0.12 — dictations.displayRawTranscript
+// v0.13 — prompts.keyboardShortcut and prompts.runningLabel
+// v0.14 — transform_history
 ```
 
 ### Migration Rules
@@ -898,6 +969,10 @@ migrator.registerMigration("v0.7-prompts-and-summaries") { db in
 | `transcriptions.derivedSnippet` | v0.9 | Cached display preview snippet derived from transcript content |
 | `quick_prompts` | v0.10 | User-customizable live Ask tab shortcut pills; v0.6 product feature |
 | `idx_transcriptions_source_type_created_at` / `idx_transcriptions_favorite_created_at` / `idx_transcriptions_status_created_at` | v0.10 | Library filter/sort indexes for source type, favorites, and status |
+| `dictations.displayRawTranscript` | v0.12 | Per-row raw/AI-edited display override |
+| `prompts.keyboardShortcut` | v0.13 | Transform hotkey binding JSON |
+| `prompts.runningLabel` | v0.13 | Transform progress-pill label override |
+| `transform_history` | v0.14 | Local-only Transform input/output history |
 
 ### Tables NOT Planned (YAGNI)
 

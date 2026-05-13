@@ -23,6 +23,7 @@ import OSLog
 final class TransformsCoordinator {
     private let llmServiceProvider: () -> LLMServiceProtocol?
     private let promptRepository: PromptRepositoryProtocol
+    private let historyRepository: TransformHistoryRepositoryProtocol
     private let logger = Logger(subsystem: "com.macparakeet", category: "TransformsCoordinator")
 
     private var registry: TransformsHotkeyRegistry?
@@ -45,10 +46,12 @@ final class TransformsCoordinator {
 
     init(
         llmServiceProvider: @escaping () -> LLMServiceProtocol?,
-        promptRepository: PromptRepositoryProtocol
+        promptRepository: PromptRepositoryProtocol,
+        historyRepository: TransformHistoryRepositoryProtocol
     ) {
         self.llmServiceProvider = llmServiceProvider
         self.promptRepository = promptRepository
+        self.historyRepository = historyRepository
     }
 
     // MARK: - Lifecycle
@@ -178,6 +181,7 @@ final class TransformsCoordinator {
 
         let runID = UUID()
         activeRunID = runID
+        let sourceApp = Self.currentSourceApp()
 
         panelController?.show(label: prompt.derivedRunningLabel)
 
@@ -219,6 +223,11 @@ final class TransformsCoordinator {
                     llmMs: result.llmElapsedMs,
                     totalMs: result.totalElapsedMs
                 ))
+                self.saveHistory(
+                    result: result,
+                    prompt: prompt,
+                    sourceApp: sourceApp
+                )
                 self.logger.notice("transforms: \(runningTransformName, privacy: .public) completed")
             } catch let error as TransformExecutorError {
                 guard self.activeRunID == runID else { return }
@@ -245,6 +254,39 @@ final class TransformsCoordinator {
                 self.panelController?.fail(message: error.localizedDescription)
                 Telemetry.send(.transformFailed(transformName: telemetryName, reason: .llmFailed))
             }
+        }
+    }
+
+    private static func currentSourceApp() -> (bundleID: String?, name: String?) {
+        let app = NSWorkspace.shared.frontmostApplication
+        return (app?.bundleIdentifier, app?.localizedName)
+    }
+
+    private func saveHistory(
+        result: TransformExecutionResult,
+        prompt: Prompt,
+        sourceApp: (bundleID: String?, name: String?)
+    ) {
+        let now = Date()
+        let entry = TransformHistoryEntry(
+            transformId: prompt.id,
+            transformName: prompt.name,
+            inputText: result.inputText,
+            outputText: result.outputText,
+            sourceAppBundleID: sourceApp.bundleID,
+            sourceAppName: sourceApp.name,
+            capturePath: result.captureTag,
+            replacementPath: result.path.rawValue,
+            llmElapsedMs: result.llmElapsedMs,
+            totalElapsedMs: result.totalElapsedMs,
+            createdAt: now,
+            updatedAt: now
+        )
+        do {
+            try historyRepository.save(entry)
+            NotificationCenter.default.post(name: .transformHistoryChanged, object: nil)
+        } catch {
+            logger.error("transforms: failed to save local history: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

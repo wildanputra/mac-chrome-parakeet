@@ -10,25 +10,46 @@ import MacParakeetCore
 @MainActor
 @Observable
 public final class TransformsViewModel {
+    public nonisolated static let historyFetchLimit = 200
+
     public var transforms: [Prompt] = []
+    public var history: [TransformHistoryEntry] = []
+    public var totalHistoryCount: Int = 0
     public var errorMessage: String?
+    public var historyErrorMessage: String?
 
     /// Pending delete confirmation. Set when the user hits delete on a
     /// (non-built-in) Transform; cleared on confirm or cancel.
     public var pendingDeleteTransform: Prompt?
+    public var pendingDeleteHistoryEntry: TransformHistoryEntry?
+    public var isConfirmingClearHistory: Bool = false
+    public var copiedHistoryEntryID: UUID?
 
     /// True when the user has at least one LLM provider configured. Drives
     /// the calm "Configure in Settings" hero state.
     public var hasLLMProvider: Bool = false
 
     private var repo: PromptRepositoryProtocol?
+    private var historyRepo: TransformHistoryRepositoryProtocol?
+    private var clipboardService: ClipboardServiceProtocol?
+    private var copiedResetTask: Task<Void, Never>?
 
     public init() {}
 
-    public func configure(repo: PromptRepositoryProtocol, hasLLMProvider: Bool) {
+    public func configure(
+        repo: PromptRepositoryProtocol,
+        historyRepo: TransformHistoryRepositoryProtocol? = nil,
+        clipboardService: ClipboardServiceProtocol? = nil,
+        hasLLMProvider: Bool
+    ) {
         self.repo = repo
+        self.historyRepo = historyRepo
+        self.clipboardService = clipboardService
         self.hasLLMProvider = hasLLMProvider
         load()
+        Task {
+            await loadHistory()
+        }
     }
 
     /// Refresh the list from the repository. Built-ins are seeded by the
@@ -46,6 +67,27 @@ public final class TransformsViewModel {
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    public func loadHistory() async {
+        guard let historyRepo else {
+            history = []
+            totalHistoryCount = 0
+            return
+        }
+        do {
+            let snapshot = try await Self.fetchHistorySnapshot(
+                repo: historyRepo,
+                limit: Self.historyFetchLimit
+            )
+            history = snapshot.entries
+            totalHistoryCount = snapshot.totalCount
+            historyErrorMessage = nil
+        } catch {
+            history = []
+            totalHistoryCount = 0
+            historyErrorMessage = error.localizedDescription
         }
     }
 
@@ -97,6 +139,101 @@ public final class TransformsViewModel {
         guard let pending = pendingDeleteTransform else { return }
         pendingDeleteTransform = nil
         delete(pending)
+    }
+
+    public func confirmPendingHistoryDelete() async {
+        guard let pending = pendingDeleteHistoryEntry else { return }
+        pendingDeleteHistoryEntry = nil
+        await deleteHistoryEntry(pending)
+    }
+
+    public func deleteHistoryEntry(_ entry: TransformHistoryEntry) async {
+        guard let historyRepo else { return }
+        do {
+            let snapshot = try await Self.deleteHistoryEntryAndFetchSnapshot(
+                repo: historyRepo,
+                id: entry.id,
+                limit: Self.historyFetchLimit
+            )
+            history = snapshot.entries
+            totalHistoryCount = snapshot.totalCount
+            historyErrorMessage = nil
+        } catch {
+            historyErrorMessage = error.localizedDescription
+        }
+    }
+
+    public func clearHistory() async {
+        guard let historyRepo else { return }
+        do {
+            let snapshot = try await Self.clearHistoryAndFetchSnapshot(
+                repo: historyRepo,
+                limit: Self.historyFetchLimit
+            )
+            history = snapshot.entries
+            totalHistoryCount = snapshot.totalCount
+            isConfirmingClearHistory = false
+            historyErrorMessage = nil
+        } catch {
+            historyErrorMessage = error.localizedDescription
+        }
+    }
+
+    public func copyOutputToClipboard(_ entry: TransformHistoryEntry) async {
+        guard let clipboardService else {
+            historyErrorMessage = "Clipboard service is unavailable."
+            return
+        }
+
+        guard await clipboardService.copyToClipboard(entry.outputText) else {
+            historyErrorMessage = "Could not copy transformed text to the clipboard."
+            return
+        }
+
+        historyErrorMessage = nil
+        copiedResetTask?.cancel()
+        copiedHistoryEntryID = entry.id
+        copiedResetTask = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            self.copiedHistoryEntryID = nil
+        }
+    }
+
+    private static func fetchHistorySnapshot(
+        repo: TransformHistoryRepositoryProtocol,
+        limit: Int
+    ) async throws -> (entries: [TransformHistoryEntry], totalCount: Int) {
+        try await Task.detached(priority: .userInitiated) {
+            let entries = try repo.fetchRecent(limit: limit)
+            let totalCount = try repo.count()
+            return (entries, totalCount)
+        }.value
+    }
+
+    private static func deleteHistoryEntryAndFetchSnapshot(
+        repo: TransformHistoryRepositoryProtocol,
+        id: UUID,
+        limit: Int
+    ) async throws -> (entries: [TransformHistoryEntry], totalCount: Int) {
+        try await Task.detached(priority: .userInitiated) {
+            _ = try repo.delete(id: id)
+            let entries = try repo.fetchRecent(limit: limit)
+            let totalCount = try repo.count()
+            return (entries, totalCount)
+        }.value
+    }
+
+    private static func clearHistoryAndFetchSnapshot(
+        repo: TransformHistoryRepositoryProtocol,
+        limit: Int
+    ) async throws -> (entries: [TransformHistoryEntry], totalCount: Int) {
+        try await Task.detached(priority: .userInitiated) {
+            try repo.deleteAll()
+            let entries = try repo.fetchRecent(limit: limit)
+            let totalCount = try repo.count()
+            return (entries, totalCount)
+        }.value
     }
 
     /// Reset a built-in Transform's content / shortcut / runningLabel back

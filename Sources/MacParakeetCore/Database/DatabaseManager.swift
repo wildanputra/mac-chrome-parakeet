@@ -683,6 +683,38 @@ public final class DatabaseManager: Sendable {
             }
         }
 
+        // v0.14 — Local-only Transform history. Stores high-intent selected-text
+        // rewrites so users can recover and revisit prior edits. No foreign key
+        // to prompts: deleting a custom Transform should not delete the user's
+        // run history.
+        migrator.registerMigration("v0.14-transform-history") { db in
+            try db.create(table: "transform_history") { t in
+                t.column("id", .text).primaryKey()
+                t.column("transformId", .text)
+                t.column("transformName", .text).notNull()
+                t.column("inputText", .text).notNull()
+                t.column("outputText", .text).notNull()
+                t.column("sourceAppBundleID", .text)
+                t.column("sourceAppName", .text)
+                t.column("capturePath", .text).notNull()
+                t.column("replacementPath", .text).notNull()
+                t.column("llmElapsedMs", .integer).notNull().defaults(to: 0)
+                t.column("totalElapsedMs", .integer).notNull().defaults(to: 0)
+                t.column("createdAt", .text).notNull()
+                t.column("updatedAt", .text).notNull()
+            }
+            try db.create(
+                index: "idx_transform_history_created_at",
+                on: "transform_history",
+                columns: ["createdAt"]
+            )
+            try db.create(
+                index: "idx_transform_history_transform_id",
+                on: "transform_history",
+                columns: ["transformId"]
+            )
+        }
+
         try migrator.migrate(dbQueue)
         try reconcileBuiltInPrompts()
         try reconcileBuiltInQuickPrompts()

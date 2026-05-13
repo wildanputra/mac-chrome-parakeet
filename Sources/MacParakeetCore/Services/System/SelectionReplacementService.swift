@@ -19,6 +19,7 @@ public enum SelectionReplacementError: Error, LocalizedError, Sendable {
     case eventSourceUnavailable
     case pasteboardWriteFailed
     case eventPostingFailed
+    case targetActivationFailed
     case allPathsFailed
 
     public var errorDescription: String? {
@@ -31,6 +32,8 @@ public enum SelectionReplacementError: Error, LocalizedError, Sendable {
             return "Could not write replacement text to the clipboard."
         case .eventPostingFailed:
             return "Failed to post Cmd+V keystroke."
+        case .targetActivationFailed:
+            return "Could not reactivate the original app before pasting."
         case .allPathsFailed:
             return "Selection replacement failed via both AX-write and clipboard paste."
         }
@@ -53,6 +56,12 @@ protocol SelectionReplacementBackend: Sendable {
 
     @MainActor
     func writePasteboardString(_ text: String) -> Bool
+
+    @MainActor
+    func activateApplication(target: SelectionCaptureTarget) -> Bool
+
+    @MainActor
+    func isFrontmostApplication(target: SelectionCaptureTarget) -> Bool
 
     @MainActor
     func postCmdV() throws
@@ -85,9 +94,12 @@ public actor SelectionReplacementService {
     /// clipboard snapshot. 500ms matches the conventional "Espanso / Raycast"
     /// value and the Gemini-review feedback on the capture side.
     public static let defaultPostPasteDelay: Duration = .milliseconds(500)
+    public static let defaultActivationTimeout: Duration = .milliseconds(500)
 
     private let backend: any SelectionReplacementBackend
     private let postPasteDelay: Duration
+    private let activationTimeout: Duration
+    private let activationPollIntervalNanos: UInt64
     private let logger: Logger
 
     public init() {
@@ -97,10 +109,14 @@ public actor SelectionReplacementService {
     init(
         backend: any SelectionReplacementBackend,
         postPasteDelay: Duration = SelectionReplacementService.defaultPostPasteDelay,
+        activationTimeout: Duration = SelectionReplacementService.defaultActivationTimeout,
+        activationPollIntervalNanos: UInt64 = 10_000_000,  // 10 ms
         logger: Logger = Logger(subsystem: "com.macparakeet.core", category: "SelectionReplacementService")
     ) {
         self.backend = backend
         self.postPasteDelay = postPasteDelay
+        self.activationTimeout = activationTimeout
+        self.activationPollIntervalNanos = activationPollIntervalNanos
         self.logger = logger
     }
 
@@ -112,7 +128,7 @@ public actor SelectionReplacementService {
         in context: SelectionCaptureResult
     ) async throws -> SelectionReplacementPath {
         switch context {
-        case .ax(_, let focused):
+        case .ax(_, let focused, _):
             // AX-write is the no-side-effect path. If it succeeds, we're done.
             if backend.writeSelectionViaAX(newText, element: focused.element) {
                 return .ax
@@ -121,16 +137,16 @@ public actor SelectionReplacementService {
             // capture path didn't touch the clipboard, so we capture a fresh
             // snapshot here to preserve whatever the user had on it).
             let freshSnapshot = await snapshotPasteboardForFallback()
-            try await pasteAndRestore(newText: newText, snapshot: freshSnapshot)
+            try await pasteAndRestore(newText: newText, snapshot: freshSnapshot, target: context.target)
             return .clipboardPaste
 
-        case .clipboard(_, let savedSnapshot):
+        case .clipboard(_, let savedSnapshot, _):
             // Original capture already hijacked the clipboard. Paste then
             // restore the snapshot we promised the user we'd put back. If the
             // user copied something else while the LLM was running, preserve
             // that newer clipboard instead of the pre-transform snapshot.
             let restoreSnapshot = await snapshotForClipboardContext(savedSnapshot)
-            try await pasteAndRestore(newText: newText, snapshot: restoreSnapshot)
+            try await pasteAndRestore(newText: newText, snapshot: restoreSnapshot, target: context.target)
             return .clipboardPaste
 
         case .empty, .failed:
@@ -159,7 +175,8 @@ public actor SelectionReplacementService {
 
     private func pasteAndRestore(
         newText: String,
-        snapshot: PasteboardSnapshot
+        snapshot: PasteboardSnapshot,
+        target: SelectionCaptureTarget?
     ) async throws {
         // Write our payload and capture the changeCount *after* the write —
         // that's the value the restore guard compares against. If anyone
@@ -172,6 +189,13 @@ public actor SelectionReplacementService {
             // called clearContents().
             await restoreSnapshotOnMain(snapshot)
             throw SelectionReplacementError.pasteboardWriteFailed
+        }
+
+        if let target {
+            guard await activateAndWaitForTarget(target) else {
+                await restoreIfSafe(snapshot, ourChangeCount: ourChangeCount)
+                throw SelectionReplacementError.targetActivationFailed
+            }
         }
 
         do {
@@ -195,6 +219,31 @@ public actor SelectionReplacementService {
     private func writeAndCaptureChangeCountOnMain(_ text: String) -> Int? {
         guard backend.writePasteboardString(text) else { return nil }
         return backend.currentChangeCount()
+    }
+
+    @MainActor
+    private func activateApplicationOnMain(_ target: SelectionCaptureTarget) -> Bool {
+        backend.activateApplication(target: target)
+    }
+
+    private func activateAndWaitForTarget(_ target: SelectionCaptureTarget) async -> Bool {
+        guard await activateApplicationOnMain(target) else {
+            return false
+        }
+
+        let deadline = ContinuousClock.now + activationTimeout
+        while ContinuousClock.now < deadline {
+            if await isFrontmostApplicationOnMain(target) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: activationPollIntervalNanos)
+        }
+        return await isFrontmostApplicationOnMain(target)
+    }
+
+    @MainActor
+    private func isFrontmostApplicationOnMain(_ target: SelectionCaptureTarget) -> Bool {
+        backend.isFrontmostApplication(target: target)
     }
 
     @MainActor
@@ -288,6 +337,25 @@ struct SystemSelectionReplacementBackend: SelectionReplacementBackend, @unchecke
             return copy
         }
         return PasteboardSnapshot(items: items, originalChangeCount: pasteboard.changeCount)
+    }
+
+    @MainActor
+    func activateApplication(target: SelectionCaptureTarget) -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: target.processIdentifier),
+              app.bundleIdentifier == target.bundleIdentifier
+        else {
+            return false
+        }
+        return app.activate()
+    }
+
+    @MainActor
+    func isFrontmostApplication(target: SelectionCaptureTarget) -> Bool {
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            return false
+        }
+        return app.processIdentifier == target.processIdentifier
+            && app.bundleIdentifier == target.bundleIdentifier
     }
 
     @MainActor

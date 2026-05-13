@@ -14,7 +14,7 @@ final class SelectionReplacementServiceTests: XCTestCase {
 
         let path = try await service.replace(
             with: "polished",
-            in: .ax(text: "raw", element: AXFocusedElement(AXUIElementCreateSystemWide()))
+            in: .ax(text: "raw", element: AXFocusedElement(AXUIElementCreateSystemWide()), target: nil)
         )
 
         XCTAssertEqual(path, .ax)
@@ -31,7 +31,7 @@ final class SelectionReplacementServiceTests: XCTestCase {
 
         let path = try await service.replace(
             with: "polished",
-            in: .ax(text: "raw", element: AXFocusedElement(AXUIElementCreateSystemWide()))
+            in: .ax(text: "raw", element: AXFocusedElement(AXUIElementCreateSystemWide()), target: nil)
         )
 
         XCTAssertEqual(path, .clipboardPaste)
@@ -50,7 +50,7 @@ final class SelectionReplacementServiceTests: XCTestCase {
 
         let path = try await service.replace(
             with: "polished",
-            in: .clipboard(text: "raw", savedClipboard: snapshot)
+            in: .clipboard(text: "raw", savedClipboard: snapshot, target: nil)
         )
 
         XCTAssertEqual(path, .clipboardPaste)
@@ -84,7 +84,7 @@ final class SelectionReplacementServiceTests: XCTestCase {
         do {
             _ = try await service.replace(
                 with: "polished",
-                in: .clipboard(text: "raw", savedClipboard: snapshot)
+                in: .clipboard(text: "raw", savedClipboard: snapshot, target: nil)
             )
             XCTFail("Expected pasteboardWriteFailed")
         } catch let error as SelectionReplacementError {
@@ -111,7 +111,7 @@ final class SelectionReplacementServiceTests: XCTestCase {
 
         _ = try await service.replace(
             with: "polished",
-            in: .clipboard(text: "raw", savedClipboard: snapshot)
+            in: .clipboard(text: "raw", savedClipboard: snapshot, target: nil)
         )
 
         XCTAssertEqual(backend.cmdVPostCount(), 1, "Paste should still happen — we only suppress restore")
@@ -134,12 +134,110 @@ final class SelectionReplacementServiceTests: XCTestCase {
 
         _ = try await service.replace(
             with: "polished",
-            in: .clipboard(text: "raw", savedClipboard: preTransformSnapshot)
+            in: .clipboard(text: "raw", savedClipboard: preTransformSnapshot, target: nil)
         )
 
         XCTAssertEqual(backend.cmdVPostCount(), 1)
         XCTAssertEqual(backend.restoreCount(), 1)
         XCTAssertEqual(backend.lastRestoredChangeCount(), 12, "Restore should use the user's newer clipboard snapshot, not the pre-transform one")
+    }
+
+    func testClipboardPasteReactivatesOriginalTargetBeforeCmdV() async throws {
+        let backend = FakeSelectionReplacementBackend(
+            isTrusted: true,
+            axWriteSucceeds: false
+        )
+        let service = SelectionReplacementService(backend: backend, postPasteDelay: .milliseconds(1))
+        let snapshot = PasteboardSnapshot(items: nil, originalChangeCount: 42)
+
+        _ = try await service.replace(
+            with: "polished",
+            in: .clipboard(
+                text: "raw",
+                savedClipboard: snapshot,
+                target: SelectionCaptureTarget(
+                    processIdentifier: 1234,
+                    bundleIdentifier: "com.example.Source"
+                )
+            )
+        )
+
+        XCTAssertEqual(backend.activatedTargets(), [
+            SelectionCaptureTarget(
+                processIdentifier: 1234,
+                bundleIdentifier: "com.example.Source"
+            )
+        ])
+        XCTAssertEqual(backend.cmdVPostCount(), 1)
+    }
+
+    func testClipboardPasteDoesNotPostCmdVWhenTargetActivationFails() async {
+        let backend = FakeSelectionReplacementBackend(
+            isTrusted: true,
+            axWriteSucceeds: false,
+            targetActivationSucceeds: false
+        )
+        let service = SelectionReplacementService(backend: backend, postPasteDelay: .milliseconds(1))
+        let snapshot = PasteboardSnapshot(items: nil, originalChangeCount: 42)
+
+        do {
+            _ = try await service.replace(
+                with: "polished",
+                in: .clipboard(
+                    text: "raw",
+                    savedClipboard: snapshot,
+                    target: SelectionCaptureTarget(
+                        processIdentifier: 1234,
+                        bundleIdentifier: "com.example.Source"
+                    )
+                )
+            )
+            XCTFail("Expected targetActivationFailed")
+        } catch let error as SelectionReplacementError {
+            XCTAssertEqual(error, .targetActivationFailed)
+            XCTAssertEqual(backend.cmdVPostCount(), 0)
+            XCTAssertGreaterThanOrEqual(backend.restoreCount(), 1)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testClipboardPasteDoesNotPostCmdVUntilTargetIsFrontmost() async {
+        let backend = FakeSelectionReplacementBackend(
+            isTrusted: true,
+            axWriteSucceeds: false,
+            targetActivationSucceeds: true,
+            activationMakesTargetFrontmost: false
+        )
+        let service = SelectionReplacementService(
+            backend: backend,
+            postPasteDelay: .milliseconds(1),
+            activationTimeout: .milliseconds(1),
+            activationPollIntervalNanos: 1_000_000
+        )
+        let snapshot = PasteboardSnapshot(items: nil, originalChangeCount: 42)
+
+        do {
+            _ = try await service.replace(
+                with: "polished",
+                in: .clipboard(
+                    text: "raw",
+                    savedClipboard: snapshot,
+                    target: SelectionCaptureTarget(
+                        processIdentifier: 1234,
+                        bundleIdentifier: "com.example.Source"
+                    )
+                )
+            )
+            XCTFail("Expected targetActivationFailed")
+        } catch let error as SelectionReplacementError {
+            XCTAssertEqual(error, .targetActivationFailed)
+            XCTAssertEqual(backend.cmdVPostCount(), 0)
+            XCTAssertGreaterThanOrEqual(backend.frontmostCheckCount(), 1)
+            XCTAssertGreaterThanOrEqual(backend.restoreCount(), 1)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 }
 
@@ -152,11 +250,16 @@ final class FakeSelectionReplacementBackend: SelectionReplacementBackend, @unche
     private let axWriteSucceedsValue: Bool
     private let pasteboardWriteSucceedsValue: Bool
     private let simulateUserCopyAfterWrite: Bool
+    private let targetActivationSucceeds: Bool
+    private let activationMakesTargetFrontmost: Bool
     private let lock = OSAllocatedUnfairLock<State>(initialState: State())
 
     private struct State {
         var axTexts: [String] = []
         var clipboardTexts: [String] = []
+        var activatedTargets: [SelectionCaptureTarget] = []
+        var frontmostTarget: SelectionCaptureTarget?
+        var frontmostChecks: Int = 0
         var cmdVPosts: Int = 0
         var restoreSnapshots: [PasteboardSnapshot] = []
         /// Simulated pasteboard changeCount. Bumped on `writePasteboardString`
@@ -173,12 +276,16 @@ final class FakeSelectionReplacementBackend: SelectionReplacementBackend, @unche
         axWriteSucceeds: Bool = false,
         pasteboardWriteSucceeds: Bool = true,
         simulateUserCopyAfterWrite: Bool = false,
+        targetActivationSucceeds: Bool = true,
+        activationMakesTargetFrontmost: Bool = true,
         initialChangeCount: Int = 0
     ) {
         self.trusted = isTrusted
         self.axWriteSucceedsValue = axWriteSucceeds
         self.pasteboardWriteSucceedsValue = pasteboardWriteSucceeds
         self.simulateUserCopyAfterWrite = simulateUserCopyAfterWrite
+        self.targetActivationSucceeds = targetActivationSucceeds
+        self.activationMakesTargetFrontmost = activationMakesTargetFrontmost
         lock.withLock { $0.changeCount = initialChangeCount }
     }
 
@@ -200,6 +307,25 @@ final class FakeSelectionReplacementBackend: SelectionReplacementBackend, @unche
             }
         }
         return pasteboardWriteSucceedsValue
+    }
+
+    @MainActor
+    func activateApplication(target: SelectionCaptureTarget) -> Bool {
+        lock.withLock { state in
+            state.activatedTargets.append(target)
+            if targetActivationSucceeds, activationMakesTargetFrontmost {
+                state.frontmostTarget = target
+            }
+        }
+        return targetActivationSucceeds
+    }
+
+    @MainActor
+    func isFrontmostApplication(target: SelectionCaptureTarget) -> Bool {
+        lock.withLock { state in
+            state.frontmostChecks += 1
+            return state.frontmostTarget == target
+        }
     }
 
     @MainActor
@@ -246,6 +372,14 @@ final class FakeSelectionReplacementBackend: SelectionReplacementBackend, @unche
 
     func cmdVPostCount() -> Int {
         lock.withLock { $0.cmdVPosts }
+    }
+
+    func activatedTargets() -> [SelectionCaptureTarget] {
+        lock.withLock { $0.activatedTargets }
+    }
+
+    func frontmostCheckCount() -> Int {
+        lock.withLock { $0.frontmostChecks }
     }
 
     func restoreCount() -> Int {

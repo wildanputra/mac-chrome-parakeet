@@ -419,7 +419,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // feature flag is off.
         let transforms = TransformsCoordinator(
             llmServiceProvider: llmServiceProvider,
-            promptRepository: env.promptRepo
+            promptRepository: env.promptRepo,
+            historyRepository: env.transformHistoryRepo
         )
         transforms.start()
         transformsCoordinator = transforms

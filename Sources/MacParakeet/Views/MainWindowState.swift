@@ -28,5 +28,7 @@ extension Notification.Name {
     /// `TransformsCoordinator` can reload bindings into the hotkey
     /// registry.
     static let transformsBindingsChanged = Notification.Name("com.macparakeet.transforms.bindingsChanged")
+    /// Posted after a successful Transform is saved to local history so the
+    /// Transforms tab can refresh if it is visible.
+    static let transformHistoryChanged = Notification.Name("com.macparakeet.transforms.historyChanged")
 }
-

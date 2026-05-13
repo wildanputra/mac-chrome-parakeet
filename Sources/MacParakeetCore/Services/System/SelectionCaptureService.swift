@@ -13,12 +13,12 @@ public enum SelectionCaptureResult: @unchecked Sendable {
     /// AX read returned a non-empty `kAXSelectedTextAttribute`. The element
     /// handle is retained so the replacement service can try `AXUIElementSet`
     /// before falling back to clipboard paste-back.
-    case ax(text: String, element: AXFocusedElement)
+    case ax(text: String, element: AXFocusedElement, target: SelectionCaptureTarget?)
 
     /// AX read returned empty/unsupported; clipboard hijack (Cmd+C + poll
     /// `changeCount`) found non-empty text. The captured snapshot must be
     /// restored after replacement completes.
-    case clipboard(text: String, savedClipboard: PasteboardSnapshot)
+    case clipboard(text: String, savedClipboard: PasteboardSnapshot, target: SelectionCaptureTarget?)
 
     /// Neither AX nor clipboard hijack returned non-empty text.
     case empty
@@ -29,8 +29,17 @@ public enum SelectionCaptureResult: @unchecked Sendable {
 
     public var capturedText: String? {
         switch self {
-        case .ax(let text, _), .clipboard(let text, _):
+        case .ax(let text, _, _), .clipboard(let text, _, _):
             return text
+        case .empty, .failed:
+            return nil
+        }
+    }
+
+    public var target: SelectionCaptureTarget? {
+        switch self {
+        case .ax(_, _, let target), .clipboard(_, _, let target):
+            return target
         case .empty, .failed:
             return nil
         }
@@ -77,6 +86,17 @@ public struct AXFocusedElement: @unchecked Sendable {
     }
 }
 
+/// The app that owned the selection when the Transform was triggered.
+public struct SelectionCaptureTarget: Sendable, Equatable {
+    public let processIdentifier: pid_t
+    public let bundleIdentifier: String
+
+    public init(processIdentifier: pid_t, bundleIdentifier: String) {
+        self.processIdentifier = processIdentifier
+        self.bundleIdentifier = bundleIdentifier
+    }
+}
+
 /// Snapshot of the pasteboard items captured before a clipboard hijack. Held
 /// opaquely so callers don't have to know about AppKit types. `@unchecked
 /// Sendable` because `NSPasteboardItem` is not Sendable but our usage is
@@ -116,6 +136,9 @@ protocol SelectionCaptureBackend: Sendable {
     func isAccessibilityTrusted() -> Bool
     func focusedElement() -> AXUIElement?
     func selectedText(of element: AXUIElement) -> String?
+
+    @MainActor
+    func frontmostApplicationTarget() -> SelectionCaptureTarget?
 
     /// Snapshot the pasteboard and return the saved items + the changeCount at
     /// snapshot time (so the poll loop can detect the Cmd+C-triggered change).
@@ -190,15 +213,17 @@ public actor SelectionCaptureService {
             return .failed(.accessibilityNotAuthorized)
         }
 
+        let target = await captureTargetOnMain()
+
         if let element = backend.focusedElement() {
             if let text = backend.selectedText(of: element),
                !text.isEmpty {
-                return .ax(text: text, element: AXFocusedElement(element))
+                return .ax(text: text, element: AXFocusedElement(element), target: target)
             }
         }
 
         // Clipboard-hijack fallback.
-        return await clipboardHijack()
+        return await clipboardHijack(target: target)
     }
 
     /// Restore a clipboard capture that is being abandoned before replacement.
@@ -206,7 +231,7 @@ public actor SelectionCaptureService {
     /// we only restore if the pasteboard is still at the Cmd+C change count
     /// created by `clipboardHijack()`.
     func restoreClipboardCaptureIfCurrent(_ result: SelectionCaptureResult) async {
-        guard case .clipboard(_, let snapshot) = result else { return }
+        guard case .clipboard(_, let snapshot, _) = result else { return }
 
         guard let temporaryChangeCount = snapshot.temporaryChangeCount else {
             await restoreSnapshotOnMain(snapshot)
@@ -223,7 +248,7 @@ public actor SelectionCaptureService {
 
     // MARK: - Clipboard Hijack
 
-    private func clipboardHijack() async -> SelectionCaptureResult {
+    private func clipboardHijack(target: SelectionCaptureTarget?) async -> SelectionCaptureResult {
         let snapshot = await snapshotPasteboardOnMain()
         do {
             try await postCmdCOnMain()
@@ -245,7 +270,7 @@ public actor SelectionCaptureService {
             let now = await currentChangeCountOnMain()
             if now != snapshot.originalChangeCount {
                 if let text = await currentStringOnMain(), !text.isEmpty {
-                    return .clipboard(text: text, savedClipboard: snapshot.withTemporaryChangeCount(now))
+                    return .clipboard(text: text, savedClipboard: snapshot.withTemporaryChangeCount(now), target: target)
                 }
                 // Change count moved but no string available (image, file, etc.).
                 // Cmd+C *did* write — the user's pre-hijack clipboard is now
@@ -259,6 +284,11 @@ public actor SelectionCaptureService {
         // No change count delta — selection was empty. Pasteboard wasn't
         // touched (Cmd+C with no selection is a no-op) so nothing to restore.
         return .empty
+    }
+
+    @MainActor
+    private func captureTargetOnMain() -> SelectionCaptureTarget? {
+        backend.frontmostApplicationTarget()
     }
 
     @MainActor
@@ -332,6 +362,19 @@ struct SystemSelectionCaptureBackend: SelectionCaptureBackend, @unchecked Sendab
         guard status == .success, let raw else { return nil }
         let value = raw as? String
         return value?.isEmpty == true ? nil : value
+    }
+
+    @MainActor
+    func frontmostApplicationTarget() -> SelectionCaptureTarget? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let bundleIdentifier = app.bundleIdentifier
+        else {
+            return nil
+        }
+        return SelectionCaptureTarget(
+            processIdentifier: app.processIdentifier,
+            bundleIdentifier: bundleIdentifier
+        )
     }
 
     @MainActor

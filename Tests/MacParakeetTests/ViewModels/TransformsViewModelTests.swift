@@ -6,13 +6,22 @@ import XCTest
 final class TransformsViewModelTests: XCTestCase {
     var manager: DatabaseManager!
     var repo: PromptRepository!
+    var historyRepo: TransformHistoryRepository!
+    var clipboardService: MockClipboardService!
     var viewModel: TransformsViewModel!
 
     override func setUp() async throws {
         manager = try DatabaseManager()
         repo = PromptRepository(dbQueue: manager.dbQueue)
+        historyRepo = TransformHistoryRepository(dbQueue: manager.dbQueue)
+        clipboardService = MockClipboardService()
         viewModel = TransformsViewModel()
-        viewModel.configure(repo: repo, hasLLMProvider: true)
+        viewModel.configure(
+            repo: repo,
+            historyRepo: historyRepo,
+            clipboardService: clipboardService,
+            hasLLMProvider: true
+        )
     }
 
     func testLoadPullsOnlyTransformCategoryPrompts() {
@@ -140,5 +149,115 @@ final class TransformsViewModelTests: XCTestCase {
 
         let reloaded = viewModel.transforms.first(where: { $0.name == "Polish" })!
         XCTAssertEqual(reloaded.content, customContent, "Reseed must not overwrite existing built-in customizations.")
+    }
+
+    func testLoadHistoryOrdersNewestFirst() async throws {
+        try historyRepo.save(
+            TransformHistoryEntry(
+                transformName: "Polish",
+                inputText: "rough",
+                outputText: "polished",
+                capturePath: "ax",
+                replacementPath: "ax",
+                llmElapsedMs: 1,
+                totalElapsedMs: 2,
+                createdAt: Date(timeIntervalSince1970: 10),
+                updatedAt: Date(timeIntervalSince1970: 10)
+            )
+        )
+        try historyRepo.save(
+            TransformHistoryEntry(
+                transformName: "Distill",
+                inputText: "long",
+                outputText: "short",
+                capturePath: "clipboard",
+                replacementPath: "clipboardPaste",
+                llmElapsedMs: 3,
+                totalElapsedMs: 4,
+                createdAt: Date(timeIntervalSince1970: 20),
+                updatedAt: Date(timeIntervalSince1970: 20)
+            )
+        )
+
+        await viewModel.loadHistory()
+
+        XCTAssertEqual(viewModel.history.map(\.transformName), ["Distill", "Polish"])
+        XCTAssertEqual(viewModel.totalHistoryCount, 2)
+    }
+
+    func testLoadHistoryTotalCountIncludesRowsPastFetchLimit() async throws {
+        for index in 0..<205 {
+            try historyRepo.save(
+                TransformHistoryEntry(
+                    transformName: "Transform \(index)",
+                    inputText: "input",
+                    outputText: "output",
+                    capturePath: "ax",
+                    replacementPath: "ax",
+                    llmElapsedMs: 1,
+                    totalElapsedMs: 2,
+                    createdAt: Date(timeIntervalSince1970: TimeInterval(index)),
+                    updatedAt: Date(timeIntervalSince1970: TimeInterval(index))
+                )
+            )
+        }
+
+        await viewModel.loadHistory()
+
+        XCTAssertEqual(viewModel.history.count, TransformsViewModel.historyFetchLimit)
+        XCTAssertEqual(viewModel.totalHistoryCount, 205)
+    }
+
+    func testDeleteAndClearHistory() async throws {
+        let first = TransformHistoryEntry(
+            transformName: "Polish",
+            inputText: "one",
+            outputText: "One.",
+            capturePath: "ax",
+            replacementPath: "ax",
+            llmElapsedMs: 1,
+            totalElapsedMs: 2
+        )
+        let second = TransformHistoryEntry(
+            transformName: "Decide",
+            inputText: "two",
+            outputText: "Choose two.",
+            capturePath: "clipboard",
+            replacementPath: "clipboardPaste",
+            llmElapsedMs: 3,
+            totalElapsedMs: 4
+        )
+        try historyRepo.save(first)
+        try historyRepo.save(second)
+        await viewModel.loadHistory()
+
+        await viewModel.deleteHistoryEntry(first)
+
+        XCTAssertEqual(viewModel.history.map(\.id), [second.id])
+        XCTAssertEqual(viewModel.totalHistoryCount, 1)
+
+        await viewModel.clearHistory()
+
+        XCTAssertTrue(viewModel.history.isEmpty)
+        XCTAssertEqual(viewModel.totalHistoryCount, 0)
+        XCTAssertEqual(try historyRepo.count(), 0)
+    }
+
+    func testCopyHistoryOutputUsesInjectedClipboardService() async {
+        let entry = TransformHistoryEntry(
+            transformName: "Polish",
+            inputText: "rough",
+            outputText: "polished",
+            capturePath: "ax",
+            replacementPath: "ax",
+            llmElapsedMs: 1,
+            totalElapsedMs: 2
+        )
+
+        await viewModel.copyOutputToClipboard(entry)
+
+        let copiedText = await clipboardService.lastCopiedText
+        XCTAssertEqual(copiedText, "polished")
+        XCTAssertEqual(viewModel.copiedHistoryEntryID, entry.id)
     }
 }
