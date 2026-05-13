@@ -6,11 +6,6 @@ import OSLog
 
 // MARK: - Result Types
 
-public enum SelectionCapturePath: String, Sendable, Equatable {
-    case ax
-    case clipboard
-}
-
 /// Source of a successful selection read. Used by `TransformExecutor` to pick
 /// the right replacement path: an `.ax` capture can attempt an AX-write first,
 /// while a `.clipboard` capture must paste-back via Cmd+V.
@@ -95,12 +90,10 @@ public struct AXFocusedElement: @unchecked Sendable {
 public struct SelectionCaptureTarget: Sendable, Equatable {
     public let processIdentifier: pid_t
     public let bundleIdentifier: String
-    public let localizedName: String?
 
-    public init(processIdentifier: pid_t, bundleIdentifier: String, localizedName: String? = nil) {
+    public init(processIdentifier: pid_t, bundleIdentifier: String) {
         self.processIdentifier = processIdentifier
         self.bundleIdentifier = bundleIdentifier
-        self.localizedName = localizedName
     }
 }
 
@@ -380,8 +373,7 @@ struct SystemSelectionCaptureBackend: SelectionCaptureBackend, @unchecked Sendab
         }
         return SelectionCaptureTarget(
             processIdentifier: app.processIdentifier,
-            bundleIdentifier: bundleIdentifier,
-            localizedName: app.localizedName
+            bundleIdentifier: bundleIdentifier
         )
     }
 

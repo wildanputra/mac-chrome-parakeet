@@ -102,11 +102,10 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
     bindings (must include a modifier).
   - `transforms delete <id|name> [--json]` — deletes a custom
     Transform. Built-ins are protected.
-  - `list`, `show`, and `create --json` emit snake-cased
-    `TransformDTO` objects (`id`, `name`, `shortcut`, `running_label`,
-    `is_built_in`, `prompt`, `created_at`, `updated_at`) so consumers
-    don't see the internal `Prompt` shape. `run --json` emits the LLM
-    result envelope, and `delete --json` emits `{deleted,id,name}`.
+  - All `--json` outputs use a snake-cased `TransformDTO` envelope
+    (`id`, `name`, `shortcut`, `running_label`, `is_built_in`,
+    `prompt`, `created_at`, `updated_at`) — consumers don't see the
+    internal `Prompt` shape.
 - `transforms history list / show / delete / clear` — new local Transform
   history surface for testing and recovering saved GUI Transform runs.
   - `transforms history [list] [--limit N] [--json]` — lists local
