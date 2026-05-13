@@ -182,11 +182,13 @@ func findPrompt(idOrName: String, repo: PromptRepository) throws -> Prompt {
     let trimmed = idOrName.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { throw CLILookupError.emptyID }
 
-    if let uuid = UUID(uuidString: trimmed), let prompt = try repo.fetch(id: uuid) {
+    if let uuid = UUID(uuidString: trimmed),
+       let prompt = try repo.fetch(id: uuid),
+       prompt.category == .result {
         return prompt
     }
 
-    let all = try repo.fetchAll()
+    let all = try repo.fetchAll().filter { $0.category == .result }
     let lowered = trimmed.lowercased()
 
     if let prefix = uuidPrefixSearchKey(trimmed) {

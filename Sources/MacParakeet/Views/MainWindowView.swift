@@ -7,6 +7,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     case transcribe = "Transcribe"
     case library = "Library"
     case dictations = "Dictations"
+    case transforms = "Transforms"
     case vocabulary = "Vocabulary"
     case feedback = "Feedback"
     case settings = "Settings"
@@ -19,6 +20,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .transcribe: return "waveform"
         case .library: return "square.grid.2x2"
         case .dictations: return "clock.arrow.circlepath"
+        case .transforms: return "wand.and.stars"
         case .vocabulary: return "book.fill"
         case .feedback: return "bubble.left.and.text.bubble.right"
         case .settings: return "gearshape"
@@ -31,8 +33,15 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     /// on); meeting browse lives in `Library` under the `Meetings` filter.
     static let primaryItems: [SidebarItem] = [.transcribe, .library, .dictations]
 
-    /// Configuration and support items
-    static let configItems: [SidebarItem] = [.vocabulary, .feedback, .settings]
+    /// Configuration and support items. Transforms (ADR-022) is inserted
+    /// here at runtime when `AppFeatures.transformsEnabled == true`.
+    static var configItems: [SidebarItem] {
+        var items: [SidebarItem] = [.vocabulary, .feedback, .settings]
+        if AppFeatures.transformsEnabled {
+            items.insert(.transforms, at: 0)
+        }
+        return items
+    }
 
     /// Note: `.discover` is intentionally excluded from the arrays above.
     /// It renders as a pinned card below the sidebar list via `safeAreaInset`.
@@ -48,6 +57,7 @@ struct MainWindowView: View {
     let chatViewModel: TranscriptChatViewModel
     let promptResultsViewModel: PromptResultsViewModel
     let promptsViewModel: PromptsViewModel
+    let transformsViewModel: TransformsViewModel
     let customWordsViewModel: CustomWordsViewModel
     let textSnippetsViewModel: TextSnippetsViewModel
     let vocabularyBackupViewModel: VocabularyBackupViewModel
@@ -138,6 +148,60 @@ struct MainWindowView: View {
                         }
                     case .dictations:
                         DictationHistoryView(viewModel: historyViewModel)
+                    case .transforms:
+                        TransformsView(
+                            viewModel: transformsViewModel,
+                            llmConfiguredAction: { state.selectedItem = .settings },
+                            onEdit: { state.editingTransform = $0 },
+                            onCreate: { state.isCreatingTransform = true },
+                            onBindingsChanged: {
+                                NotificationCenter.default.post(name: .transformsBindingsChanged, object: nil)
+                            }
+                        )
+                        .sheet(isPresented: $state.isCreatingTransform) {
+                            TransformEditorSheet(
+                                viewModel: TransformEditorViewModel(mode: .create),
+                                existingTransforms: transformsViewModel.transforms,
+                                dictationHotkeys: [
+                                    settingsViewModel.hotkeyTrigger,
+                                    settingsViewModel.pushToTalkHotkeyTrigger,
+                                ],
+                                meetingHotkey: settingsViewModel.meetingHotkeyTrigger,
+                                onShortcutRecordingStateChanged: onHotkeyRecordingStateChanged,
+                                onSave: { prompt in
+                                    if transformsViewModel.save(prompt) {
+                                        state.isCreatingTransform = false
+                                        NotificationCenter.default.post(name: .transformsBindingsChanged, object: nil)
+                                    }
+                                },
+                                onCancel: { state.isCreatingTransform = false },
+                                onReset: nil
+                            )
+                        }
+                        .sheet(item: $state.editingTransform) { transform in
+                            TransformEditorSheet(
+                                viewModel: TransformEditorViewModel(mode: .edit(transform)),
+                                existingTransforms: transformsViewModel.transforms,
+                                dictationHotkeys: [
+                                    settingsViewModel.hotkeyTrigger,
+                                    settingsViewModel.pushToTalkHotkeyTrigger,
+                                ],
+                                meetingHotkey: settingsViewModel.meetingHotkeyTrigger,
+                                onShortcutRecordingStateChanged: onHotkeyRecordingStateChanged,
+                                onSave: { prompt in
+                                    if transformsViewModel.save(prompt) {
+                                        state.editingTransform = nil
+                                        NotificationCenter.default.post(name: .transformsBindingsChanged, object: nil)
+                                    }
+                                },
+                                onCancel: { state.editingTransform = nil },
+                                onReset: transform.isBuiltIn ? {
+                                    transformsViewModel.resetBuiltIn(transform)
+                                    state.editingTransform = nil
+                                    NotificationCenter.default.post(name: .transformsBindingsChanged, object: nil)
+                                } : nil
+                            )
+                        }
                     case .vocabulary:
                         VocabularyView(
                             settingsViewModel: settingsViewModel,

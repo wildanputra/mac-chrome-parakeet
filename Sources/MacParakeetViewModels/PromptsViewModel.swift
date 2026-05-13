@@ -27,7 +27,7 @@ public final class PromptsViewModel {
     public func loadPrompts() {
         guard let repo else { return }
         do {
-            prompts = try repo.fetchAll()
+            prompts = try repo.fetchAll().filter { $0.category == .result }
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -42,8 +42,13 @@ public final class PromptsViewModel {
             errorMessage = "Prompt name and content are required."
             return
         }
-        guard isUniqueName(trimmedName) else {
-            errorMessage = "'\(trimmedName)' already exists"
+        do {
+            guard try isUniqueName(trimmedName, repo: repo) else {
+                errorMessage = "'\(trimmedName)' already exists"
+                return
+            }
+        } catch {
+            errorMessage = error.localizedDescription
             return
         }
 
@@ -77,8 +82,13 @@ public final class PromptsViewModel {
             errorMessage = "Prompt name and content are required."
             return
         }
-        guard isUniqueName(trimmedName, excluding: prompt.id) else {
-            errorMessage = "'\(trimmedName)' already exists"
+        do {
+            guard try isUniqueName(trimmedName, excluding: prompt.id, repo: repo) else {
+                errorMessage = "'\(trimmedName)' already exists"
+                return
+            }
+        } catch {
+            errorMessage = error.localizedDescription
             return
         }
 
@@ -149,8 +159,13 @@ public final class PromptsViewModel {
         }
     }
 
-    private func isUniqueName(_ name: String, excluding promptID: UUID? = nil) -> Bool {
-        !prompts.contains {
+    private func isUniqueName(
+        _ name: String,
+        excluding promptID: UUID? = nil,
+        repo: PromptRepositoryProtocol
+    ) throws -> Bool {
+        let allPrompts = try repo.fetchAll()
+        return !allPrompts.contains {
             $0.id != promptID && $0.name.caseInsensitiveCompare(name) == .orderedSame
         }
     }

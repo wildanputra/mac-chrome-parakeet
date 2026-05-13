@@ -41,6 +41,7 @@ final class AppEnvironmentConfigurer {
     private let chatViewModel: TranscriptChatViewModel
     private let promptResultsViewModel: PromptResultsViewModel
     private let promptsViewModel: PromptsViewModel
+    private let transformsViewModel: TransformsViewModel
     private let mainWindowState: MainWindowState
     private let meetingPillViewModel: MeetingRecordingPillViewModel
     private weak var liveMeetingCoordinator: MeetingRecordingFlowCoordinator?
@@ -57,6 +58,7 @@ final class AppEnvironmentConfigurer {
         chatViewModel: TranscriptChatViewModel,
         promptResultsViewModel: PromptResultsViewModel,
         promptsViewModel: PromptsViewModel,
+        transformsViewModel: TransformsViewModel,
         mainWindowState: MainWindowState,
         meetingPillViewModel: MeetingRecordingPillViewModel
     ) {
@@ -71,6 +73,7 @@ final class AppEnvironmentConfigurer {
         self.chatViewModel = chatViewModel
         self.promptResultsViewModel = promptResultsViewModel
         self.promptsViewModel = promptsViewModel
+        self.transformsViewModel = transformsViewModel
         self.mainWindowState = mainWindowState
         self.meetingPillViewModel = meetingPillViewModel
     }
@@ -125,6 +128,7 @@ final class AppEnvironmentConfigurer {
             self?.settingsViewModel.refreshStats()
         }
         promptsViewModel.configure(repo: env.promptRepo)
+        transformsViewModel.configure(repo: env.promptRepo, hasLLMProvider: hasLLMConfig)
         llmSettingsViewModel.configure(
             configStore: env.llmConfigStore,
             llmClient: env.llmClient
@@ -339,6 +343,7 @@ final class AppEnvironmentConfigurer {
         transcriptionViewModel.updateLLMAvailability(hasConfig, llmService: service)
         chatViewModel.updateLLMService(service)
         promptResultsViewModel.updateLLMService(service)
+        transformsViewModel.setHasLLMProvider(hasConfig)
         liveMeetingCoordinator?.updateLLMService(service)
     }
 }

@@ -37,13 +37,120 @@ final class PromptRepositoryTests: XCTestCase {
             .appendingPathComponent("Sources/MacParakeetCore/Resources/community-prompts.json")
         let data = try Data(contentsOf: artifactURL)
         let artifactPrompts = try JSONDecoder().decode([PromptArtifact].self, from: data)
-        let builtIns = Prompt.builtInPrompts()
+        // The community-prompts artifact is the curated set of `.result`
+        // (transcript-summary) prompts. `.transform` built-ins (ADR-022) are
+        // shipped UX, not community content, and are intentionally not
+        // included.
+        let builtIns = Prompt.builtInPrompts().filter { $0.category == .result }
 
         XCTAssertEqual(artifactPrompts.count, builtIns.count)
         XCTAssertEqual(artifactPrompts.map(\.name), builtIns.map(\.name))
         XCTAssertEqual(artifactPrompts.map(\.content), builtIns.map(\.content))
         XCTAssertEqual(artifactPrompts.map(\.category), builtIns.map { $0.category.rawValue })
         XCTAssertEqual(artifactPrompts.map(\.sortOrder), builtIns.map(\.sortOrder))
+    }
+
+    func testBuiltInTransformsSeededWithDefaultShortcuts() throws {
+        let transforms = try repo.fetchVisible(category: .transform)
+            .sorted(by: { $0.sortOrder < $1.sortOrder })
+
+        XCTAssertEqual(transforms.count, 3, "Phase 2 ships exactly three built-in Transforms: Polish, Distill, Decide.")
+        XCTAssertEqual(transforms.map(\.name), ["Polish", "Distill", "Decide"])
+
+        let polish = transforms[0]
+        XCTAssertTrue(polish.isBuiltIn)
+        XCTAssertEqual(polish.category, .transform)
+        XCTAssertEqual(polish.runningLabel, "Polishing…")
+        let polishShortcut = try XCTUnwrap(polish.shortcut)
+        XCTAssertEqual(polishShortcut.keyLabel, "1")
+        XCTAssertEqual(polishShortcut.modifierFlags, [.option])
+
+        let distill = transforms[1]
+        XCTAssertEqual(distill.runningLabel, "Distilling…")
+        let distillShortcut = try XCTUnwrap(distill.shortcut)
+        XCTAssertEqual(distillShortcut.keyLabel, "2")
+        XCTAssertEqual(distillShortcut.modifierFlags, [.option])
+
+        let decide = transforms[2]
+        XCTAssertEqual(decide.runningLabel, "Deciding…")
+        let decideShortcut = try XCTUnwrap(decide.shortcut)
+        XCTAssertEqual(decideShortcut.keyLabel, "3")
+        XCTAssertEqual(decideShortcut.modifierFlags, [.option])
+    }
+
+    func testFetchAutoRunPromptsIgnoresTransformPrompts() throws {
+        var polish = try XCTUnwrap(
+            (try repo.fetchVisible(category: .transform))
+                .first(where: { $0.name == "Polish" })
+        )
+        polish.isAutoRun = true
+        polish.updatedAt = Date()
+        try repo.save(polish)
+
+        let autoRun = try repo.fetchAutoRunPrompts()
+
+        XCTAssertTrue(autoRun.allSatisfy { $0.category == .result })
+        XCTAssertFalse(autoRun.contains(where: { $0.id == polish.id }))
+    }
+
+    func testToggleAutoRunIgnoresTransformPrompts() throws {
+        let polish = try XCTUnwrap(
+            (try repo.fetchVisible(category: .transform))
+                .first(where: { $0.name == "Polish" })
+        )
+
+        try repo.toggleAutoRun(id: polish.id)
+
+        let reloaded = try XCTUnwrap(try repo.fetch(id: polish.id))
+        XCTAssertFalse(reloaded.isAutoRun)
+    }
+
+    func testReconcilerPreservesUserCustomizedBuiltInTransformFields() throws {
+        // User customizes Polish. A subsequent app
+        // launch (simulated by re-running the reconciler via a fresh
+        // DatabaseManager on the same file-backed DB) must NOT overwrite
+        // the user's fields back to the shipped defaults.
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("reconciler-transform-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let dbPath = tmpDir.appendingPathComponent("macparakeet.db").path
+
+        let first = try DatabaseManager(path: dbPath)
+        let firstRepo = PromptRepository(dbQueue: first.dbQueue)
+        var polish = try XCTUnwrap(
+            (try firstRepo.fetchVisible(category: .transform))
+                .first(where: { $0.name == "Polish" })
+        )
+
+        let customShortcut = KeyboardShortcut(
+            modifiers: KeyboardShortcut.ModifierFlag.option.rawValue
+                | KeyboardShortcut.ModifierFlag.shift.rawValue,
+            keyCode: 0x23, // kVK_ANSI_P
+            keyLabel: "P"
+        )
+        polish.name = "Personal Polish"
+        polish.content = "Rewrite this in my house style."
+        polish.isAutoRun = true
+        let editDate = Date(timeIntervalSince1970: 1_234_567)
+        polish.keyboardShortcut = customShortcut.encodedString()
+        polish.runningLabel = "Refining…"
+        polish.updatedAt = editDate
+        try firstRepo.save(polish)
+
+        // Simulate a fresh boot — reconciler runs again. The user's
+        // customizations must survive.
+        let second = try DatabaseManager(path: dbPath)
+        let secondRepo = PromptRepository(dbQueue: second.dbQueue)
+        let reloaded = try XCTUnwrap(try secondRepo.fetch(id: polish.id))
+
+        XCTAssertEqual(reloaded.name, "Personal Polish", "Reconciler must not overwrite user-set Transform names.")
+        XCTAssertEqual(reloaded.content, "Rewrite this in my house style.", "Reconciler must not overwrite user-set Transform prompt bodies.")
+        XCTAssertEqual(reloaded.updatedAt.timeIntervalSince1970, editDate.timeIntervalSince1970, accuracy: 0.001, "Reconciler must not overwrite the user's Transform edit timestamp.")
+        XCTAssertFalse(reloaded.isAutoRun, "Built-in Transforms must not keep leaked auto-run state.")
+        XCTAssertEqual(reloaded.shortcut?.keyLabel, "P", "Reconciler must not overwrite user-set Transform shortcuts.")
+        XCTAssertEqual(reloaded.shortcut?.modifierFlags, [.option, .shift])
+        XCTAssertEqual(reloaded.runningLabel, "Refining…", "Reconciler must not overwrite user-set running labels.")
     }
 
     func testSaveAndFetchCustomPrompt() throws {

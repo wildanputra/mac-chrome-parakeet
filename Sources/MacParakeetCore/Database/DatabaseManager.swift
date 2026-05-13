@@ -371,8 +371,32 @@ public final class DatabaseManager: Sendable {
 
             let now = Date()
             let legacySummaryPrompt = Prompt.classicSummaryPrompt(now: now)
-            for prompt in Prompt.builtInPrompts(now: now) {
-                try prompt.insert(db)
+            // Historical v0.7 prompts only — `.transform` category arrives in
+            // v0.13. Raw SQL with the v0.7-era column list (no
+            // `keyboardShortcut`, no `runningLabel`) so this migration is
+            // decoupled from later additions to the Prompt model — same
+            // pattern as the `summaries` insert below.
+            for prompt in Prompt.builtInPrompts(now: now) where prompt.category == .result {
+                try db.execute(
+                    sql: """
+                        INSERT INTO prompts (
+                            id, name, content, category, isBuiltIn, isVisible,
+                            isAutoRun, sortOrder, createdAt, updatedAt
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                    arguments: [
+                        prompt.id,
+                        prompt.name,
+                        prompt.content,
+                        prompt.category.rawValue,
+                        prompt.isBuiltIn,
+                        prompt.isVisible,
+                        prompt.isAutoRun,
+                        prompt.sortOrder,
+                        prompt.createdAt,
+                        prompt.updatedAt,
+                    ]
+                )
             }
 
             try db.create(table: "summaries") { t in
@@ -640,6 +664,25 @@ public final class DatabaseManager: Sendable {
             }
         }
 
+        // v0.13 — Transforms (ADR-022). Adds two nullable columns to
+        // `prompts` so `.transform`-category rows can carry their bound
+        // hotkey and an optional running-pill label. `.result` (summary)
+        // rows ignore both columns — they remain NULL there. Pre-check
+        // existence for re-run safety.
+        migrator.registerMigration("v0.13-prompt-transforms") { db in
+            let existingColumns = try db.columns(in: "prompts").map(\.name)
+            if !existingColumns.contains("keyboardShortcut") || !existingColumns.contains("runningLabel") {
+                try db.alter(table: "prompts") { t in
+                    if !existingColumns.contains("keyboardShortcut") {
+                        t.add(column: "keyboardShortcut", .text)
+                    }
+                    if !existingColumns.contains("runningLabel") {
+                        t.add(column: "runningLabel", .text)
+                    }
+                }
+            }
+        }
+
         try migrator.migrate(dbQueue)
         try reconcileBuiltInPrompts()
         try reconcileBuiltInQuickPrompts()
@@ -683,21 +726,36 @@ public final class DatabaseManager: Sendable {
 
             for prompt in builtInPrompts {
                 if let existing = try Prompt.fetchOne(db, key: prompt.id) {
-                    try db.execute(
-                        sql: """
-                            UPDATE prompts
-                            SET name = ?, content = ?, category = ?, isBuiltIn = 1, sortOrder = ?, updatedAt = ?
-                            WHERE id = ?
-                            """,
-                        arguments: [
-                            prompt.name,
-                            prompt.content,
-                            prompt.category.rawValue,
-                            prompt.sortOrder,
-                            prompt.updatedAt,
-                            existing.id,
-                        ]
-                    )
+                    if prompt.category == .transform {
+                        try db.execute(
+                            sql: """
+                                UPDATE prompts
+                                SET category = ?, isBuiltIn = 1, isVisible = 1, isAutoRun = 0, sortOrder = ?
+                                WHERE id = ?
+                                """,
+                            arguments: [
+                                prompt.category.rawValue,
+                                prompt.sortOrder,
+                                existing.id,
+                            ]
+                        )
+                    } else {
+                        try db.execute(
+                            sql: """
+                                UPDATE prompts
+                                SET name = ?, content = ?, category = ?, isBuiltIn = 1, sortOrder = ?, updatedAt = ?
+                                WHERE id = ?
+                                """,
+                            arguments: [
+                                prompt.name,
+                                prompt.content,
+                                prompt.category.rawValue,
+                                prompt.sortOrder,
+                                prompt.updatedAt,
+                                existing.id,
+                            ]
+                        )
+                    }
                     continue
                 }
 

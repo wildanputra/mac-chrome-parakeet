@@ -22,12 +22,26 @@ public enum AppFeatures {
     public static let calendarEnabled: Bool = false
 
     /// Transforms spike (docs/research/transforms-design-2026-05.md, Phase 1
-    /// AX-coverage spike). When `false`, the entire Transforms pipeline is
-    /// hidden: no Opt+Ctrl+1 hotkey, no SelectionCaptureService/Executor wiring
-    /// from AppEnvironment, no floating progress panel. Flipping to `true` is
-    /// development-only — the spike is intentionally rough (hardcoded Polish
-    /// prompt, no management UI, hardcoded hotkey including Ctrl to avoid
-    /// collisions during dev). Used to answer the single question: does the
-    /// macOS AX API reliably return selected text in mainstream apps?
+    /// AX-coverage spike). When `true`, installs the spike's hardcoded
+    /// Opt+Ctrl+1 path alongside the productized registry — kept only as
+    /// a development-only escape hatch. The spike's Polish prompt is now
+    /// also a built-in `.transform` row, so any release build should
+    /// leave this `false` and rely on `transformsEnabled` instead.
     public static let transformsSpikeEnabled: Bool = false
+
+    /// Transforms — productized Phase 2 (ADR-022). When `true`:
+    /// - the Transforms tab appears in the main sidebar
+    /// - `TransformsHotkeyRegistry` installs its event tap on launch
+    /// - the user's bound `.transform` prompts dispatch on hotkey press
+    ///
+    /// When `false`, the tab is hidden and no event tap is installed.
+    /// Data model + repository are migrated either way — built-in
+    /// Transforms exist in the DB so flipping this flag is a no-data
+    /// operation.
+    ///
+    /// Default is `false` at merge so the website telemetry-allowlist
+    /// deploy (`transform_executed` / `transform_failed`) can land
+    /// first (ADR-022 §9). Flip to `true` in a follow-up commit once
+    /// the Worker accepts the new events.
+    public static let transformsEnabled: Bool = false
 }

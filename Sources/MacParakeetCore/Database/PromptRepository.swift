@@ -56,6 +56,8 @@ public final class PromptRepository: PromptRepositoryProtocol {
         try dbQueue.read { db in
             try Prompt
                 .filter(Prompt.Columns.isAutoRun == true)
+                .filter(Prompt.Columns.isVisible == true)
+                .filter(Prompt.Columns.category == Prompt.Category.result.rawValue)
                 .order(Prompt.Columns.sortOrder.asc, Prompt.Columns.name.asc)
                 .fetchAll(db)
         }
@@ -84,6 +86,7 @@ public final class PromptRepository: PromptRepositoryProtocol {
     public func toggleAutoRun(id: UUID) throws {
         try dbQueue.write { db in
             guard var prompt = try Prompt.fetchOne(db, key: id) else { return }
+            guard prompt.category == .result else { return }
             
             prompt.isAutoRun.toggle()
             // Auto-run prompts must be visible

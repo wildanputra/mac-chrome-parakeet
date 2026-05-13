@@ -26,6 +26,18 @@ public enum TelemetryEventName: String, Sendable, CaseIterable {
     case llmChatFailed = "llm_chat_failed"
     case llmTransformUsed = "llm_transform_used"
     case llmTransformFailed = "llm_transform_failed"
+    /// Transforms feature surface (ADR-022). Distinct from
+    /// `llm_transform_used` (the call-level event fired by
+    /// `LLMService.transformStream`). `transform_executed` is the
+    /// product-level event fired by `TransformsCoordinator` after a
+    /// hotkey-bound Transform completes end-to-end. Properties:
+    /// `transform_name` (built-in name or `custom`), `capture_path`
+    /// (`ax | clipboard`), `replace_path` (`ax | clipboardPaste`),
+    /// `llm_ms`, `total_ms`. NO prompt body, NO selected text, NO output.
+    /// Custom-Transform names map to `custom` so a Transform named after
+    /// e.g. an employer never leaves the device.
+    case transformExecuted = "transform_executed"
+    case transformFailed = "transform_failed"
     case llmFormatterUsed = "llm_formatter_used"
     case llmFormatterFailed = "llm_formatter_failed"
     case llmProviderUnavailable = "llm_provider_unavailable"
@@ -176,6 +188,55 @@ public enum TelemetryCopySource: String, Sendable, Equatable {
 public enum TelemetryFormatterSource: String, Sendable, Equatable {
     case dictation
     case transcription
+}
+
+/// Which Transform (ADR-022) ran. Built-in names are transmitted verbatim
+/// (`polish`, `distill`, `decide`) so per-built-in usage is observable.
+/// Custom Transforms map to `custom` — a user-supplied name like "Boss
+/// Mode" or a company name never leaves the device.
+public enum TelemetryTransformName: String, Sendable, Equatable {
+    case polish
+    case distill
+    case decide
+    case custom
+
+    public init(builtInName: String?, isBuiltIn: Bool) {
+        guard isBuiltIn, let name = builtInName?.lowercased() else {
+            self = .custom
+            return
+        }
+        switch name {
+        case "polish": self = .polish
+        case "distill": self = .distill
+        case "decide": self = .decide
+        default: self = .custom
+        }
+    }
+}
+
+/// Selection-capture path the Transforms pipeline used. Mirrors
+/// `SelectionCaptureResult` minus the payloads.
+public enum TelemetryTransformCapturePath: String, Sendable, Equatable {
+    case ax
+    case clipboard
+}
+
+/// Selection-replacement path the Transforms pipeline used. Mirrors
+/// `SelectionReplacementPath`.
+public enum TelemetryTransformReplacePath: String, Sendable, Equatable {
+    case ax
+    case clipboardPaste = "clipboard_paste"
+}
+
+/// Why a Transforms run terminated abnormally. Maps onto
+/// `TransformExecutorError` cases plus a `noProvider` rollup for the
+/// "user hasn't configured an LLM yet" gate.
+public enum TelemetryTransformFailureReason: String, Sendable, Equatable {
+    case emptySelection = "empty_selection"
+    case noProvider = "no_provider"
+    case llmFailed = "llm_failed"
+    case replacementFailed = "replacement_failed"
+    case cancelled
 }
 
 /// Which LLM call site produced a `llm_provider_unavailable` event. Lets a
@@ -349,6 +410,21 @@ public enum TelemetryEventSpec: Sendable {
     case llmChatFailed(provider: String, errorType: String, errorDetail: String? = nil)
     case llmTransformUsed(provider: String)
     case llmTransformFailed(provider: String, errorType: String, errorDetail: String? = nil)
+    /// Transforms (ADR-022) feature-level success. Fired by
+    /// `TransformsCoordinator` when a hotkey-bound Transform finishes
+    /// end-to-end. NO content captured — see
+    /// `TelemetryTransformName.custom` for the privacy contract.
+    case transformExecuted(
+        transformName: TelemetryTransformName,
+        capturePath: TelemetryTransformCapturePath,
+        replacePath: TelemetryTransformReplacePath,
+        llmMs: Int,
+        totalMs: Int
+    )
+    case transformFailed(
+        transformName: TelemetryTransformName,
+        reason: TelemetryTransformFailureReason
+    )
     case llmFormatterUsed(
         provider: String,
         source: TelemetryFormatterSource,
@@ -591,6 +667,8 @@ extension TelemetryEventSpec {
         case .llmChatFailed: return .llmChatFailed
         case .llmTransformUsed: return .llmTransformUsed
         case .llmTransformFailed: return .llmTransformFailed
+        case .transformExecuted: return .transformExecuted
+        case .transformFailed: return .transformFailed
         case .llmFormatterUsed: return .llmFormatterUsed
         case .llmFormatterFailed: return .llmFormatterFailed
         case .llmProviderUnavailable: return .llmProviderUnavailable
@@ -860,6 +938,19 @@ extension TelemetryEventSpec {
             var props = ["provider": provider, "error_type": errorType]
             if let errorDetail = Self.sanitizedErrorDetail(errorDetail) { props["error_detail"] = errorDetail }
             return props
+        case .transformExecuted(let name, let capture, let replace, let llmMs, let totalMs):
+            return [
+                "transform_name": name.rawValue,
+                "capture_path": capture.rawValue,
+                "replace_path": replace.rawValue,
+                "llm_ms": "\(llmMs)",
+                "total_ms": "\(totalMs)",
+            ]
+        case .transformFailed(let name, let reason):
+            return [
+                "transform_name": name.rawValue,
+                "reason": reason.rawValue,
+            ]
         case .llmFormatterUsed(
             let provider,
             let source,
@@ -1283,6 +1374,8 @@ public enum TelemetryImplementedContract {
         .llmChatFailed: ["provider", "error_type"],
         .llmTransformUsed: ["provider"],
         .llmTransformFailed: ["provider", "error_type"],
+        .transformExecuted: ["transform_name", "capture_path", "replace_path", "llm_ms", "total_ms"],
+        .transformFailed: ["transform_name", "reason"],
         .llmFormatterUsed: ["provider", "source", "duration_seconds", "input_chars", "output_chars", "default_prompt_used", "input_truncated"],
         .llmFormatterFailed: ["provider", "source", "duration_seconds", "error_type", "default_prompt_used", "input_truncated"],
         .llmProviderUnavailable: ["provider", "error_type", "feature"],

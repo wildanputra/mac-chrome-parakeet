@@ -13,6 +13,17 @@ public struct Prompt: Codable, Identifiable, Sendable {
     public var createdAt: Date
     public var updatedAt: Date
 
+    /// JSON-encoded `KeyboardShortcut`. Persisted on `.transform` prompts as
+    /// the bound hotkey for the floating Transforms registry. NULL on
+    /// `.result` prompts (they have no hotkey concept). Decode via
+    /// `KeyboardShortcut.decoded(from:)`.
+    public var keyboardShortcut: String?
+
+    /// Optional override for the running pill label (e.g. *"Polishing…"*).
+    /// NULL means "derive from name via the `{Name}ing…` heuristic, falling
+    /// back to *Transforming…* for awkward names."
+    public var runningLabel: String?
+
     public enum Category: String, Codable, Sendable {
         // Keep the stored raw value as "summary" until the prompts table itself is migrated.
         case result = "summary"
@@ -29,7 +40,9 @@ public struct Prompt: Codable, Identifiable, Sendable {
         isAutoRun: Bool = false,
         sortOrder: Int = 0,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        keyboardShortcut: String? = nil,
+        runningLabel: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -41,6 +54,41 @@ public struct Prompt: Codable, Identifiable, Sendable {
         self.sortOrder = sortOrder
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.keyboardShortcut = keyboardShortcut
+        self.runningLabel = runningLabel
+    }
+
+    // MARK: - Transform convenience
+
+    /// Decoded shortcut binding for `.transform` prompts, or nil if unbound
+    /// (or if the column is malformed — treated as "no binding").
+    public var shortcut: KeyboardShortcut? {
+        KeyboardShortcut.decoded(from: keyboardShortcut)
+    }
+
+    /// Verb-form label rendered by the floating Transforms pill while this
+    /// transform is running. Honors `runningLabel` if set, otherwise uses
+    /// the `{Name}ing…` heuristic. Falls back to *Transforming…* for awkward
+    /// names that don't form a clean gerund.
+    public var derivedRunningLabel: String {
+        if let runningLabel, !runningLabel.isEmpty { return runningLabel }
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return "Transforming…" }
+        let lower = trimmed.lowercased()
+        // Awkward gerunds — names ending in -ing, -ed, -er, etc. fall through
+        // to the generic label rather than producing "Polishinging…".
+        let awkwardSuffixes = ["ing", "tion", "ment", "ness", "ed", "er"]
+        for suffix in awkwardSuffixes where lower.hasSuffix(suffix) {
+            return "Transforming…"
+        }
+        // English drop-e: "Polish" → "Polishing", "Make" → "Making".
+        let stem: String
+        if lower.hasSuffix("e") && !lower.hasSuffix("ee") {
+            stem = String(trimmed.dropLast())
+        } else {
+            stem = trimmed
+        }
+        return "\(stem)ing…"
     }
 
     // Used for compatibility fallback paths. This is not a fallback for the
@@ -75,6 +123,31 @@ public struct Prompt: Codable, Identifiable, Sendable {
         )
     }
 
+    private static func makeBuiltInTransform(
+        id: String,
+        name: String,
+        content: String,
+        sortOrder: Int,
+        defaultShortcut: KeyboardShortcut?,
+        runningLabel: String?,
+        now: Date
+    ) -> Prompt {
+        Prompt(
+            id: UUID(uuidString: id) ?? UUID(),
+            name: name,
+            content: content,
+            category: .transform,
+            isBuiltIn: true,
+            isVisible: true,
+            isAutoRun: false,
+            sortOrder: sortOrder,
+            createdAt: now,
+            updatedAt: now,
+            keyboardShortcut: defaultShortcut?.encodedString(),
+            runningLabel: runningLabel
+        )
+    }
+
     /// Built-in prompt definitions shipped with the app.
     /// `community-prompts.json` is kept in sync as a contribution/reference artifact.
     ///
@@ -84,7 +157,16 @@ public struct Prompt: Codable, Identifiable, Sendable {
     /// that ID on next launch (because it is no longer in the canonical list),
     /// and reissuing the UUID would resurrect the prompt on installs that still
     /// have its row in their DB. See ADR-020 (2026-05-02 amendment).
+    ///
+    /// Reserved Transform UUIDs (ADR-022, do not reuse):
+    /// - `0FCE9DDB-7E2D-4B1A-AE3E-6F7C9B2A4D11` — Polish
+    /// - `1AD7C2B0-9C6F-4F0E-9C39-5E4D1F1D2A55` — Distill
+    /// - `2BE8D3C1-4A7F-4EBD-8F12-7C9A1E0B3D44` — Decide
     public static func builtInPrompts(now: Date = Date()) -> [Prompt] {
+        builtInResultPrompts(now: now) + builtInTransformPrompts(now: now)
+    }
+
+    private static func builtInResultPrompts(now: Date) -> [Prompt] {
         [
             makeBuiltInPrompt(
                 id: "A4882688-E72C-415A-9A5E-1F6AC82DF0D0",
@@ -211,12 +293,109 @@ public struct Prompt: Codable, Identifiable, Sendable {
             ),
         ]
     }
+
+    /// Built-in `.transform` prompts (ADR-022). Three shipped Transforms,
+    /// each pedagogically distinct so the lineup itself teaches what
+    /// Transforms is for:
+    ///
+    /// - *Polish* (⌥1) — make text read like the writer's best version, voice
+    ///   intact. The everyday driver.
+    /// - *Distill* (⌥2) — compress to signal, raise information density.
+    ///   The "I have a rambling braindump" tool.
+    /// - *Decide* (⌥3) — turn discussion into a decision-ready note with
+    ///   tradeoffs + recommended next step. The forward-motion tool.
+    ///
+    /// Together: **Improve → Re-shape → Re-direct**. Three slots; ⌥4–9
+    /// reserved for user customization.
+    ///
+    /// Each row is seeded by the reconciler at app launch if missing; user
+    /// edits to the row are preserved — the reconciler never overwrites
+    /// content, shortcut, or runningLabel on existing built-in transform
+    /// rows.
+    ///
+    /// UUIDs are reserved — never reuse for a different prompt.
+    private static func builtInTransformPrompts(now: Date) -> [Prompt] {
+        [
+            makeBuiltInTransform(
+                id: "0FCE9DDB-7E2D-4B1A-AE3E-6F7C9B2A4D11",
+                name: "Polish",
+                content: """
+                    Rewrite the selected text so it reads like the best version of itself: clear, specific, finished. Preserve the author's intent, factual claims, structure, and level of formality.
+
+                    Remove hedging, filler, repetition, throat-clearing, and vague intensifiers. Prefer plain words over performative polish. Keep technical terms, names, code identifiers, URLs, numbers, and quoted text exactly intact.
+
+                    Do not change the register. If the input is casual, keep it casual; if formal, keep it formal. Do not add new ideas, examples, claims, apologies, or enthusiasm. Do not make it sound like marketing copy. Do not introduce AI tells ("delve," "comprehensive," "navigate the landscape of," "in today's fast-paced world"). If the input is a single short fragment (a label, a search query, a name), return it unchanged or with the smallest correction necessary.
+
+                    Return ONLY the rewritten text. No preamble, no quoting, no commentary, no headings.
+                    """.replacingOccurrences(of: "                    ", with: ""),
+                sortOrder: 100,
+                defaultShortcut: KeyboardShortcut(
+                    modifiers: KeyboardShortcut.ModifierFlag.option.rawValue,
+                    keyCode: 0x12, // kVK_ANSI_1
+                    keyLabel: "1"
+                ),
+                runningLabel: "Polishing…",
+                now: now
+            ),
+            makeBuiltInTransform(
+                id: "1AD7C2B0-9C6F-4F0E-9C39-5E4D1F1D2A55",
+                name: "Distill",
+                content: """
+                    Compress the selected text to its signal. Reduce volume by 40–60% while keeping 100% of the actionable meaning.
+
+                    Identify the core point, the primary insight, or the bottom line. Discard the preamble, the connective tissue, and the throat-clearing. Replace passive voice and weak phrasing with active, precise verbs. Replace vague hedges with the specific claim underneath them.
+
+                    Architecture: use bullets when the input is a list of points or a sequence of ideas; use compact prose when it's a single argument. Don't lose the "why" — the reasoning behind a decision belongs in the distillation. Don't lose the "who" — if the input names people, parties, or systems, keep them.
+
+                    Match output shape to context: a Slack message becomes a tight paragraph, an email becomes a short list, a long doc becomes a few crisp bullets. The result should be readable in three seconds and lose nothing important.
+
+                    Return ONLY the distilled text. No preamble, no "Here is the condensed version," no meta-commentary.
+                    """.replacingOccurrences(of: "                    ", with: ""),
+                sortOrder: 101,
+                defaultShortcut: KeyboardShortcut(
+                    modifiers: KeyboardShortcut.ModifierFlag.option.rawValue,
+                    keyCode: 0x13, // kVK_ANSI_2
+                    keyLabel: "2"
+                ),
+                runningLabel: "Distilling…",
+                now: now
+            ),
+            makeBuiltInTransform(
+                id: "2BE8D3C1-4A7F-4EBD-8F12-7C9A1E0B3D44",
+                name: "Decide",
+                content: """
+                    Rewrite the selected text as a decision-ready note. The reader is busy and needs to understand what is being decided and what should happen next.
+
+                    Separate signal from noise. Surface:
+                    - **The question** — what's actually being decided. State it explicitly, even if the input only implied it.
+                    - **The options** — the live choices, named clearly. Drop dead options unless their absence would surprise the reader.
+                    - **The tradeoffs** — what each option costs and what it buys. One clean line each, no padding.
+                    - **The recommendation** — your suggested next move, with a single-sentence reason. If the input already chose, make the choice explicit.
+                    - **The block** — if there isn't enough information to decide yet, name the smallest concrete question that must be answered next.
+
+                    Honor unresolved disagreement when it's there — don't flatten it into false consensus. Don't manufacture pros-and-cons that the input doesn't support. Don't invent data. Don't write a strategy memo unless the input warrants one — most decisions earn a paragraph, not a page.
+
+                    Return ONLY the rewritten note. No preamble, no "Here is the decision-ready version," no headings beyond what the structure above requires.
+                    """.replacingOccurrences(of: "                    ", with: ""),
+                sortOrder: 102,
+                defaultShortcut: KeyboardShortcut(
+                    modifiers: KeyboardShortcut.ModifierFlag.option.rawValue,
+                    keyCode: 0x14, // kVK_ANSI_3
+                    keyLabel: "3"
+                ),
+                runningLabel: "Deciding…",
+                now: now
+            ),
+        ]
+    }
 }
 
 extension Prompt: FetchableRecord, PersistableRecord {
     public static let databaseTableName = "prompts"
 
     public enum Columns: String, ColumnExpression {
-        case id, name, content, category, isBuiltIn, isVisible, isAutoRun, sortOrder, createdAt, updatedAt
+        case id, name, content, category, isBuiltIn, isVisible, isAutoRun
+        case sortOrder, createdAt, updatedAt
+        case keyboardShortcut, runningLabel
     }
 }

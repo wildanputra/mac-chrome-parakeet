@@ -62,6 +62,32 @@ final class PromptsCommandTests: XCTestCase {
         XCTAssertEqual(found.id, p.id)
     }
 
+    func testFindPromptIgnoresTransformRows() throws {
+        let db = try DatabaseManager()
+        let repo = PromptRepository(dbQueue: db.dbQueue)
+        let polish = try XCTUnwrap(
+            (try repo.fetchVisible(category: .transform))
+                .first(where: { $0.name == "Polish" })
+        )
+
+        XCTAssertThrowsError(try findPrompt(idOrName: "Polish", repo: repo)) { error in
+            guard let lookupError = error as? CLILookupError else {
+                return XCTFail("Expected CLILookupError, got \(error)")
+            }
+            if case .notFound = lookupError {} else {
+                XCTFail("Expected .notFound, got \(lookupError)")
+            }
+        }
+        XCTAssertThrowsError(try findPrompt(idOrName: polish.id.uuidString, repo: repo)) { error in
+            guard let lookupError = error as? CLILookupError else {
+                return XCTFail("Expected CLILookupError, got \(error)")
+            }
+            if case .notFound = lookupError {} else {
+                XCTFail("Expected .notFound, got \(lookupError)")
+            }
+        }
+    }
+
     func testFindPromptThrowsNotFoundForBogusInput() throws {
         let db = try DatabaseManager()
         let repo = PromptRepository(dbQueue: db.dbQueue)
@@ -125,6 +151,29 @@ final class PromptsCommandTests: XCTestCase {
     }
 
     // MARK: - cliJSONEncoder smoke
+
+    func testListJSONExcludesTransformPrompts() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("prompts-cli-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let dbPath = tmp.appendingPathComponent("test.db").path
+
+        _ = try DatabaseManager(path: dbPath)
+
+        let command = try PromptsCommand.ListSubcommand.parse([
+            "--json",
+            "--database", dbPath,
+        ])
+        let output = try captureStandardOutput { try command.run() }
+        let prompts = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(output.utf8)) as? [[String: Any]]
+        )
+
+        XCTAssertEqual(prompts.count, 6)
+        XCTAssertTrue(prompts.allSatisfy { $0["category"] as? String == Prompt.Category.result.rawValue })
+        XCTAssertFalse(prompts.contains(where: { $0["name"] as? String == "Polish" }))
+    }
 
     // MARK: - Set validation
     // .parse() runs validate() automatically, so a failed parse with our error

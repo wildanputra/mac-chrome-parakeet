@@ -679,7 +679,9 @@ final class MockPromptRepository: PromptRepositoryProtocol, @unchecked Sendable 
         if let fetchAutoRunPromptsError {
             throw fetchAutoRunPromptsError
         }
-        return try fetchAll().filter(\.isAutoRun)
+        return try fetchAll().filter {
+            $0.isAutoRun && $0.isVisible && $0.category == .result
+        }
     }
 
     func delete(id: UUID) throws -> Bool {
@@ -699,6 +701,7 @@ final class MockPromptRepository: PromptRepositoryProtocol, @unchecked Sendable 
 
     func toggleAutoRun(id: UUID) throws {
         guard let index = prompts.firstIndex(where: { $0.id == id }) else { return }
+        guard prompts[index].category == .result else { return }
         prompts[index].isAutoRun.toggle()
         if prompts[index].isAutoRun {
             prompts[index].isVisible = true

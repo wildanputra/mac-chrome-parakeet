@@ -42,6 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `docs/research/transforms-design-2026-05.md`). Always created; `start()`
     /// is a no-op when the flag is off so the binary surface stays clean.
     private var transformsSpikeCoordinator: TransformsSpikeCoordinator?
+    /// Productized Transforms coordinator (ADR-022). Owns the process-wide
+    /// `TransformsHotkeyRegistry` + dispatch from registered hotkeys to the
+    /// `TransformExecutor` pipeline. Gated on `AppFeatures.transformsEnabled`.
+    private var transformsCoordinator: TransformsCoordinator?
     private var hasPresentedHotkeyUnavailableAlert = false
     private var hasPresentedHotkeyConflictAlert = false
     private var environmentSetupTask: Task<Void, Never>?
@@ -66,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let chatViewModel = TranscriptChatViewModel()
     private let promptResultsViewModel = PromptResultsViewModel()
     private let promptsViewModel = PromptsViewModel()
+    private let transformsViewModel = TransformsViewModel()
     private let mainWindowState = MainWindowState()
     /// Long-lived companion for the meeting recording pill + Transcribe-tab tile.
     /// `MeetingRecordingFlowCoordinator` writes state into it; both the floating
@@ -93,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chatViewModel: chatViewModel,
         promptResultsViewModel: promptResultsViewModel,
         promptsViewModel: promptsViewModel,
+        transformsViewModel: transformsViewModel,
         mainWindowState: mainWindowState,
         meetingPillViewModel: meetingPillViewModel
     )
@@ -140,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chatViewModel: chatViewModel,
         promptResultsViewModel: promptResultsViewModel,
         promptsViewModel: promptsViewModel,
+        transformsViewModel: transformsViewModel,
         customWordsViewModel: customWordsViewModel,
         textSnippetsViewModel: textSnippetsViewModel,
         vocabularyBackupViewModel: vocabularyBackupViewModel,
@@ -162,8 +169,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // recording from inside Settings).
             if isRecording {
                 self?.hotkeyCoordinator?.suspend()
+                self?.transformsCoordinator?.suspendHotkeys()
             } else {
                 self?.hotkeyCoordinator?.resume()
+                self?.transformsCoordinator?.resumeHotkeys()
             }
         },
         onQuit: { [weak self] in
@@ -278,6 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyCoordinator?.stopAll()
         meetingAutoStartCoordinator?.stop()
         transformsSpikeCoordinator?.stop()
+        transformsCoordinator?.stop()
         settingsObserverCoordinator.stopObserving()
         environmentSetupTask?.cancel()
         speechPreWarmTask?.cancel()
@@ -395,12 +405,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // flipped after launch.
         let configStore = env.llmConfigStore
         let llmService = env.llmService
-        let spike = TransformsSpikeCoordinator(llmServiceProvider: { [weak configStore, llmService] in
+        let llmServiceProvider: () -> LLMServiceProtocol? = { [weak configStore, llmService] in
             guard let configStore else { return nil }
             return (try? configStore.loadConfig()) != nil ? llmService : nil
-        })
+        }
+        let spike = TransformsSpikeCoordinator(llmServiceProvider: llmServiceProvider)
         spike.start()
         transformsSpikeCoordinator = spike
+
+        // Productized Transforms coordinator (ADR-022). Reads `.transform`
+        // prompts from the shared `PromptRepository` and dispatches their
+        // bound hotkeys through `TransformsHotkeyRegistry`. No-op when the
+        // feature flag is off.
+        let transforms = TransformsCoordinator(
+            llmServiceProvider: llmServiceProvider,
+            promptRepository: env.promptRepo
+        )
+        transforms.start()
+        transformsCoordinator = transforms
 
         menuBarCoordinator.refreshHotkeyTitle()
         menuBarCoordinator.refreshMeetingHotkeyShortcut()

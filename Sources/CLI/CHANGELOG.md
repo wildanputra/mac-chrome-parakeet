@@ -80,6 +80,33 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
 
 ## [Unreleased]
 
+### Added (2.2.0)
+
+- `transforms list / show / run / create / delete` — new subcommand tree
+  for managing user-defined Transforms (ADR-022). Same surface that the
+  GUI's Transforms tab edits, headlessly accessible so agent operators
+  can provision a fresh device, run a saved prompt against arbitrary
+  text from CI, and verify the dispatch table without launching the
+  app.
+  - `transforms list [--json]` — lists Transforms with their bound
+    shortcuts in human-readable rows or a JSON array.
+  - `transforms show <id|name> [--json]` — prints the prompt body and
+    the bound shortcut.
+  - `transforms run <id|name> --input FILE|- [--stream] [--json]` —
+    invokes the saved prompt body via the user's configured LLM
+    provider. Distinct from `llm transform --prompt "..."`, which
+    takes an ad-hoc prompt string.
+  - `transforms create --name --prompt|--from-file [--shortcut "opt+1"]
+    [--running-label] [--json]` — headless install of a new Transform.
+    Shortcut format: `opt+1`, `cmd+shift+P`, etc. Refuses bare-key
+    bindings (must include a modifier).
+  - `transforms delete <id|name> [--json]` — deletes a custom
+    Transform. Built-ins are protected.
+  - All `--json` outputs use a snake-cased `TransformDTO` envelope
+    (`id`, `name`, `shortcut`, `running_label`, `is_built_in`,
+    `prompt`, `created_at`, `updated_at`) — consumers don't see the
+    internal `Prompt` shape.
+
 ### Fixed
 
 - YouTube transcriptions captured under `--youtube-audio-quality

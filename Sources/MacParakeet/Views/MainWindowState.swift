@@ -1,10 +1,17 @@
 import Foundation
+import MacParakeetCore
 
 @MainActor
 @Observable
 final class MainWindowState {
     var selectedItem: SidebarItem = .transcribe
     var showingProgressDetail = false
+
+    /// Transforms tab — pending sheet state (ADR-022). When non-nil the
+    /// editor sheet appears for that Transform.
+    var editingTransform: Prompt?
+    /// True when the Create-your-own sheet should be presented.
+    var isCreatingTransform: Bool = false
 
     /// Switch the sidebar to Library so the transcription detail surfaces in
     /// its natural home. The Transcribe tab is the capture surface (YouTube,
@@ -14,5 +21,12 @@ final class MainWindowState {
         _ = current
         selectedItem = .library
     }
+}
+
+extension Notification.Name {
+    /// Posted after a Transforms save/delete/reset so the
+    /// `TransformsCoordinator` can reload bindings into the hotkey
+    /// registry.
+    static let transformsBindingsChanged = Notification.Name("com.macparakeet.transforms.bindingsChanged")
 }
 

@@ -53,8 +53,8 @@ extension PromptsCommand {
 
                 let prompts: [Prompt]
                 switch filter {
-                case .all:     prompts = try repo.fetchAll()
-                case .visible: prompts = try repo.fetchVisible(category: nil)
+                case .all:     prompts = try repo.fetchAll().filter { $0.category == .result }
+                case .visible: prompts = try repo.fetchVisible(category: .result)
                 case .autoRun: prompts = try repo.fetchAutoRunPrompts()
                 }
 

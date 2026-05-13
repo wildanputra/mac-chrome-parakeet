@@ -122,6 +122,7 @@ All ADRs are in `spec/adr/`. These are locked decisions -- don't second-guess th
 | ADR-019 | Crash-resilient meeting recording (implemented) | `spec/adr/019-crash-resilient-meeting-recording.md` |
 | ADR-020 | Live meeting notepad + memo-steered summaries (implemented) | `spec/adr/020-live-meeting-notepad-and-memo-summaries.md` |
 | ADR-021 | WhisperKit as optional multilingual STT engine (implemented) | `spec/adr/021-whisperkit-multilingual-stt.md` |
+| ADR-022 | Transforms — system-wide LLM rewrites on selected text (Phase 2 productized; flag-gated) | `spec/adr/022-transforms-system-wide-rewrite.md` |
 
 > Historical/dormant ADRs (still in `spec/adr/`, kept for context): ADR-003 (one-time purchase pricing), ADR-006 (trial + license activation), ADR-008 (local LLM runtime). Current public builds are free/GPL-3.0 and unlocked. The old LemonSqueezy/trial entitlement plumbing is intentionally retained as future-option code for GPL-compatible official paid distribution/support; do not remove it as dead code without explicit owner direction and an ADR/spec update.
 
@@ -139,15 +140,16 @@ All ADRs are in `spec/adr/`. These are locked decisions -- don't second-guess th
 
 ## Key Patterns
 
-### Three Co-Equal Modes
+### Three Primary Modes + Transforms
 
-MacParakeet has three primary modes in the `main` branch product direction:
+MacParakeet has three primary capture modes plus a system-wide text-rewrite surface (ADR-022) in the `main` branch product direction:
 
 1. **System-wide dictation** -- Press hotkey anywhere on macOS, speak, text is pasted (WisprFlow-style)
 2. **File transcription** -- Drag-drop audio/video files or paste a YouTube link (MacWhisper-style)
 3. **Meeting recording** -- Capture system audio + mic simultaneously, transcribe locally (simple Granola-style)
+4. **Transforms** -- Select text anywhere on macOS, press a bound hotkey (⌥1 / ⌥2 / ⌥3 by default), and the selection is rewritten in place through the user's LLM provider. ADR-022. Phase 2 productized behind `AppFeatures.transformsEnabled` (default `false`, flipped after the website telemetry-allowlist deploy). Ships with three built-in Transforms: *Polish*, *Distill*, *Decide* — synthesized by a paired creative-director + staff-PM review on 2026-05-12 (Improve → Re-shape → Re-direct pedagogy). Reuses the spike's brand-finished floating pill (ADR-022 §4); user-bound shortcuts dispatch through a single process-wide `TransformsHotkeyRegistry`.
 
-All three modes share the same STT scheduler/runtime path on `main` but have different UI flows, audio sources, and data models. Parakeet is the default engine; Whisper can be selected globally or per CLI call for languages Parakeet does not cover. **Dictation and meeting recording run concurrently** (ADR-015) -- a user can dictate freely during a meeting recording. Dictation and meeting microphone capture fan out from one process-wide `SharedMicrophoneStream`/AVAudioEngine; meeting system audio remains a separate ScreenCaptureKit stream.
+The three capture modes share the same STT scheduler/runtime path on `main` but have different UI flows, audio sources, and data models. Parakeet is the default engine; Whisper can be selected globally or per CLI call for languages Parakeet does not cover. **Dictation and meeting recording run concurrently** (ADR-015) -- a user can dictate freely during a meeting recording. Dictation and meeting microphone capture fan out from one process-wide `SharedMicrophoneStream`/AVAudioEngine; meeting system audio remains a separate ScreenCaptureKit stream. Transforms is unrelated to STT — it operates on whatever text is currently selected and sends it through the configured LLM provider.
 
 The Transcribe tab is the unified capture surface — one place for all three modes (dictation can also start there via hotkey/menu bar, since dictation is global):
 
