@@ -10,25 +10,60 @@ import MacParakeetCore
 @MainActor
 @Observable
 public final class TransformsViewModel {
+    public nonisolated static let historyFetchLimit = 200
+
     public var transforms: [Prompt] = []
     public var allPrompts: [Prompt] = []
     public var errorMessage: String?
 
+    /// Recent Transform runs, newest first. Surfaced read-only in the
+    /// Transforms tab (copy, delete, clear-all). Capped at
+    /// `historyFetchLimit` rows; the DB keeps the full set so power users
+    /// who clear and re-fill keep their working window intact.
+    public var history: [TransformHistoryEntry] = []
+    public var totalHistoryCount: Int = 0
+    public var historyErrorMessage: String?
+
     /// Pending delete confirmation. Set when the user hits delete on a
     /// (non-built-in) Transform; cleared on confirm or cancel.
     public var pendingDeleteTransform: Prompt?
+    public var pendingDeleteHistoryEntry: TransformHistoryEntry?
+    public var isConfirmingClearHistory: Bool = false
+    public var copiedHistoryEntryID: UUID?
 
     /// True when the user has at least one LLM provider configured. Drives
     /// the calm "Configure in Settings" hero state.
     public var hasLLMProvider: Bool = false
 
     private var repo: PromptRepositoryProtocol?
+    private var historyRepo: TransformHistoryRepositoryProtocol?
+    private var clipboardService: ClipboardServiceProtocol?
+    private var copiedResetTask: Task<Void, Never>?
+
+    /// Passive reloads are allowed to coalesce with each other, but never to
+    /// outrank a user mutation. A `.transformHistoryChanged` reload can start
+    /// after delete/clear begins and still read the old rows before the write
+    /// reaches SQLite; mutation generation keeps that stale snapshot out.
+    private var historyLoadGeneration: Int = 0
+    private var historyMutationGeneration: Int = 0
+    private var activeHistoryMutationCount: Int = 0
 
     public init() {}
 
-    public func configure(repo: PromptRepositoryProtocol, hasLLMProvider: Bool) {
+    public func configure(
+        repo: PromptRepositoryProtocol,
+        historyRepo: TransformHistoryRepositoryProtocol? = nil,
+        clipboardService: ClipboardServiceProtocol? = nil,
+        hasLLMProvider: Bool
+    ) {
         self.repo = repo
+        self.historyRepo = historyRepo
+        self.clipboardService = clipboardService
         self.hasLLMProvider = hasLLMProvider
+        // `loadHistory()` is driven by the view (`.onAppear` and the
+        // `.transformHistoryChanged` notification). Doing it here too
+        // would race the view's first explicit load and clobber state
+        // when the generation-guarded snapshot resolves out of order.
         Task { await load() }
     }
 
@@ -112,6 +147,160 @@ public final class TransformsViewModel {
         guard let pending = pendingDeleteTransform else { return false }
         pendingDeleteTransform = nil
         return await delete(pending)
+    }
+
+    // MARK: - History
+
+    /// Refresh the recent runs window from the repository. Capped at
+    /// `historyFetchLimit`; `totalHistoryCount` carries the full count for
+    /// the "showing N of M" footer.
+    public func loadHistory() async {
+        guard let historyRepo else {
+            historyLoadGeneration += 1
+            history = []
+            totalHistoryCount = 0
+            return
+        }
+        historyLoadGeneration += 1
+        let myLoadGeneration = historyLoadGeneration
+        let mutationGenerationAtStart = historyMutationGeneration
+        let startedDuringMutation = activeHistoryMutationCount > 0
+        do {
+            let snapshot = try await Self.fetchHistorySnapshot(
+                repo: historyRepo,
+                limit: Self.historyFetchLimit
+            )
+            guard shouldApplyHistoryLoad(
+                loadGeneration: myLoadGeneration,
+                mutationGenerationAtStart: mutationGenerationAtStart,
+                startedDuringMutation: startedDuringMutation
+            ) else { return }
+            history = snapshot.entries
+            totalHistoryCount = snapshot.totalCount
+            historyErrorMessage = nil
+        } catch {
+            guard shouldApplyHistoryLoad(
+                loadGeneration: myLoadGeneration,
+                mutationGenerationAtStart: mutationGenerationAtStart,
+                startedDuringMutation: startedDuringMutation
+            ) else { return }
+            history = []
+            totalHistoryCount = 0
+            historyErrorMessage = error.localizedDescription
+        }
+    }
+
+    public func deleteHistoryEntry(_ entry: TransformHistoryEntry) async {
+        guard let historyRepo else { return }
+        let myGeneration = beginHistoryMutation()
+        defer { endHistoryMutation() }
+        do {
+            let snapshot = try await Self.deleteHistoryEntryAndFetchSnapshot(
+                repo: historyRepo,
+                id: entry.id,
+                limit: Self.historyFetchLimit
+            )
+            guard myGeneration == historyMutationGeneration else { return }
+            history = snapshot.entries
+            totalHistoryCount = snapshot.totalCount
+            historyErrorMessage = nil
+        } catch {
+            guard myGeneration == historyMutationGeneration else { return }
+            historyErrorMessage = error.localizedDescription
+        }
+    }
+
+    public func clearHistory() async {
+        guard let historyRepo else { return }
+        let myGeneration = beginHistoryMutation()
+        defer { endHistoryMutation() }
+        do {
+            let snapshot = try await Self.clearHistoryAndFetchSnapshot(
+                repo: historyRepo,
+                limit: Self.historyFetchLimit
+            )
+            guard myGeneration == historyMutationGeneration else { return }
+            history = snapshot.entries
+            totalHistoryCount = snapshot.totalCount
+            isConfirmingClearHistory = false
+            historyErrorMessage = nil
+        } catch {
+            guard myGeneration == historyMutationGeneration else { return }
+            historyErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func beginHistoryMutation() -> Int {
+        historyMutationGeneration += 1
+        activeHistoryMutationCount += 1
+        return historyMutationGeneration
+    }
+
+    private func endHistoryMutation() {
+        activeHistoryMutationCount = max(0, activeHistoryMutationCount - 1)
+    }
+
+    private func shouldApplyHistoryLoad(
+        loadGeneration: Int,
+        mutationGenerationAtStart: Int,
+        startedDuringMutation: Bool
+    ) -> Bool {
+        !startedDuringMutation
+            && loadGeneration == historyLoadGeneration
+            && mutationGenerationAtStart == historyMutationGeneration
+            && activeHistoryMutationCount == 0
+    }
+
+    /// Copy a prior run's output back to the clipboard, with a brief
+    /// "copied" affordance keyed by entry ID so the UI can show a check
+    /// next to the right row.
+    public func copyOutputToClipboard(_ entry: TransformHistoryEntry) async {
+        guard let clipboardService else {
+            historyErrorMessage = "Clipboard service is unavailable."
+            return
+        }
+        guard await clipboardService.copyToClipboard(entry.outputText) else {
+            historyErrorMessage = "Could not copy transformed text to the clipboard."
+            return
+        }
+        historyErrorMessage = nil
+        copiedResetTask?.cancel()
+        copiedHistoryEntryID = entry.id
+        copiedResetTask = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            self.copiedHistoryEntryID = nil
+        }
+    }
+
+    private static func fetchHistorySnapshot(
+        repo: TransformHistoryRepositoryProtocol,
+        limit: Int
+    ) async throws -> (entries: [TransformHistoryEntry], totalCount: Int) {
+        try await Task.detached(priority: .userInitiated) {
+            try repo.fetchRecentWithCount(limit: limit)
+        }.value
+    }
+
+    private static func deleteHistoryEntryAndFetchSnapshot(
+        repo: TransformHistoryRepositoryProtocol,
+        id: UUID,
+        limit: Int
+    ) async throws -> (entries: [TransformHistoryEntry], totalCount: Int) {
+        try await Task.detached(priority: .userInitiated) {
+            _ = try repo.delete(id: id)
+            return try repo.fetchRecentWithCount(limit: limit)
+        }.value
+    }
+
+    private static func clearHistoryAndFetchSnapshot(
+        repo: TransformHistoryRepositoryProtocol,
+        limit: Int
+    ) async throws -> (entries: [TransformHistoryEntry], totalCount: Int) {
+        try await Task.detached(priority: .userInitiated) {
+            try repo.deleteAll()
+            return try repo.fetchRecentWithCount(limit: limit)
+        }.value
     }
 
     /// Reset a built-in Transform's content / shortcut / runningLabel back

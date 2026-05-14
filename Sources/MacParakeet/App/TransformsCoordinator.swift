@@ -23,6 +23,7 @@ import OSLog
 final class TransformsCoordinator {
     private let llmServiceProvider: () -> LLMServiceProtocol?
     private let promptRepository: PromptRepositoryProtocol
+    private let historyRepository: TransformHistoryRepositoryProtocol?
     private let reservedHotkeysProvider: () -> [TransformShortcutReservedHotkey]
     private let logger = Logger(subsystem: "com.macparakeet", category: "TransformsCoordinator")
 
@@ -48,10 +49,12 @@ final class TransformsCoordinator {
     init(
         llmServiceProvider: @escaping () -> LLMServiceProtocol?,
         promptRepository: PromptRepositoryProtocol,
+        historyRepository: TransformHistoryRepositoryProtocol? = nil,
         reservedHotkeysProvider: @escaping () -> [TransformShortcutReservedHotkey] = { [] }
     ) {
         self.llmServiceProvider = llmServiceProvider
         self.promptRepository = promptRepository
+        self.historyRepository = historyRepository
         self.reservedHotkeysProvider = reservedHotkeysProvider
     }
 
@@ -231,6 +234,7 @@ final class TransformsCoordinator {
                     llmMs: result.llmElapsedMs,
                     totalMs: result.totalElapsedMs
                 ))
+                self.saveHistoryEntry(prompt: prompt, result: result)
                 self.logger.notice("transforms: \(runningTransformName, privacy: .public) completed")
             } catch let error as TransformExecutorError {
                 guard self.activeRunID == runID else { return }
@@ -256,6 +260,36 @@ final class TransformsCoordinator {
                 guard self.activeRunID == runID else { return }
                 self.panelController?.fail(message: error.localizedDescription)
                 Telemetry.send(.transformFailed(transformName: telemetryName, reason: .llmFailed))
+            }
+        }
+    }
+
+    private func saveHistoryEntry(prompt: Prompt, result: TransformExecutionResult) {
+        guard let historyRepository else { return }
+        let entry = TransformHistoryEntry(
+            transformId: prompt.id,
+            transformName: prompt.name,
+            inputText: result.inputText,
+            outputText: result.outputText,
+            sourceAppBundleID: result.target?.bundleIdentifier,
+            sourceAppName: result.target?.localizedName,
+            capturePath: result.captureTag,
+            replacementPath: result.path.rawValue,
+            llmElapsedMs: result.llmElapsedMs,
+            totalElapsedMs: result.totalElapsedMs
+        )
+        // Intentional silent-on-failure: the rewrite already succeeded
+        // (text was pasted into the host app), so a failed history write
+        // is a secondary concern. We log to os.log for support workflows
+        // but don't surface to the user — they already got their result.
+        Task.detached { [historyRepository, logger] in
+            do {
+                try historyRepository.save(entry)
+                await MainActor.run {
+                    NotificationCenter.default.post(name: .transformHistoryChanged, object: nil)
+                }
+            } catch {
+                logger.error("transforms: failed to save history entry: \(error.localizedDescription, privacy: .public)")
             }
         }
     }

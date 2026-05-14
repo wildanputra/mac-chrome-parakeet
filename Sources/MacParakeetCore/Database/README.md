@@ -24,6 +24,7 @@ process.
   - `PromptResultRepository.swift` — saved prompt outputs.
   - `QuickPromptRepository.swift` — quick-prompt entries (Ask tab).
   - `ChatConversationRepository.swift` — multi-turn chat history.
+  - `TransformHistoryRepository.swift` — local Transform run history (input/output/source app/timings; ADR-022).
 
 ## Cross-references
 

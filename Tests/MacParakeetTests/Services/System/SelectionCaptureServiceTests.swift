@@ -190,6 +190,7 @@ final class FakeSelectionCaptureBackend: SelectionCaptureBackend, @unchecked Sen
     private let changeCountAfterCmdC: Int?
     private let snapshotItems: [NSPasteboardItem]?
     private var restoreCalls: Int = 0
+    private var frontmostTargetCalls: Int = 0
 
     init(
         isTrusted: Bool,
@@ -215,12 +216,15 @@ final class FakeSelectionCaptureBackend: SelectionCaptureBackend, @unchecked Sen
 
     @MainActor
     func frontmostApplicationTarget() -> SelectionCaptureTarget? {
-        SelectionCaptureTarget(
+        frontmostTargetCalls += 1
+        return SelectionCaptureTarget(
             processIdentifier: 1234,
             bundleIdentifier: "com.example.Source",
             localizedName: "Source"
         )
     }
+
+    func frontmostTargetCallCount() -> Int { frontmostTargetCalls }
 
     @MainActor
     func snapshotPasteboard() -> PasteboardSnapshot {

@@ -421,6 +421,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let transforms = TransformsCoordinator(
             llmServiceProvider: llmServiceProvider,
             promptRepository: env.promptRepo,
+            historyRepository: env.transformHistoryRepo,
             reservedHotkeysProvider: { [weak self] in
                 self?.transformReservedHotkeysForTransforms() ?? []
             }

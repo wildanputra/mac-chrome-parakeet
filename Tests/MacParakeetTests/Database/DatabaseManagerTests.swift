@@ -899,7 +899,7 @@ final class DatabaseManagerTests: XCTestCase {
         try? FileManager.default.removeItem(atPath: dbPath)
     }
 
-    func testTransformWorkbenchCleanupMigrationDropsLegacyTables() throws {
+    func testTransformWorkbenchCleanupMigrationPreservesRestoredHistoryWhenRerun() throws {
         let dbPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("transform_workbench_cleanup_\(UUID().uuidString).db")
             .path
@@ -936,20 +936,26 @@ final class DatabaseManagerTests: XCTestCase {
 
         let manager = try DatabaseManager(path: dbPath)
         try manager.dbQueue.read { db in
-            XCTAssertFalse(try db.tableExists("transform_history"))
+            XCTAssertTrue(try db.tableExists("transform_history"))
             XCTAssertFalse(try db.tableExists("transform_profiles"))
             XCTAssertFalse(try db.tableExists("writing_samples"))
+
+            let historyColumns = try db.columns(in: "transform_history").map(\.name)
+            XCTAssertTrue(historyColumns.contains("transformName"))
+            XCTAssertTrue(historyColumns.contains("sourceAppBundleID"))
+            XCTAssertTrue(historyColumns.contains("totalElapsedMs"))
 
             let appliedMigrationIDs = try String.fetchAll(
                 db,
                 sql: """
                     SELECT identifier FROM grdb_migrations
-                    WHERE identifier IN (?, ?, ?)
+                    WHERE identifier IN (?, ?, ?, ?)
                 """,
                 arguments: [
                     "v0.14-transform-history",
                     "v0.15-transform-workbench",
                     "v0.16-drop-transform-workbench-tables",
+                    "v0.17-recreate-transform-history",
                 ]
             )
             XCTAssertEqual(
@@ -958,6 +964,7 @@ final class DatabaseManagerTests: XCTestCase {
                     "v0.14-transform-history",
                     "v0.15-transform-workbench",
                     "v0.16-drop-transform-workbench-tables",
+                    "v0.17-recreate-transform-history",
                 ]
             )
         }

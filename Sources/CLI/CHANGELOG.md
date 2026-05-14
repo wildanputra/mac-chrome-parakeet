@@ -107,6 +107,25 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
     `prompt`, `created_at`, `updated_at`). `transforms run --json`
     emits the LLM result envelope, and `transforms delete --json` emits
     `{deleted,id,name}`.
+- `transforms history list / show / delete / clear` — read/manage the
+  local Transform run history that the GUI's Transforms tab also surfaces.
+  Each completed Transform run records input, output, source app, capture
+  and replacement paths, and timing. Local-only; agents can use it to
+  verify what the dispatch table just produced without launching the app.
+  - `transforms history list [--limit N] [--json]` — newest first; default
+    limit 20.
+  - `transforms history show <id-prefix> [--json]` — full input/output for
+    one row. ID prefixes must be at least 4 hex chars; `--json` maps
+    invalid-prefix errors to `errorType: "validation"`, missing-row to
+    `errorType: "lookup"`.
+  - `transforms history delete <id-prefix> [--json]` / `transforms history
+    clear [--json]` — single-row delete and bulk clear. `--json` emits
+    `{ok, id}` / `{ok, deleted_count}` respectively.
+  - JSON payloads use a snake-cased `TransformHistoryDTO`
+    (`id`, `transform_id`, `transform_name`, `input_text`, `output_text`,
+    `source_app_bundle_id`, `source_app_name`, `capture_path`,
+    `replacement_path`, `llm_elapsed_ms`, `total_elapsed_ms`,
+    `created_at`, `updated_at`).
 
 ### Fixed
 

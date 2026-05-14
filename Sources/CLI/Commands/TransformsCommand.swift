@@ -20,6 +20,7 @@ struct TransformsCommand: AsyncParsableCommand {
             RunSubcommand.self,
             CreateSubcommand.self,
             DeleteSubcommand.self,
+            HistorySubcommand.self,
         ],
         defaultSubcommand: ListSubcommand.self
     )
@@ -150,6 +151,7 @@ extension TransformsCommand {
                 try AppPaths.ensureDirectories()
                 let db = try DatabaseManager(path: resolvedDatabasePath(database))
                 let repo = PromptRepository(dbQueue: db.dbQueue)
+                let historyRepo = TransformHistoryRepository(dbQueue: db.dbQueue)
                 let transform = try findTransform(idOrName: idOrName, repo: repo)
 
                 let text = try readInput(input)
@@ -165,15 +167,47 @@ extension TransformsCommand {
 
                 if json {
                     let result = try await service.transformDetailed(text: text, prompt: transform.content)
+                    try saveCLITransformHistory(
+                        repo: historyRepo,
+                        transform: transform,
+                        inputText: text,
+                        outputText: result.output,
+                        inputPath: input,
+                        llmElapsedMs: result.latencyMs,
+                        totalElapsedMs: result.latencyMs
+                    )
                     try printJSON(result)
                 } else if stream {
+                    let startedAt = Date()
+                    var output = ""
                     let tokenStream = service.transformStream(text: text, prompt: transform.content)
                     for try await token in tokenStream {
+                        output += token
                         print(token, terminator: "")
                     }
                     print()
+                    let elapsedMs = elapsedMilliseconds(since: startedAt)
+                    try saveCLITransformHistory(
+                        repo: historyRepo,
+                        transform: transform,
+                        inputText: text,
+                        outputText: output,
+                        inputPath: input,
+                        llmElapsedMs: elapsedMs,
+                        totalElapsedMs: elapsedMs
+                    )
                 } else {
-                    print(try await service.transform(text: text, prompt: transform.content))
+                    let result = try await service.transformDetailed(text: text, prompt: transform.content)
+                    try saveCLITransformHistory(
+                        repo: historyRepo,
+                        transform: transform,
+                        inputText: text,
+                        outputText: result.output,
+                        inputPath: input,
+                        llmElapsedMs: result.latencyMs,
+                        totalElapsedMs: result.latencyMs
+                    )
+                    print(result.output)
                 }
             }
         }
@@ -350,6 +384,361 @@ extension TransformsCommand {
             }
         }
     }
+}
+
+// MARK: - History
+
+extension TransformsCommand {
+    struct HistorySubcommand: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "history",
+            abstract: "Inspect and manage local Transform history.",
+            subcommands: [
+                ListSubcommand.self,
+                ShowSubcommand.self,
+                DeleteSubcommand.self,
+                ClearSubcommand.self,
+            ],
+            defaultSubcommand: ListSubcommand.self
+        )
+
+        struct ListSubcommand: ParsableCommand {
+            static let configuration = CommandConfiguration(
+                commandName: "list",
+                abstract: "List saved Transform runs, newest first."
+            )
+
+            @Option(help: "Maximum number of history rows to print.")
+            var limit: Int = 20
+
+            @Flag(name: .long, help: "Emit JSON instead of human-readable output.")
+            var json: Bool = false
+
+            @Option(help: "Path to SQLite database file (defaults to the app database).")
+            var database: String?
+
+            func validate() throws {
+                guard limit > 0 else {
+                    throw ValidationError("--limit must be greater than zero.")
+                }
+            }
+
+            func run() throws {
+                try emitJSONOrRethrow(json: json) {
+                    let repo = try transformHistoryRepo(database: database)
+                    let entries = try repo.fetchRecent(limit: limit)
+
+                    if json {
+                        try printJSON(entries.map(TransformHistoryDTO.init(entry:)))
+                        return
+                    }
+
+                    if entries.isEmpty {
+                        print("No Transform history found.")
+                        return
+                    }
+
+                    let formatter = ISO8601DateFormatter()
+                    for entry in entries {
+                        print("\(entry.id.uuidString.prefix(8))  \(formatter.string(from: entry.createdAt))  \(entry.transformName)  \(entry.sourceAppDisplayName)")
+                        print("  \(singleLineHistoryPreview(entry.outputText, maxLength: 140))")
+                    }
+                    print()
+                    print("\(entries.count) Transform history item(s)")
+                }
+            }
+        }
+
+        struct ShowSubcommand: ParsableCommand {
+            static let configuration = CommandConfiguration(
+                commandName: "show",
+                abstract: "Show one saved Transform run."
+            )
+
+            @Argument(help: "History item ID or ID prefix.")
+            var idPrefix: String
+
+            @Flag(name: .long, help: "Emit JSON instead of human-readable output.")
+            var json: Bool = false
+
+            @Option(help: "Path to SQLite database file (defaults to the app database).")
+            var database: String?
+
+            func run() throws {
+                try emitJSONOrRethrow(json: json) {
+                    let repo = try transformHistoryRepo(database: database)
+                    let entry = try findTransformHistoryEntry(idPrefix: idPrefix, repo: repo)
+
+                    if json {
+                        try printJSON(TransformHistoryDTO(entry: entry))
+                        return
+                    }
+
+                    let formatter = ISO8601DateFormatter()
+                    print("ID:           \(entry.id.uuidString)")
+                    print("Transform:    \(entry.transformName)")
+                    if let transformId = entry.transformId {
+                        print("Transform ID: \(transformId.uuidString)")
+                    }
+                    print("Source app:   \(entry.sourceAppDisplayName)")
+                    print("Capture:      \(entry.capturePath)")
+                    print("Replacement:  \(entry.replacementPath)")
+                    print("LLM:          \(entry.llmElapsedMs)ms")
+                    print("Total:        \(entry.totalElapsedMs)ms")
+                    print("Created:      \(formatter.string(from: entry.createdAt))")
+                    print()
+                    print("Input:")
+                    print(entry.inputText)
+                    print()
+                    print("Output:")
+                    print(entry.outputText)
+                }
+            }
+        }
+
+        struct DeleteSubcommand: ParsableCommand {
+            static let configuration = CommandConfiguration(
+                commandName: "delete",
+                abstract: "Delete one saved Transform history item."
+            )
+
+            @Argument(help: "History item ID or ID prefix.")
+            var idPrefix: String
+
+            @Flag(name: .long, help: "Emit JSON instead of human-readable output.")
+            var json: Bool = false
+
+            @Option(help: "Path to SQLite database file (defaults to the app database).")
+            var database: String?
+
+            func run() throws {
+                try emitJSONOrRethrow(json: json) {
+                    let repo = try transformHistoryRepo(database: database)
+                    let entry = try findTransformHistoryEntry(idPrefix: idPrefix, repo: repo)
+                    guard try repo.delete(id: entry.id) else {
+                        throw CLITransformHistoryError.deleteFailed(entry.id.uuidString)
+                    }
+
+                    if json {
+                        try printJSON(TransformHistoryDeleteResult(ok: true, id: entry.id.uuidString))
+                    } else {
+                        print("Deleted Transform history item \(entry.id.uuidString.prefix(8))")
+                    }
+                }
+            }
+        }
+
+        struct ClearSubcommand: ParsableCommand {
+            static let configuration = CommandConfiguration(
+                commandName: "clear",
+                abstract: "Clear all local Transform history."
+            )
+
+            @Flag(name: .long, help: "Emit JSON instead of human-readable output.")
+            var json: Bool = false
+
+            @Option(help: "Path to SQLite database file (defaults to the app database).")
+            var database: String?
+
+            func run() throws {
+                try emitJSONOrRethrow(json: json) {
+                    let repo = try transformHistoryRepo(database: database)
+                    let deletedCount = try repo.count()
+                    try repo.deleteAll()
+
+                    if json {
+                        try printJSON(TransformHistoryClearResult(ok: true, deletedCount: deletedCount))
+                    } else {
+                        print("Cleared \(deletedCount) Transform history item(s)")
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - History helpers
+
+private let transformHistoryIDPrefixMinimumLength = 4
+
+private func transformHistoryRepo(database: String?) throws -> TransformHistoryRepository {
+    try AppPaths.ensureDirectories()
+    let db = try DatabaseManager(path: resolvedDatabasePath(database))
+    return TransformHistoryRepository(dbQueue: db.dbQueue)
+}
+
+private func saveCLITransformHistory(
+    repo: TransformHistoryRepositoryProtocol,
+    transform: Prompt,
+    inputText: String,
+    outputText: String,
+    inputPath: String,
+    llmElapsedMs: Int,
+    totalElapsedMs: Int
+) throws {
+    try repo.save(TransformHistoryEntry(
+        transformId: transform.id,
+        transformName: transform.name,
+        inputText: inputText,
+        outputText: outputText,
+        sourceAppName: "macparakeet-cli",
+        capturePath: inputPath == "-" ? "stdin" : "file",
+        replacementPath: "stdout",
+        llmElapsedMs: llmElapsedMs,
+        totalElapsedMs: totalElapsedMs
+    ))
+}
+
+private func elapsedMilliseconds(since startedAt: Date) -> Int {
+    max(0, Int(Date().timeIntervalSince(startedAt) * 1_000))
+}
+
+private func findTransformHistoryEntry(
+    idPrefix: String,
+    repo: TransformHistoryRepositoryProtocol
+) throws -> TransformHistoryEntry {
+    let trimmed = idPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw CLITransformHistoryError.notFound(idPrefix)
+    }
+
+    if let uuid = UUID(uuidString: trimmed), let exact = try repo.fetch(id: uuid) {
+        return exact
+    }
+
+    // Length and hex-character validation against the hyphenless form so
+    // inputs like "12--" don't pass length-only checks then silently miss
+    // and "12zz" surfaces as a clearer error than "too short".
+    let normalized = trimmed.replacingOccurrences(of: "-", with: "")
+    let hexCharacters = Set("0123456789abcdefABCDEF")
+    let isHex = !normalized.isEmpty && normalized.allSatisfy { hexCharacters.contains($0) }
+    if !isHex {
+        throw CLITransformHistoryError.invalidPrefix(
+            min: transformHistoryIDPrefixMinimumLength,
+            provided: trimmed,
+            reason: .nonHex
+        )
+    }
+    guard normalized.count >= transformHistoryIDPrefixMinimumLength else {
+        throw CLITransformHistoryError.invalidPrefix(
+            min: transformHistoryIDPrefixMinimumLength,
+            provided: trimmed,
+            reason: .tooShort
+        )
+    }
+
+    let matches = try repo.fetch(idPrefix: trimmed)
+    if matches.count == 1 {
+        return matches[0]
+    }
+    if matches.count > 1 {
+        throw CLITransformHistoryError.ambiguous(trimmed, matches.map { String($0.id.uuidString.prefix(8)) })
+    }
+    throw CLITransformHistoryError.notFound(trimmed)
+}
+
+private func singleLineHistoryPreview(_ text: String, maxLength: Int) -> String {
+    let collapsed = text
+        .replacingOccurrences(of: "\n", with: " ")
+        .replacingOccurrences(of: "\t", with: " ")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard collapsed.count > maxLength else { return collapsed }
+    return String(collapsed.prefix(max(0, maxLength - 1))) + "..."
+}
+
+struct TransformHistoryDTO: Encodable {
+    let id: String
+    let transformId: String?
+    let transformName: String
+    let inputText: String
+    let outputText: String
+    let sourceAppBundleID: String?
+    let sourceAppName: String?
+    let capturePath: String
+    let replacementPath: String
+    let llmElapsedMs: Int
+    let totalElapsedMs: Int
+    let createdAt: Date
+    let updatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case transformId = "transform_id"
+        case transformName = "transform_name"
+        case inputText = "input_text"
+        case outputText = "output_text"
+        case sourceAppBundleID = "source_app_bundle_id"
+        case sourceAppName = "source_app_name"
+        case capturePath = "capture_path"
+        case replacementPath = "replacement_path"
+        case llmElapsedMs = "llm_elapsed_ms"
+        case totalElapsedMs = "total_elapsed_ms"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+
+    init(entry: TransformHistoryEntry) {
+        id = entry.id.uuidString
+        transformId = entry.transformId?.uuidString
+        transformName = entry.transformName
+        inputText = entry.inputText
+        outputText = entry.outputText
+        sourceAppBundleID = entry.sourceAppBundleID
+        sourceAppName = entry.sourceAppName
+        capturePath = entry.capturePath
+        replacementPath = entry.replacementPath
+        llmElapsedMs = entry.llmElapsedMs
+        totalElapsedMs = entry.totalElapsedMs
+        createdAt = entry.createdAt
+        updatedAt = entry.updatedAt
+    }
+}
+
+struct TransformHistoryDeleteResult: Encodable {
+    let ok: Bool
+    let id: String
+}
+
+struct TransformHistoryClearResult: Encodable {
+    let ok: Bool
+    let deletedCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case deletedCount = "deleted_count"
+    }
+}
+
+enum CLITransformHistoryError: Error, CustomStringConvertible, LocalizedError {
+    case notFound(String)
+    case ambiguous(String, [String])
+    case invalidPrefix(min: Int, provided: String, reason: InvalidPrefixReason)
+    case deleteFailed(String)
+
+    enum InvalidPrefixReason {
+        case tooShort
+        case nonHex
+    }
+
+    var description: String {
+        switch self {
+        case .notFound(let value):
+            return "No Transform history item matching '\(value)'"
+        case .ambiguous(let value, let matches):
+            return "Ambiguous Transform history ID '\(value)' (matches: \(matches.joined(separator: ", ")))"
+        case .invalidPrefix(let min, let provided, let reason):
+            switch reason {
+            case .tooShort:
+                return "Transform history ID prefix '\(provided)' is too short. Use at least \(min) hex characters."
+            case .nonHex:
+                return "Transform history ID prefix '\(provided)' contains non-hex characters. Use \(min)+ hex characters (0-9, a-f), optionally with hyphens."
+            }
+        case .deleteFailed(let value):
+            return "Failed to delete Transform history item '\(value)'"
+        }
+    }
+
+    var errorDescription: String? { description }
 }
 
 // MARK: - Lookup helper

@@ -174,6 +174,57 @@ final class TransformExecutorTests: XCTestCase {
         XCTAssertEqual(replacementBackend.cmdVPostCount(), 0)
     }
 
+    func testRunPropagatesCaptureTargetIntoResultExactlyOnce() async throws {
+        // Regression guard: PR #283 originally read
+        // `NSWorkspace.frontmostApplication` at history-write time, which
+        // drifts during long LLM runs (Alt-Tab → wrong source app
+        // recorded). The fix threads the typed capture target through
+        // `TransformExecutionResult.target`, captured ONCE at the start of
+        // `captureSelection()`. This test asserts both invariants:
+        //   1. The captured target reaches `result.target`.
+        //   2. `frontmostApplicationTarget()` is called exactly once
+        //      (not re-queried after the LLM), so the recorded app
+        //      can't drift mid-run.
+        let captureBackend = FakeSelectionCaptureBackend(
+            isTrusted: true,
+            focusedElement: AXUIElementCreateSystemWide(),
+            selectedText: "Hello"
+        )
+        let captureService = SelectionCaptureService(
+            backend: captureBackend,
+            clipboardPollTimeout: .milliseconds(40),
+            pollIntervalNanos: 1_000_000
+        )
+        let replacementBackend = FakeSelectionReplacementBackend(
+            isTrusted: true,
+            axWriteSucceeds: true
+        )
+        let replacementService = SelectionReplacementService(
+            backend: replacementBackend,
+            postPasteDelay: .milliseconds(1)
+        )
+        let llm = MockTransformLLMService()
+        llm.streamTokens = ["polished"]
+        let executor = TransformExecutor(
+            captureService: captureService,
+            replacementService: replacementService,
+            llmService: llm
+        )
+
+        let result = try await executor.run(prompt: "polish", onProgress: { _ in })
+
+        XCTAssertEqual(result.inputText, "Hello")
+        XCTAssertEqual(result.outputText, "polished")
+        let target = try XCTUnwrap(result.target, "Captured target must be propagated to result")
+        XCTAssertEqual(target.processIdentifier, 1234)
+        XCTAssertEqual(target.bundleIdentifier, "com.example.Source")
+        XCTAssertEqual(target.localizedName, "Source")
+        XCTAssertEqual(
+            captureBackend.frontmostTargetCallCount(), 1,
+            "Frontmost app must be queried exactly once — at capture time — to prevent drift during long LLM runs."
+        )
+    }
+
     func testRunEmitsProgressInOrderAndCallsReplacementOnSuccess() async throws {
         let captureBackend = FakeSelectionCaptureBackend(
             isTrusted: true,

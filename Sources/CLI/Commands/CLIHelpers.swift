@@ -291,6 +291,13 @@ enum CLIErrorType {
         if let transforms = error as? CLITransformsError {
             return transforms.errorType
         }
+        if let history = error as? CLITransformHistoryError {
+            switch history {
+            case .notFound, .ambiguous: return lookup
+            case .invalidPrefix:        return validation
+            case .deleteFailed:         return runtime
+            }
+        }
         if let qpe = error as? QuickPromptCLIError {
             switch qpe {
             case .cannotDeleteBuiltIn: return validation
@@ -382,6 +389,9 @@ private func rethrowWithOptionalJSONEnvelope(_ error: Error, json: Bool) throws 
         throw cliValidationMisuseExitCode
     }
     if let transforms = error as? CLITransformsError, transforms.isValidationMisuse {
+        throw cliValidationMisuseExitCode
+    }
+    if let history = error as? CLITransformHistoryError, case .invalidPrefix = history {
         throw cliValidationMisuseExitCode
     }
     throw ExitCode.failure
