@@ -471,11 +471,10 @@ scripts/dev/run_app.sh
 # Optional: force a specific signing identity for the dev .app bundle
 MACPARAKEET_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" scripts/dev/run_app.sh
 
-# Build and run CLI -- public surface, semver tracked in Sources/CLI/CHANGELOG.md.
-# See AGENTS.md (this repo) and integrations/README.md (downstream agents) for context.
+# Build and run CLI -- dual-purpose surface (see note below).
 swift build --target CLI
 swift run macparakeet-cli --help
-swift run macparakeet-cli --version    # 1.0.0+
+swift run macparakeet-cli --version
 swift run macparakeet-cli transcribe /path/to/audio.mp3
 swift run macparakeet-cli health
 
@@ -544,6 +543,15 @@ open Package.swift  # Select MacParakeet scheme
 | Observable ViewModels | `@MainActor @Observable` on all ViewModels |
 | Async/await for all I/O | No completion handlers, no Combine for new code |
 
+### CLI Dual Purpose
+
+`macparakeet-cli` serves two audiences from one codebase:
+
+1. **Dev/testing tool** -- Agents working on MacParakeet use the CLI to verify features headlessly (database CRUD, pipeline runs, health checks, config). Not GUI parity -- just fast feedback loops where agents can't drive the GUI. Be flexible about what to include.
+2. **Real CLI surface** -- Agent operators and power users running headless STT on Apple Silicon. Core commands: `transcribe`, `export`, `llm`, `transforms`, `vocab`, `health`, `config`. Semver tracked in `Sources/CLI/CHANGELOG.md`.
+
+Both audiences share the same command tree. Dev-only commands (e.g. `calendar`, `audio-input-diagnostics`) don't hurt external users by being visible. When adding CLI commands, decide which audience it primarily serves -- that determines how much polish and JSON contract work it needs.
+
 ---
 
 ## Known Pitfalls (from OatFlow Experience)
@@ -574,7 +582,7 @@ These are hard-won lessons. Don't repeat them.
 - **Dead code from iterating on approaches** -- When switching approaches, delete old code entirely. Don't leave `_ = unusedVar` artifacts.
 - **Retained purchase activation is intentional** -- Do not delete `EntitlementsService`, `LemonSqueezyLicenseAPI`, entitlement state, or trial/license telemetry as dead code unless the project owner explicitly requests it and the decision is reflected in an ADR/spec update.
 - **Meeting recovery artifacts are user data** -- Do not delete meeting session folders, lock files, or source audio outside the recovery/discard flows without explicit user intent.
-- **CLI is a public contract** -- Preserve `macparakeet-cli` behavior and update `Sources/CLI/CHANGELOG.md` for compatibility-relevant changes.
+- **CLI is a public contract** -- Preserve `macparakeet-cli` behavior for external-facing commands and update `Sources/CLI/CHANGELOG.md` for compatibility-relevant changes. See "CLI Dual Purpose" above for which commands need full contract treatment.
 - **PyInstaller helpers need library-validation care** -- Bundled `yt-dlp_macos` unpacks and `dlopen`s an embedded Python framework. Developer ID + hardened runtime signing without `com.apple.security.cs.disable-library-validation=true` breaks fresh installs at first YouTube transcription/playback with a Team ID mismatch.
 - **Review agents catch real bugs** -- Running a review agent on critical flows catches P0 issues. Worth the 60 seconds.
 - **CI duplicates without workflow concurrency** -- Add `concurrency` with `cancel-in-progress: true` and a stable group key to avoid duplicate pipelines.
