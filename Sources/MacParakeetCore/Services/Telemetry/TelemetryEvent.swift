@@ -59,6 +59,7 @@ public enum TelemetryEventName: String, Sendable, CaseIterable {
     case customWordAdded = "custom_word_added"
     case customWordDeleted = "custom_word_deleted"
     case snippetAdded = "snippet_added"
+    case snippetEdited = "snippet_edited"
     case snippetDeleted = "snippet_deleted"
     case keystrokeSnippetFired = "keystroke_snippet_fired"
     case feedbackSubmitted = "feedback_submitted"
@@ -578,6 +579,7 @@ public enum TelemetryEventSpec: Sendable {
     case customWordAdded
     case customWordDeleted
     case snippetAdded
+    case snippetEdited
     case snippetDeleted
     case settingChanged(setting: TelemetrySettingName)
     case telemetryOptedOut
@@ -799,6 +801,7 @@ extension TelemetryEventSpec {
         case .customWordAdded: return .customWordAdded
         case .customWordDeleted: return .customWordDeleted
         case .snippetAdded: return .snippetAdded
+        case .snippetEdited: return .snippetEdited
         case .snippetDeleted: return .snippetDeleted
         case .settingChanged: return .settingChanged
         case .telemetryOptedOut: return .telemetryOptedOut
@@ -862,6 +865,7 @@ extension TelemetryEventSpec {
              .customWordAdded,
              .customWordDeleted,
              .snippetAdded,
+             .snippetEdited,
              .snippetDeleted,
              .telemetryOptedOut,
              .transcriptionDeleted,
@@ -1593,6 +1597,7 @@ public enum TelemetryImplementedContract {
         .customWordAdded: [],
         .customWordDeleted: [],
         .snippetAdded: [],
+        .snippetEdited: [],
         .snippetDeleted: [],
         .settingChanged: ["setting"],
         .telemetryOptedOut: [],

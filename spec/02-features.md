@@ -900,7 +900,7 @@ Important constraints:
 
 **Features:**
 - Add, edit, delete, enable/disable custom words
-- Add, delete text snippets
+- Add, edit, delete text snippets
 - Use count tracking for snippets (helps users know which are active)
 - Accessible from Settings view ("Manage Custom Words...", "Manage Text Snippets...")
 - Import/export the combined vocabulary backup (custom words + snippets) from
@@ -920,7 +920,7 @@ Important constraints:
 
 **Acceptance criteria:**
 - [x] Can add/edit/delete/toggle custom words
-- [x] Can add/delete text snippets
+- [x] Can add/edit/delete text snippets
 - [x] Use count displayed and updated for snippets
 - [x] Changes take effect immediately for next dictation
 - [x] Settings link opens management views

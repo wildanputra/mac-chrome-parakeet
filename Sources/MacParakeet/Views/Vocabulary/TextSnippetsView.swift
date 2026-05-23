@@ -152,11 +152,22 @@ struct TextSnippetsView: View {
 
     // MARK: - Rows
 
+    @ViewBuilder
     private func snippetRow(_ snippet: TextSnippet) -> some View {
+        if viewModel.editingSnippetID == snippet.id {
+            SnippetEditRow(
+                viewModel: viewModel,
+                snippet: snippet,
+                usageHint: snippetUsageHint(snippet)
+            )
+        } else {
+            snippetDisplayRow(snippet)
+        }
+    }
+
+    private func snippetDisplayRow(_ snippet: TextSnippet) -> some View {
         let isHovered = hoveredSnippetID == snippet.id
-        let usageHint: String = snippet.useCount > 0
-            ? "Used \(snippet.useCount) time\(snippet.useCount == 1 ? "" : "s")"
-            : "Not yet used"
+        let usageHint = snippetUsageHint(snippet)
         return HStack(spacing: DesignSystem.Spacing.md) {
             Toggle("", isOn: Binding(
                 get: { snippet.isEnabled },
@@ -182,26 +193,23 @@ struct TextSnippetsView: View {
             Spacer(minLength: DesignSystem.Spacing.sm)
 
             if snippet.useCount > 0 {
-                HStack(spacing: 3) {
-                    Image(systemName: "chart.bar.fill")
-                        .font(.system(size: 9, weight: .semibold))
-                    Text("\(snippet.useCount)")
-                        .font(DesignSystem.Typography.micro.weight(.medium))
-                        .monospacedDigit()
-                }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(DesignSystem.Colors.surfaceElevated))
-                .help(usageHint)
-                .accessibilityLabel(usageHint)
+                SnippetUsageBadge(useCount: snippet.useCount, usageHint: usageHint)
             }
 
-            DeleteIconButton(
-                helpText: "Delete \(snippet.trigger)",
-                accessibilityName: "Delete \(snippet.trigger)"
-            ) {
-                viewModel.pendingDeleteSnippet = snippet
+            HStack(spacing: DesignSystem.Spacing.sm) {
+                EditIconButton(
+                    helpText: "Edit \(snippet.trigger)",
+                    accessibilityName: "Edit \(snippet.trigger)"
+                ) {
+                    viewModel.beginEditing(snippet)
+                }
+
+                DeleteIconButton(
+                    helpText: "Delete \(snippet.trigger)",
+                    accessibilityName: "Delete \(snippet.trigger)"
+                ) {
+                    viewModel.pendingDeleteSnippet = snippet
+                }
             }
         }
         .padding(.horizontal, DesignSystem.Spacing.md)
@@ -213,6 +221,12 @@ struct TextSnippetsView: View {
                 hoveredSnippetID = hovering ? snippet.id : nil
             }
         }
+    }
+
+    private func snippetUsageHint(_ snippet: TextSnippet) -> String {
+        snippet.useCount > 0
+            ? "Used \(snippet.useCount) time\(snippet.useCount == 1 ? "" : "s")"
+            : "Not yet used"
     }
 
     private var emptyState: some View {
@@ -277,5 +291,111 @@ struct TextSnippetsView: View {
         let expansionEmpty = viewModel.newExpansion.trimmingCharacters(in: .whitespaces).isEmpty
         guard !triggerEmpty && !expansionEmpty else { return }
         viewModel.addSnippet()
+    }
+}
+
+private struct SnippetEditRow: View {
+    @Bindable var viewModel: TextSnippetsViewModel
+    let snippet: TextSnippet
+    let usageHint: String
+
+    @FocusState private var triggerFocused: Bool
+    @FocusState private var expansionFocused: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: DesignSystem.Spacing.md) {
+            Toggle("", isOn: Binding(
+                get: { snippet.isEnabled },
+                set: { _ in viewModel.toggleEnabled(snippet) }
+            ))
+            .labelsHidden()
+            .parakeetSwitch()
+            .controlSize(.small)
+            .accessibilityLabel("Enable \(snippet.trigger)")
+            .accessibilityHint("Expands during dictation to a saved phrase")
+
+            VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+                HStack(spacing: DesignSystem.Spacing.sm) {
+                    ParakeetTextField(
+                        placeholder: "Trigger phrase",
+                        text: $viewModel.editTrigger,
+                        onSubmit: { expansionFocused = true },
+                        externalFocus: $triggerFocused
+                    )
+                    .frame(minWidth: 150)
+
+                    ParakeetTextField(
+                        placeholder: "Expansion",
+                        text: $viewModel.editExpansion,
+                        onSubmit: { viewModel.saveEditing() },
+                        externalFocus: $expansionFocused
+                    )
+                    .frame(minWidth: 220)
+                }
+
+                HStack(spacing: DesignSystem.Spacing.sm) {
+                    if let error = viewModel.editErrorMessage {
+                        Text(error)
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(DesignSystem.Colors.errorRed)
+                    } else if snippet.useCount > 0 {
+                        SnippetUsageBadge(useCount: snippet.useCount, usageHint: usageHint)
+                    } else {
+                        Text(usageHint)
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Spacer(minLength: DesignSystem.Spacing.sm)
+
+            HStack(spacing: DesignSystem.Spacing.sm) {
+                Button("Cancel") {
+                    viewModel.cancelEditing()
+                }
+                .parakeetAction(.secondary)
+                .controlSize(.small)
+
+                Button("Save") {
+                    viewModel.saveEditing()
+                }
+                .parakeetAction(.primaryProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canSaveEditing)
+            }
+        }
+        .padding(.horizontal, DesignSystem.Spacing.md)
+        .padding(.vertical, DesignSystem.Spacing.sm + 2)
+        .background(DesignSystem.Colors.accentLight)
+        .contentShape(Rectangle())
+        .onAppear {
+            triggerFocused = true
+        }
+        .onExitCommand {
+            viewModel.cancelEditing()
+        }
+    }
+}
+
+private struct SnippetUsageBadge: View {
+    let useCount: Int
+    let usageHint: String
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "chart.bar.fill")
+                .font(.system(size: 9, weight: .semibold))
+            Text("\(useCount)")
+                .font(DesignSystem.Typography.micro.weight(.medium))
+                .monospacedDigit()
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(DesignSystem.Colors.surfaceElevated))
+        .help(usageHint)
+        .accessibilityLabel(usageHint)
     }
 }

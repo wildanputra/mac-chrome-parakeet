@@ -410,6 +410,7 @@ swift run macparakeet-cli vocab words delete <ID>
 
 swift run macparakeet-cli vocab snippets list
 swift run macparakeet-cli vocab snippets add "my signature" "Best regards, Daniel"
+swift run macparakeet-cli vocab snippets edit <ID> --trigger "my signature" --expansion "Best regards, Daniel Moon"
 swift run macparakeet-cli vocab snippets delete <ID>
 ```
 

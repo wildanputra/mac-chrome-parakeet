@@ -1315,6 +1315,7 @@ final class TelemetryServiceTests: XCTestCase {
             .customWordAdded,
             .customWordDeleted,
             .snippetAdded,
+            .snippetEdited,
             .snippetDeleted,
             .promptCreated,
             .promptUpdated,

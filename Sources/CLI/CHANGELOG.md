@@ -95,6 +95,8 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
   meeting outputs already exist before fetching result rows.
 - `llm` commands using `--provider lmstudio` now honor optional LM Studio API
   tokens via `--api-key`, `--api-key-env`, or `LM_API_TOKEN`.
+- `vocab snippets edit <id> --trigger ... --expansion ...` updates an existing
+  text snippet without deleting/recreating it.
 
 ### Changed
 

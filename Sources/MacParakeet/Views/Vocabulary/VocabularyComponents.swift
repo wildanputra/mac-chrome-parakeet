@@ -187,6 +187,26 @@ struct VocabSheetHeader: View {
 
 // MARK: - Delete icon button
 
+struct EditIconButton: View {
+    let helpText: String
+    let accessibilityName: String
+    let action: () -> Void
+
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "pencil")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(hovered ? DesignSystem.Colors.accent : .secondary)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help(helpText)
+        .accessibilityLabel(accessibilityName)
+    }
+}
+
 /// A trash button that rests in the secondary color and warms to red on hover,
 /// giving the destructive affordance a clear, contained signal.
 struct DeleteIconButton: View {
