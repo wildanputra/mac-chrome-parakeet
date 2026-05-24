@@ -13,8 +13,8 @@ protocol DictationMediaPauseCoordinating: AnyObject {
 @MainActor
 final class DictationMediaPauseCoordinator: DictationMediaPauseCoordinating {
     private static let logger = Logger(subsystem: "com.macparakeet.app", category: "DictationMediaPause")
-    // Covers the two MediaRemote callback windows in SystemMediaController.resume.
-    private static let terminationResumeTimeout: TimeInterval = 1.8
+    // Covers the helper snapshot and MediaRemote command windows during termination.
+    private static let terminationResumeTimeout: TimeInterval = 2.8
 
     private let settingsViewModel: SettingsViewModel
     private let mediaController: any SystemMediaControlling
