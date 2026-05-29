@@ -63,6 +63,30 @@ Replayed both captured streams of a real meeting through the live path.
   sufficient; the `.cpuAndNeuralEngine` comparison is unnecessary given the
   headroom.
 
+**Phase 0 — corpus breadth + false-negative check (2026-05-29, ~30 captured
+meetings):** independent replay across the full local meeting corpus (single
+streams, minutes to ~5 hours each) to extend the n=1 result above and verify VAD
+isn't silently dropping speech.
+- **Robustness at scale:** every stream ran clean — **0 VAD errors, 0 fallbacks**,
+  uniformly **~1.3–1.6k× realtime**, worst-case per-ingest ~4–12ms. The inline
+  verdict holds across the corpus, not just one meeting.
+- **Three behavioral regimes** (all correct/desired): *conversational* cuts on
+  natural pauses (one 176-min meeting: 2067 speech-end cuts, 8 dropped-silence);
+  *presentation/monologue* hits the 10s cap (force-emit-dominated → ~10s windows);
+  *listening/silent* drops silence instead of feeding it to STT.
+- **False-negative check (the part #391 didn't cover):** a few system tracks
+  emitted 0 chunks. Measuring input loudness (added a peak/RMS dBFS readout to
+  `meeting-vad-sim`) showed these are genuinely silent — RMS **−48 to −75 dBFS**
+  (silence + stray clicks that spike *peak* to "normal" but leave RMS near the
+  floor) — vs a speech-dense control at **−27 dBFS** RMS / 2067 speech-ends. So
+  VAD's empty output reflects silent input, **not dropped speech**: the default
+  Silero threshold is sound and there's no false-negative problem. (Verdict keys
+  on RMS, not peak — a lone click fools peak.)
+- **Net:** corroborates the inline-in-capture decision and additionally validates
+  *correctness* (no missed speech) across diverse real audio. Still unverified:
+  live VAD-while-Parakeet contention and on-screen cadence feel — both need a real
+  call (Phase 5 / enablement), not an offline replay.
+
 **Done — reuse the `VadManager` across sessions** (was a deferred review item):
 `MeetingRecordingService` now caches one `MeetingVADService` (`sharedVADService`,
 loaded lazily via `liveVADService()`), so the CoreML model loads at most once per
