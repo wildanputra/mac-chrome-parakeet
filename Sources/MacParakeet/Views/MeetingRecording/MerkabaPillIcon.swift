@@ -33,7 +33,7 @@ struct MerkabaPillIcon: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: MerkabaPillIconView, context: Context) -> CGSize? {
-        CGSize(width: 30, height: showStem ? 74 : 30)
+        CGSize(width: showStem ? 30 : 36, height: showStem ? 74 : 36)
     }
 }
 
@@ -103,7 +103,7 @@ final class MerkabaPillIconView: NSView {
     }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: 30, height: currentShowStem ? 74 : 30)
+        NSSize(width: currentShowStem ? 30 : 36, height: currentShowStem ? 74 : 36)
     }
 
     override func layout() {
@@ -438,11 +438,20 @@ final class MerkabaPillIconView: NSView {
     // MARK: - Layout
 
     private func layoutLayers() {
+        let markSize = activeMarkSize
         let headY: CGFloat = currentShowStem ? 6 : 0
-        glowLayer.path = CGPath(ellipseIn: CGRect(x: 3, y: headY + 3, width: 24, height: 24), transform: nil)
+        glowLayer.path = CGPath(
+            ellipseIn: CGRect(
+                x: markSize * 0.1,
+                y: headY + markSize * 0.1,
+                width: markSize * 0.8,
+                height: markSize * 0.8
+            ),
+            transform: nil
+        )
 
-        flowerLayer.frame = CGRect(x: 0, y: headY, width: 30, height: 30)
-        flowerLayer.position = CGPoint(x: 15, y: headY + 15)
+        flowerLayer.frame = CGRect(x: 0, y: headY, width: markSize, height: markSize)
+        flowerLayer.position = CGPoint(x: markSize / 2, y: headY + markSize / 2)
         flowerLayer.bounds = CGRect(x: 0, y: 0, width: 30, height: 30)
 
         let stemFrame = CGRect(x: 0, y: headY + 30, width: 30, height: 34)
@@ -458,45 +467,74 @@ final class MerkabaPillIconView: NSView {
         rightLeafFillLayer.path = rightPath
         rightLeafStrokeLayer.path = rightPath
 
-        layoutSpinnerAndCheck(headY: headY)
+        layoutSpinnerAndCheck(headY: headY, size: markSize)
         applyVisibility()
     }
 
-    private func layoutSpinnerAndCheck(headY: CGFloat) {
+    private var activeMarkSize: CGFloat {
+        guard !currentShowStem else { return 30 }
+        let proposed = min(bounds.width, bounds.height)
+        return proposed > 0 ? proposed : 36
+    }
+
+    private func layoutSpinnerAndCheck(headY: CGFloat, size: CGFloat) {
         // Both containers sit exactly where the flower head is, so the
         // transcribing/completed marks read as the rosette transforming in
-        // place. Sublayer coordinates below are relative to the 30×30 container
+        // place. Sublayer coordinates below are relative to the head container
         // bounds, not the y-offset head rect.
-        let headRect = CGRect(x: 0, y: headY, width: 30, height: 30)
+        let headRect = CGRect(x: 0, y: headY, width: size, height: size)
         spinnerLayer.frame = headRect
         checkLayer.frame = headRect
 
-        let local = CGRect(x: 0, y: 0, width: 30, height: 30)
-        let center = CGPoint(x: 15, y: 15)
-        let radius: CGFloat = 11
+        let local = CGRect(x: 0, y: 0, width: size, height: size)
+        let center = CGPoint(x: size / 2, y: size / 2)
+        let scale = size / 30
+        let radius: CGFloat = 11 * scale
 
         spinnerRingLayer.frame = local
-        spinnerRingLayer.path = CGPath(ellipseIn: CGRect(x: center.x - 13, y: center.y - 13, width: 26, height: 26), transform: nil)
+        spinnerRingLayer.lineWidth = 0.5 * scale
+        spinnerRingLayer.path = CGPath(
+            ellipseIn: CGRect(
+                x: center.x - 13 * scale,
+                y: center.y - 13 * scale,
+                width: 26 * scale,
+                height: 26 * scale
+            ),
+            transform: nil
+        )
         // bounds + centered position so transform.rotation.z spins about the
         // centroid (an unsized layer would orbit its origin instead).
         // The second triangle's path is offset 60° so the pair forms a Star of
         // David at rest (the reduce-motion / settled face); when animated they
         // counter-rotate from there into the spinning merkaba.
+        spinnerTriCWLayer.lineWidth = 0.8 * scale
         spinnerTriCWLayer.bounds = local
         spinnerTriCWLayer.position = center
         spinnerTriCWLayer.path = trianglePath(center: center, radius: radius, rotation: 0)
+        spinnerTriCCWLayer.lineWidth = 0.8 * scale
         spinnerTriCCWLayer.bounds = local
         spinnerTriCCWLayer.position = center
         spinnerTriCCWLayer.path = trianglePath(center: center, radius: radius, rotation: .pi / 3)
-        spinnerCenterLayer.frame = CGRect(x: center.x - 1.5, y: center.y - 1.5, width: 3, height: 3)
-        spinnerCenterLayer.path = CGPath(ellipseIn: CGRect(x: 0, y: 0, width: 3, height: 3), transform: nil)
+        spinnerCenterLayer.frame = CGRect(
+            x: center.x - 1.5 * scale,
+            y: center.y - 1.5 * scale,
+            width: 3 * scale,
+            height: 3 * scale
+        )
+        spinnerCenterLayer.path = CGPath(ellipseIn: CGRect(x: 0, y: 0, width: 3 * scale, height: 3 * scale), transform: nil)
 
         // Checkmark ring + tick, inset to match the old 26pt frame with padding.
         for layer in [checkRingTrackLayer, checkRingLayer, checkMarkLayer] { layer.frame = local }
-        checkRingTrackLayer.path = CGPath(ellipseIn: CGRect(x: 2, y: 2, width: 26, height: 26), transform: nil)
+        checkRingTrackLayer.lineWidth = 1.5 * scale
+        checkRingLayer.lineWidth = 1.5 * scale
+        checkMarkLayer.lineWidth = 1.5 * scale
+        checkRingTrackLayer.path = CGPath(
+            ellipseIn: CGRect(x: 2 * scale, y: 2 * scale, width: 26 * scale, height: 26 * scale),
+            transform: nil
+        )
         // Sweep the ring from the top like the SwiftUI rotationEffect(-90°).
         let ringPath = CGMutablePath()
-        ringPath.addArc(center: center, radius: 13, startAngle: -.pi / 2, endAngle: -.pi / 2 + .pi * 2, clockwise: false)
+        ringPath.addArc(center: center, radius: 13 * scale, startAngle: -.pi / 2, endAngle: -.pi / 2 + .pi * 2, clockwise: false)
         checkRingLayer.path = ringPath
         checkMarkLayer.path = checkmarkPath(in: local.size)
     }
@@ -542,8 +580,8 @@ final class MerkabaPillIconView: NSView {
     }
 
     private func checkmarkPath(in size: CGSize) -> CGPath {
-        // Mirror of CheckmarkShape, inset 7pt like the SwiftUI padding(7).
-        let inset: CGFloat = 7
+        // Mirror of CheckmarkShape, proportional to the old 30pt frame's padding.
+        let inset: CGFloat = size.width * (7 / 30)
         let w = size.width - inset * 2
         let h = size.height - inset * 2
         let path = CGMutablePath()

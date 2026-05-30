@@ -280,6 +280,7 @@ private final class MeetingRecordingAppKitPillView: NSView {
     private var renderedState: MeetingRecordingPillViewModel.PillState?
     private var renderedHover: Bool?
     private var renderedReduceMotion: Bool?
+    private var compactIcon = false
     /// The recording capsule is tall to host the rosette + stem; the stem-less
     /// states (transcribing/completed) shrink it to a circle that hugs the
     /// compact mark — matching the prior SwiftUI pill's separate `iconPill`. The
@@ -288,6 +289,7 @@ private final class MeetingRecordingAppKitPillView: NSView {
     private var compactContainer = false
     private let pillWidth: CGFloat = 54
     private let pillTallHeight: CGFloat = 86
+    private let compactIconSize: CGFloat = 36
 
     /// System Settings → Accessibility → Display → Reduce Motion. The pill
     /// still shows (and tracks recording state via color/timer), it just stops
@@ -445,11 +447,21 @@ private final class MeetingRecordingAppKitPillView: NSView {
 
     private func layoutLayers() {
         // The icon + pause-bars are positioned from the *tall* rect so the mark
-        // (rosette head / spinner / checkmark) stays put across states — only
-        // the black surface shrinks to a circle for the stem-less states.
+        // stays put across the recording/completing cycle. Stem-less compact
+        // states center a larger mark inside the circular surface.
         let tallRect = containerRect(compact: false)
+        let compactRect = containerRect(compact: true)
         backgroundLayer.path = backgroundPath(compact: compactContainer)
-        iconView.frame = CGRect(x: tallRect.midX - 15, y: tallRect.midY - 37, width: 30, height: 74)
+        if compactIcon {
+            iconView.frame = CGRect(
+                x: compactRect.midX - compactIconSize / 2,
+                y: compactRect.midY - compactIconSize / 2,
+                width: compactIconSize,
+                height: compactIconSize
+            )
+        } else {
+            iconView.frame = CGRect(x: tallRect.midX - 15, y: tallRect.midY - 37, width: 30, height: 74)
+        }
         pauseLayer.frame = CGRect(x: tallRect.midX - 5, y: tallRect.midY - 5.5, width: 10, height: 11)
     }
 
@@ -570,6 +582,14 @@ private final class MeetingRecordingAppKitPillView: NSView {
         iconView.setLiveGlow(level: level)
     }
 
+    private func setCompactIcon(_ compact: Bool) {
+        guard compactIcon != compact else { return }
+        compactIcon = compact
+        iconView.configure(showStem: !compact)
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
     private func updateFromViewModel() {
         let state = viewModel.state
         let reduceMotion = self.reduceMotion
@@ -590,6 +610,7 @@ private final class MeetingRecordingAppKitPillView: NSView {
         case .recording:
             pauseLayer.isHidden = true
             iconView.alphaValue = 1.0
+            setCompactIcon(false)
             applyContainer(compact: false, animated: false)
             // Glow is driven live by updateLiveAudioLevel; this sets the
             // resting base + starts the rosette rotation.
@@ -597,27 +618,32 @@ private final class MeetingRecordingAppKitPillView: NSView {
         case .paused:
             pauseLayer.isHidden = false
             iconView.alphaValue = 0.45
+            setCompactIcon(false)
             applyContainer(compact: false, animated: false)
             iconView.update(isAnimating: false, audioLevel: 0)
         case .completing:
             pauseLayer.isHidden = true
             iconView.alphaValue = 1.0
+            setCompactIcon(false)
             // Shrink the capsule to a circle in sync with the collapsing flower.
             applyContainer(compact: true, animated: true)
             playCompletionIfNeeded(reduceMotion: reduceMotion)
         case .transcribing:
             pauseLayer.isHidden = true
             iconView.alphaValue = 1.0
+            setCompactIcon(true)
             applyContainer(compact: true, animated: false)
             iconView.showSpinner(animated: !reduceMotion)
         case .completed:
             pauseLayer.isHidden = true
             iconView.alphaValue = 1.0
+            setCompactIcon(true)
             applyContainer(compact: true, animated: false)
             iconView.showCheckmark(animated: !reduceMotion)
         case .idle, .error:
             pauseLayer.isHidden = true
             iconView.alphaValue = 1.0
+            setCompactIcon(false)
             applyContainer(compact: false, animated: false)
             iconView.update(isAnimating: false, audioLevel: 0)
         }
