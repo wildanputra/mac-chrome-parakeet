@@ -486,28 +486,6 @@ final class AppHotkeyCoordinator {
     /// asserted without exposing the storage to production callers.
     var suspendCountForTesting: Int { suspendCount }
 
-    func applyMeetingHotkey(to item: NSMenuItem) {
-        let trigger = settingsViewModel.meetingHotkeyTrigger
-        guard trigger.kind == .chord, let code = trigger.keyCode else {
-            item.keyEquivalent = ""
-            item.keyEquivalentModifierMask = []
-            return
-        }
-        let keyName = KeyCodeNames.name(for: code).shortSymbol
-        item.keyEquivalent = keyName.lowercased()
-        var mask: NSEvent.ModifierFlags = []
-        for modifier in trigger.chordModifiers ?? [] {
-            switch modifier {
-            case "command": mask.insert(.command)
-            case "shift": mask.insert(.shift)
-            case "control": mask.insert(.control)
-            case "option": mask.insert(.option)
-            default: break
-            }
-        }
-        item.keyEquivalentModifierMask = mask
-    }
-
     func stopAll() {
         stopDictationHotkeys()
         meetingHotkeyManager?.stop()

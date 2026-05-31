@@ -192,8 +192,9 @@ final class MenuBarCoordinator: NSObject, NSMenuDelegate {
         let fileTranscriptionItem = makeMenuItem(
             title: "Transcribe File...",
             action: #selector(transcribeFileFromMenu),
-            key: "o"
+            key: ""
         )
+        applyChordShortcut(fileTranscriptionHotkeyTriggerProvider(), to: fileTranscriptionItem)
         transcribeFileMenuItems.append(fileTranscriptionItem)
         captureMenu.addItem(fileTranscriptionItem)
         let youtubeItem = makeMenuItem(
@@ -201,6 +202,7 @@ final class MenuBarCoordinator: NSObject, NSMenuDelegate {
             action: #selector(transcribeFromYouTubeMenu),
             key: ""
         )
+        applyChordShortcut(youtubeTranscriptionHotkeyTriggerProvider(), to: youtubeItem)
         transcribeYouTubeMenuItems.append(youtubeItem)
         captureMenu.addItem(youtubeItem)
         if AppFeatures.meetingRecordingEnabled {
