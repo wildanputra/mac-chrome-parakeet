@@ -79,6 +79,40 @@ final class SpeechEnginePreferenceTests: XCTestCase {
         XCTAssertFalse(SpeechEnginePreference.hasOptimizedWhisper(variant: "small", defaults: defaults))
     }
 
+    func testClearWhisperOptimizedForgetsVariant() {
+        let (defaults, suite) = makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let variant = SpeechEnginePreference.defaultWhisperModelVariant
+        SpeechEnginePreference.markWhisperOptimized(variant: variant, defaults: defaults)
+        XCTAssertTrue(SpeechEnginePreference.hasOptimizedWhisper(variant: variant, defaults: defaults))
+
+        SpeechEnginePreference.clearWhisperOptimized(variant: variant, defaults: defaults)
+        XCTAssertFalse(SpeechEnginePreference.hasOptimizedWhisper(variant: variant, defaults: defaults))
+    }
+
+    func testClearWhisperOptimizedLeavesOtherVariantsIntact() {
+        let (defaults, suite) = makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        SpeechEnginePreference.markWhisperOptimized(variant: "large-v3-turbo", defaults: defaults)
+        SpeechEnginePreference.markWhisperOptimized(variant: "small", defaults: defaults)
+
+        SpeechEnginePreference.clearWhisperOptimized(variant: "large-v3-turbo", defaults: defaults)
+
+        XCTAssertFalse(SpeechEnginePreference.hasOptimizedWhisper(variant: "large-v3-turbo", defaults: defaults))
+        XCTAssertTrue(SpeechEnginePreference.hasOptimizedWhisper(variant: "small", defaults: defaults))
+    }
+
+    func testClearWhisperOptimizedIsIdempotentWhenAbsent() {
+        let (defaults, suite) = makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        // No-op when nothing was marked — must not crash or leave stray keys.
+        SpeechEnginePreference.clearWhisperOptimized(variant: "small", defaults: defaults)
+        XCTAssertNil(defaults.stringArray(forKey: SpeechEnginePreference.whisperOptimizedVariantsKey))
+    }
+
     // MARK: - Parakeet model variant
 
     func testParakeetModelVariantDefaultsToMultilingualV3() {

@@ -412,13 +412,20 @@ swift run macparakeet-cli models warm-up
 swift run macparakeet-cli models repair
 swift run macparakeet-cli models repair --attempts 5
 
-# Delete cached models
+# Delete one downloaded model (frees its disk space; leaves the rest)
+swift run macparakeet-cli models delete parakeet-v2
+swift run macparakeet-cli models delete whisper-large-v3-v20240930-turbo-632MB
+swift run macparakeet-cli models delete parakeet-v3 --force   # override the in-use guard
+
+# Delete the entire cached speech + speaker stack
 swift run macparakeet-cli models clear
 ```
 
 `models warm-up` and `models repair` prepare the selected Parakeet build plus
 the diarization speech stack. Whisper is downloaded explicitly with
-`models download`.
+`models download`. `models delete <id>` removes a single model — one Parakeet
+build or the Whisper variant — and protects the model currently in use unless
+`--force` is passed; `models clear` still wipes everything.
 
 ## Text Pipeline
 

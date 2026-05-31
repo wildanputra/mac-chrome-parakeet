@@ -137,6 +137,9 @@ struct SettingsView: View {
     @State private var automaticallyChecksForUpdates: Bool
     @State private var automaticallyDownloadsUpdates: Bool
     @State private var copiedBuildIdentity = false
+    /// Which downloaded model a destructive confirmation is pending for. Drives
+    /// the shared delete-confirmation alert on the Engine tab.
+    @State private var pendingModelDeletion: PendingModelDeletion?
 
     init(
         viewModel: SettingsViewModel,
@@ -387,6 +390,62 @@ struct SettingsView: View {
             engineLanguageCard.id("engine.language")
             enginesModelsCard.id("engine.models")
         }
+        .alert(
+            modelDeletionAlertTitle,
+            isPresented: Binding(
+                get: { pendingModelDeletion != nil },
+                set: { if !$0 { pendingModelDeletion = nil } }
+            ),
+            presenting: pendingModelDeletion
+        ) { deletion in
+            Button("Cancel", role: .cancel) { pendingModelDeletion = nil }
+            Button("Delete", role: .destructive) { performModelDeletion(deletion) }
+        } message: { deletion in
+            Text(modelDeletionMessage(for: deletion))
+        }
+    }
+
+    /// A downloaded model awaiting delete confirmation. `parakeet` carries the
+    /// specific build; Whisper has a single variant so it needs no payload.
+    private enum PendingModelDeletion: Identifiable, Equatable {
+        case parakeet(ParakeetModelVariant)
+        case whisper
+
+        var id: String {
+            switch self {
+            case .parakeet(let variant): "parakeet-\(variant.rawValue)"
+            case .whisper: "whisper"
+            }
+        }
+    }
+
+    /// Names the model in the alert title; falls back to a generic title once
+    /// the alert is dismissed and `pendingModelDeletion` is nil.
+    private var modelDeletionAlertTitle: String {
+        switch pendingModelDeletion {
+        case .parakeet(let variant): "Delete \(variant.modelName)?"
+        case .whisper: "Delete the Whisper model?"
+        case nil: "Delete this model?"
+        }
+    }
+
+    private func modelDeletionMessage(for deletion: PendingModelDeletion) -> String {
+        switch deletion {
+        case .parakeet(let variant):
+            return "This frees \(variant.approximateDownloadSize). You can download \(variant.modelName) again at any time."
+        case .whisper:
+            return "This frees about 632 MB. You can download the Whisper model again at any time."
+        }
+    }
+
+    private func performModelDeletion(_ deletion: PendingModelDeletion) {
+        switch deletion {
+        case .parakeet(let variant):
+            viewModel.deleteParakeetVariant(variant)
+        case .whisper:
+            viewModel.deleteWhisperModel()
+        }
+        pendingModelDeletion = nil
     }
 
     /// AI tab — optional setup for summaries, chat, prompt actions, and Ask.
@@ -1767,42 +1826,68 @@ struct SettingsView: View {
         let downloadStatusLabel = isDownloaded
             ? "Downloaded."
             : "\(variant.approximateDownloadSize), downloads on first use."
+        // The selected build is the one Parakeet loads, so it's protected; only
+        // the other, already-downloaded build can be removed from here.
+        let canDelete = isDownloaded && !isSelected
 
-        return Button {
-            selectParakeetModelVariant(variant)
-        } label: {
-            HStack(alignment: .top, spacing: DesignSystem.Spacing.md) {
-                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(isSelected ? DesignSystem.Colors.accent : DesignSystem.Colors.textSecondary)
-                    .accessibilityHidden(true)
-                    .padding(.top, 1)
+        return HStack(alignment: .top, spacing: DesignSystem.Spacing.sm) {
+            Button {
+                selectParakeetModelVariant(variant)
+            } label: {
+                HStack(alignment: .top, spacing: DesignSystem.Spacing.md) {
+                    Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundStyle(isSelected ? DesignSystem.Colors.accent : DesignSystem.Colors.textSecondary)
+                        .accessibilityHidden(true)
+                        .padding(.top, 1)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: DesignSystem.Spacing.sm) {
-                        Text(variant.modelName)
-                            .font(DesignSystem.Typography.body.weight(.medium))
-                            .foregroundStyle(DesignSystem.Colors.textPrimary)
-                        parakeetVariantStatusBadge(isDownloaded: isDownloaded, size: variant.approximateDownloadSize)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: DesignSystem.Spacing.sm) {
+                            Text(variant.modelName)
+                                .font(DesignSystem.Typography.body.weight(.medium))
+                                .foregroundStyle(DesignSystem.Colors.textPrimary)
+                            parakeetVariantStatusBadge(isDownloaded: isDownloaded, size: variant.approximateDownloadSize)
+                        }
+                        Text(variant.coverageSummary)
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(DesignSystem.Colors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    Text(variant.coverageSummary)
-                        .font(DesignSystem.Typography.caption)
-                        .foregroundStyle(DesignSystem.Colors.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
-
-                Spacer(minLength: 0)
+                .padding(.vertical, DesignSystem.Spacing.xs)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, DesignSystem.Spacing.xs)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .disabled(viewModel.speechEngineSwitching)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(variant.modelName). \(variant.displayName). \(variant.coverageSummary) \(downloadStatusLabel)")
+            // `.combine` can drop the wrapping Button's role, so assert it explicitly
+            // alongside the selected state for VoiceOver.
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
+
+            if canDelete {
+                Menu {
+                    Button(role: .destructive) {
+                        pendingModelDeletion = .parakeet(variant)
+                    } label: {
+                        Text("Delete download")
+                    }
+                    .help("Remove this Parakeet build to free \(variant.approximateDownloadSize).")
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .padding(.top, 1)
+                .disabled(viewModel.speechEngineSwitching)
+                .help("More actions for \(variant.modelName)")
+                .accessibilityLabel("More actions for \(variant.modelName)")
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(viewModel.speechEngineSwitching)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(variant.modelName). \(variant.displayName). \(variant.coverageSummary) \(downloadStatusLabel)")
-        // `.combine` can drop the wrapping Button's role, so assert it explicitly
-        // alongside the selected state for VoiceOver.
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
     }
 
     /// Compact trailing badge: green "Downloaded" when present, amber size hint
@@ -1888,7 +1973,7 @@ struct SettingsView: View {
                     isWorking: viewModel.parakeetRepairing,
                     actionsDisabled: viewModel.speechEngineSwitching,
                     primaryAction: displayedParakeetModelStatus == .preparing ? nil : parakeetPrimaryAction,
-                    overflowAction: displayedParakeetModelStatus == .preparing ? nil : parakeetOverflowAction
+                    overflowActions: displayedParakeetModelStatus == .preparing ? [] : parakeetOverflowActions
                 )
 
                 Divider()
@@ -1900,7 +1985,7 @@ struct SettingsView: View {
                     isWorking: viewModel.whisperDownloading,
                     actionsDisabled: viewModel.speechEngineSwitching,
                     primaryAction: displayedWhisperModelStatus == .preparing ? nil : whisperPrimaryAction,
-                    overflowAction: displayedWhisperModelStatus == .preparing ? nil : whisperOverflowAction
+                    overflowActions: displayedWhisperModelStatus == .preparing ? [] : whisperOverflowActions
                 )
             }
         }
@@ -2110,18 +2195,22 @@ struct SettingsView: View {
         }
     }
 
-    private var parakeetOverflowAction: ModelRowAction? {
+    /// Parakeet's Local Models overflow keeps just "Repair…". Per-build delete
+    /// lives in the Parakeet Model card, where each build is listed with its own
+    /// download badge — that's the unambiguous place to remove the build you're
+    /// not using (this row represents whichever build is active).
+    private var parakeetOverflowActions: [ModelRowAction] {
         switch viewModel.parakeetStatus {
         case .ready, .notLoaded:
-            return ModelRowAction(
+            return [ModelRowAction(
                 label: "Repair…",
                 isProminent: false,
                 help: "Re-validate the Parakeet files and load the model again."
             ) {
                 viewModel.repairParakeetModel()
-            }
+            }]
         default:
-            return nil
+            return []
         }
     }
 
@@ -2148,7 +2237,7 @@ struct SettingsView: View {
         }
     }
 
-    private var whisperOverflowAction: ModelRowAction? {
+    private var whisperOverflowActions: [ModelRowAction] {
         switch viewModel.whisperModelStatus {
         case .ready, .notLoaded:
             // Symmetric with Parakeet's "Repair…" — both engines surface the
@@ -2156,27 +2245,49 @@ struct SettingsView: View {
             // (which downloads if files are missing); Whisper re-runs the
             // download (no-op via HuggingFace cache when files are intact).
             // The user shouldn't have to reason about that asymmetry.
-            return ModelRowAction(
+            var actions = [ModelRowAction(
                 label: "Repair…",
                 isProminent: false,
                 help: "Re-check the Whisper files and re-download any missing model assets."
             ) {
                 viewModel.downloadWhisperModel()
+            }]
+            // Offer delete only when Whisper isn't the active engine — deleting
+            // the in-use model would force a silent re-download next time.
+            if viewModel.speechEnginePreference != .whisper {
+                actions.append(ModelRowAction(
+                    label: "Delete download…",
+                    isProminent: false,
+                    isDestructive: true,
+                    help: "Remove the downloaded Whisper model from this Mac to free disk space."
+                ) {
+                    pendingModelDeletion = .whisper
+                })
             }
+            return actions
         default:
-            return nil
+            return []
         }
     }
 
-    fileprivate struct ModelRowAction {
+    fileprivate struct ModelRowAction: Identifiable {
+        let id = UUID()
         let label: String
         let isProminent: Bool
+        let isDestructive: Bool
         let help: String?
         let run: () -> Void
 
-        init(label: String, isProminent: Bool, help: String? = nil, run: @escaping () -> Void) {
+        init(
+            label: String,
+            isProminent: Bool,
+            isDestructive: Bool = false,
+            help: String? = nil,
+            run: @escaping () -> Void
+        ) {
             self.label = label
             self.isProminent = isProminent
+            self.isDestructive = isDestructive
             self.help = help
             self.run = run
         }
@@ -2463,7 +2574,7 @@ struct SettingsView: View {
         isWorking: Bool,
         actionsDisabled: Bool = false,
         primaryAction: ModelRowAction?,
-        overflowAction: ModelRowAction?
+        overflowActions: [ModelRowAction]
     ) -> some View {
         HStack(alignment: .center, spacing: DesignSystem.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
@@ -2487,15 +2598,19 @@ struct SettingsView: View {
                             isWorking: isWorking,
                             actionsDisabled: actionsDisabled
                         )
-                    } else if let overflow = overflowAction,
+                    } else if !overflowActions.isEmpty,
                               !actionsDisabled,
                               !isWorking,
                               status != .checking,
                               status != .repairing,
                               status != .preparing {
                         Menu {
-                            Button(overflow.label, action: overflow.run)
-                                .help(overflow.help ?? overflow.label)
+                            ForEach(overflowActions) { action in
+                                Button(role: action.isDestructive ? .destructive : nil, action: action.run) {
+                                    Text(action.label)
+                                }
+                                .help(action.help ?? action.label)
+                            }
                         } label: {
                             Image(systemName: "ellipsis")
                                 .font(.system(size: 13, weight: .semibold))
@@ -2504,7 +2619,7 @@ struct SettingsView: View {
                         .menuStyle(.borderlessButton)
                         .menuIndicator(.hidden)
                         .fixedSize()
-                        .help(overflow.help ?? "More actions")
+                        .help(overflowActions.count == 1 ? (overflowActions[0].help ?? "More actions") : "More actions")
                         .accessibilityLabel("More actions")
                     } else if isWorking || status == .checking || status == .repairing || status == .preparing {
                         ProgressView()

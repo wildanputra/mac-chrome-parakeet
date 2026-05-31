@@ -493,6 +493,8 @@ public final class SettingsViewModel {
     private let defaults: UserDefaults
     private let youtubeDownloadsDirPath: @Sendable () -> String
     private let parakeetModelVariantCached: @Sendable (ParakeetModelVariant) -> Bool
+    private let deleteParakeetModelOnDisk: @Sendable (ParakeetModelVariant) -> Bool
+    private let deleteWhisperModelOnDisk: @Sendable (String) -> Bool
     private let inputDevicesProvider: @Sendable () -> [AudioDeviceManager.InputDevice]
     private let defaultInputDeviceUIDProvider: @Sendable () -> String?
     private let permissionPollingInterval: Duration
@@ -517,6 +519,12 @@ public final class SettingsViewModel {
         parakeetModelVariantCached: @escaping @Sendable (ParakeetModelVariant) -> Bool = {
             STTRuntime.isModelCached(version: $0.asrModelVersion)
         },
+        deleteParakeetModelOnDisk: @escaping @Sendable (ParakeetModelVariant) -> Bool = {
+            STTRuntime.deleteParakeetModel(version: $0.asrModelVersion)
+        },
+        deleteWhisperModelOnDisk: @escaping @Sendable (String) -> Bool = {
+            STTRuntime.deleteWhisperModel(variant: $0)
+        },
         inputDevicesProvider: @escaping @Sendable () -> [AudioDeviceManager.InputDevice] = {
             AudioDeviceManager.inputDevices()
         },
@@ -529,6 +537,8 @@ public final class SettingsViewModel {
         self.defaults = defaults
         self.youtubeDownloadsDirPath = youtubeDownloadsDirPath
         self.parakeetModelVariantCached = parakeetModelVariantCached
+        self.deleteParakeetModelOnDisk = deleteParakeetModelOnDisk
+        self.deleteWhisperModelOnDisk = deleteWhisperModelOnDisk
         self.inputDevicesProvider = inputDevicesProvider
         self.defaultInputDeviceUIDProvider = defaultInputDeviceUIDProvider
         self.permissionPollingInterval = permissionPollingInterval
@@ -1635,6 +1645,68 @@ public final class SettingsViewModel {
                     self.parakeetStatusDetail = error.localizedDescription
                 }
             }
+        }
+    }
+
+    /// Removes a downloaded Parakeet build, freeing ~465 MB. The build the
+    /// active engine would load is protected — the UI only offers delete for
+    /// the other, downloaded build, and the guards here enforce that even if a
+    /// stale tap slips through. The "Downloaded" badge drops immediately; a
+    /// disk refresh then confirms.
+    public func deleteParakeetVariant(_ variant: ParakeetModelVariant) {
+        guard !speechEngineSwitching else { return }
+        // Never delete the build the active engine would load — it would force
+        // a silent re-download on the next dictation. Meeting-active state needs
+        // no separate guard: a meeting pins the variant chosen at its start, and
+        // variant switches are blocked while a meeting runs, so the active build
+        // can't change mid-meeting. Only the dormant, non-selected build is ever
+        // deletable here, and removing files for a build that isn't loaded is safe.
+        guard !(speechEnginePreference == .parakeet && parakeetModelVariant == variant) else { return }
+        guard downloadedParakeetVariants.contains(variant) else { return }
+
+        // Invalidate any in-flight status refresh so it can't re-add the badge
+        // we're about to drop (the files linger on disk until the detached
+        // delete runs).
+        modelStatusRefreshGeneration += 1
+        // Optimistic: drop the badge now so the row can't be tapped twice; the
+        // refresh below reconciles against disk.
+        downloadedParakeetVariants.remove(variant)
+
+        let deleter = deleteParakeetModelOnDisk
+        Task { @MainActor [weak self] in
+            await Task.detached(priority: .userInitiated) {
+                _ = deleter(variant)
+            }.value
+            guard let self else { return }
+            self.refreshModelStatus()
+        }
+    }
+
+    /// Removes the downloaded Whisper variant, freeing ~632 MB. Only callable
+    /// while Parakeet is the active engine — deleting the model behind the
+    /// active engine would force a silent re-download. State flips to
+    /// "Not Downloaded" immediately; a disk refresh then confirms.
+    public func deleteWhisperModel() {
+        guard !speechEngineSwitching, !whisperDownloading else { return }
+        // Protect the in-use engine's model.
+        guard speechEnginePreference != .whisper else { return }
+        guard isWhisperModelDownloaded else { return }
+
+        let variant = SpeechEnginePreference.whisperModelVariant(defaults: defaults)
+        let deleter = deleteWhisperModelOnDisk
+        // Invalidate any in-flight status refresh so it can't flip the badge
+        // back to "Installed" (the file lingers until the detached delete runs)
+        // and re-expose the delete action for a ghost second tap.
+        modelStatusRefreshGeneration += 1
+        // Optimistic: render the not-downloaded state now so the delete action
+        // disappears before the async file work finishes.
+        applyWhisperDownloadedStatus(false)
+        Task { @MainActor [weak self] in
+            await Task.detached(priority: .userInitiated) {
+                _ = deleter(variant)
+            }.value
+            guard let self else { return }
+            self.refreshModelStatus()
         }
     }
 

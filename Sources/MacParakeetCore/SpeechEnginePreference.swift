@@ -116,6 +116,21 @@ public enum SpeechEnginePreference: String, CaseIterable, Codable, Sendable {
         defaults.set(optimized, forKey: whisperOptimizedVariantsKey)
     }
 
+    /// Forgets that `variant` was optimized. Call after deleting the model from
+    /// disk so a later re-download honestly reports the cold "first switch takes
+    /// a few minutes" state instead of promising an instant load. Idempotent.
+    public static func clearWhisperOptimized(variant: String, defaults: UserDefaults = .standard) {
+        guard let normalized = normalizeModelVariant(variant) else { return }
+        let optimized = defaults.stringArray(forKey: whisperOptimizedVariantsKey) ?? []
+        guard optimized.contains(normalized) else { return }
+        let remaining = optimized.filter { $0 != normalized }
+        if remaining.isEmpty {
+            defaults.removeObject(forKey: whisperOptimizedVariantsKey)
+        } else {
+            defaults.set(remaining, forKey: whisperOptimizedVariantsKey)
+        }
+    }
+
     public static func normalizeLanguage(_ language: String?) -> String? {
         WhisperLanguageCatalog.canonicalCode(for: language)
     }

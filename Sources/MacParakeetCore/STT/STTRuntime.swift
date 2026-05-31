@@ -576,6 +576,78 @@ public actor STTRuntime: STTRuntimeProtocol {
         return AsrModels.modelsExist(at: cacheDir, version: version)
     }
 
+    /// Deletes a single Parakeet build's files from disk, leaving the sibling
+    /// build (and every other model) untouched. Each FluidAudio version caches
+    /// into its own leaf directory under `…/FluidAudio/Models`, so removing one
+    /// can't strand the other. Returns `true` when files were present and are
+    /// now gone; a no-op `false` when the build wasn't cached.
+    ///
+    /// Pure file work — callers must not delete the build currently loaded by
+    /// the active engine (the app and CLI guard this). Mirrors
+    /// ``downloadParakeetModel(version:onProgress:)`` so a build can be removed
+    /// headlessly without touching the runtime.
+    @discardableResult
+    public nonisolated static func deleteParakeetModel(version: AsrModelVersion) -> Bool {
+        let operationContext = Observability.childOperationContext()
+        let removed = removeParakeetModelFiles(at: AsrModels.defaultCacheDirectory(for: version))
+        Telemetry.send(.modelOperation(
+            operationID: operationContext.operationID,
+            operationContext: operationContext,
+            action: .deleteModel,
+            outcome: removed ? .success : .failure,
+            stage: .delete,
+            modelKind: .parakeetSTT,
+            speechEngine: .parakeet,
+            engineVariant: ParakeetModelVariant(asrModelVersion: version).rawValue,
+            durationSeconds: Observability.durationSeconds(since: operationContext.startedAt),
+            errorType: nil
+        ))
+        return removed
+    }
+
+    /// File-removal core of ``deleteParakeetModel(version:)``, split out so the
+    /// directory resolution can be exercised against a temp dir in tests without
+    /// emitting telemetry. Returns `true` only when the directory existed and is
+    /// gone afterward.
+    @discardableResult
+    nonisolated static func removeParakeetModelFiles(at directory: URL) -> Bool {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: directory.path) else { return false }
+        do {
+            try fileManager.removeItem(at: directory)
+        } catch {
+            return false
+        }
+        return !fileManager.fileExists(atPath: directory.path)
+    }
+
+    /// Deletes a downloaded Whisper variant from disk, leaving Parakeet and the
+    /// speaker models untouched. Thin telemetry-emitting wrapper over
+    /// ``WhisperEngine/deleteModel(model:downloadBase:defaults:)`` so model
+    /// deletions report through the same `model_operation` channel as Parakeet.
+    /// Pure-file deletion (and its unit tests) lives on `WhisperEngine`.
+    @discardableResult
+    public nonisolated static func deleteWhisperModel(
+        variant: String = SpeechEnginePreference.defaultWhisperModelVariant,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        let operationContext = Observability.childOperationContext()
+        let removed = WhisperEngine.deleteModel(model: variant, defaults: defaults)
+        Telemetry.send(.modelOperation(
+            operationID: operationContext.operationID,
+            operationContext: operationContext,
+            action: .deleteModel,
+            outcome: removed ? .success : .failure,
+            stage: .delete,
+            modelKind: .whisperSTT,
+            speechEngine: .whisper,
+            engineVariant: SpeechEnginePreference.normalizeModelVariant(variant) ?? variant,
+            durationSeconds: Observability.durationSeconds(since: operationContext.startedAt),
+            errorType: nil
+        ))
+        return removed
+    }
+
     private func unloadParakeet() async {
         let inFlightInitialization = cancelInitialization()
         inFlightInitialization?.cancel()

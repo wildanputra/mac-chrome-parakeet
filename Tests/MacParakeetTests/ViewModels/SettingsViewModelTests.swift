@@ -1703,6 +1703,111 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertFalse(vm2.saveTranscriptionAudio)
         XCTAssertTrue(vm2.speakerDiarization)
     }
+
+    // MARK: - Model deletion
+
+    /// Builds a VM whose engine/variant are pinned via pre-seeded defaults (so
+    /// init reads them without firing didSet side effects) and whose on-disk
+    /// deletes are captured by `recorder` instead of touching the real cache.
+    private func makeDeletionViewModel(
+        engine: SpeechEnginePreference,
+        parakeetVariant: ParakeetModelVariant,
+        recorder: ModelDeleteRecorder
+    ) -> SettingsViewModel {
+        engine.save(to: testDefaults)
+        SpeechEnginePreference.saveParakeetModelVariant(parakeetVariant, defaults: testDefaults)
+        return SettingsViewModel(
+            defaults: testDefaults,
+            parakeetModelVariantCached: { _ in true },
+            deleteParakeetModelOnDisk: { variant in recorder.recordParakeet(variant); return true },
+            deleteWhisperModelOnDisk: { variant in recorder.recordWhisper(variant); return true }
+        )
+    }
+
+    func testDeleteParakeetVariantRemovesUnusedBuild() async throws {
+        let recorder = ModelDeleteRecorder()
+        let vm = makeDeletionViewModel(engine: .parakeet, parakeetVariant: .v3, recorder: recorder)
+        vm.downloadedParakeetVariants = [.v3, .v2]
+
+        vm.deleteParakeetVariant(.v2)
+
+        // Badge drops synchronously; the disk delete lands on a detached task.
+        XCTAssertFalse(vm.downloadedParakeetVariants.contains(.v2))
+        try await waitUntil { recorder.parakeetCalls == [.v2] }
+    }
+
+    func testDeleteParakeetVariantRefusesActiveBuild() {
+        let recorder = ModelDeleteRecorder()
+        let vm = makeDeletionViewModel(engine: .parakeet, parakeetVariant: .v3, recorder: recorder)
+        vm.downloadedParakeetVariants = [.v3, .v2]
+
+        // v3 is the active build — deleting it would force a re-download.
+        vm.deleteParakeetVariant(.v3)
+
+        XCTAssertTrue(vm.downloadedParakeetVariants.contains(.v3))
+        XCTAssertTrue(recorder.parakeetCalls.isEmpty)
+    }
+
+    func testDeleteParakeetVariantIgnoredWhileSwitching() {
+        let recorder = ModelDeleteRecorder()
+        let vm = makeDeletionViewModel(engine: .parakeet, parakeetVariant: .v3, recorder: recorder)
+        vm.downloadedParakeetVariants = [.v3, .v2]
+        vm.speechEngineSwitching = true
+
+        vm.deleteParakeetVariant(.v2)
+
+        XCTAssertTrue(vm.downloadedParakeetVariants.contains(.v2))
+        XCTAssertTrue(recorder.parakeetCalls.isEmpty)
+    }
+
+    func testDeleteWhisperModelRemovesDownloadWhenParakeetActive() async throws {
+        let recorder = ModelDeleteRecorder()
+        let vm = makeDeletionViewModel(engine: .parakeet, parakeetVariant: .v3, recorder: recorder)
+        vm.whisperModelStatus = .notLoaded
+
+        vm.deleteWhisperModel()
+
+        // Status flips to not-downloaded immediately; delete runs in the background.
+        XCTAssertEqual(vm.whisperModelStatus, .notDownloaded)
+        try await waitUntil {
+            recorder.whisperCalls == [SpeechEnginePreference.whisperModelVariant(defaults: self.testDefaults)]
+        }
+    }
+
+    func testDeleteWhisperModelRefusedWhenWhisperActive() {
+        let recorder = ModelDeleteRecorder()
+        let vm = makeDeletionViewModel(engine: .whisper, parakeetVariant: .v3, recorder: recorder)
+        vm.whisperModelStatus = .notLoaded
+
+        vm.deleteWhisperModel()
+
+        XCTAssertEqual(vm.whisperModelStatus, .notLoaded)
+        XCTAssertTrue(recorder.whisperCalls.isEmpty)
+    }
+}
+
+/// Thread-safe capture for the injected on-disk deleter closures (they fire on
+/// a detached task, so reads/writes are lock-guarded).
+private final class ModelDeleteRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var parakeet: [ParakeetModelVariant] = []
+    private var whisper: [String] = []
+
+    func recordParakeet(_ variant: ParakeetModelVariant) {
+        lock.lock(); parakeet.append(variant); lock.unlock()
+    }
+
+    func recordWhisper(_ variant: String) {
+        lock.lock(); whisper.append(variant); lock.unlock()
+    }
+
+    var parakeetCalls: [ParakeetModelVariant] {
+        lock.lock(); defer { lock.unlock() }; return parakeet
+    }
+
+    var whisperCalls: [String] {
+        lock.lock(); defer { lock.unlock() }; return whisper
+    }
 }
 
 private actor MockSpeechEngineSwitchAvailabilityProvider: SpeechEngineSwitchAvailabilityProviding {

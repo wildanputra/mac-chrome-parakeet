@@ -198,6 +198,81 @@ final class ModelLifecycleCommandTests: XCTestCase {
         }
     }
 
+    // MARK: - models delete
+
+    private func makeDeleteDefaults() throws -> (UserDefaults, String) {
+        let suite = "test.ModelsDelete.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        return (defaults, suite)
+    }
+
+    func testResolveModelDeletionTargetMapsParakeetAndWhisperIDs() throws {
+        let (defaults, suite) = try makeDeleteDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        XCTAssertEqual(
+            try resolveModelDeletionTarget("parakeet-v2", defaults: defaults).kind,
+            .parakeet(.v2)
+        )
+        XCTAssertEqual(
+            try resolveModelDeletionTarget("parakeet-v3", defaults: defaults).kind,
+            .parakeet(.v3)
+        )
+        XCTAssertEqual(
+            try resolveModelDeletionTarget("whisper-large-v3-v20240930-turbo-632MB", defaults: defaults).kind,
+            .whisper("large-v3-v20240930_turbo_632MB")
+        )
+    }
+
+    func testResolveModelDeletionTargetRejectsUnknownID() throws {
+        let (defaults, suite) = try makeDeleteDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        XCTAssertThrowsError(try resolveModelDeletionTarget("tiny", defaults: defaults)) { error in
+            XCTAssertTrue(error is ValidationError)
+        }
+    }
+
+    func testIsModelInUseProtectsActiveParakeetBuildOnly() throws {
+        let (defaults, suite) = try makeDeleteDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        SpeechEnginePreference.parakeet.save(to: defaults)
+        SpeechEnginePreference.saveParakeetModelVariant(.v3, defaults: defaults)
+
+        XCTAssertTrue(isModelInUse(.init(kind: .parakeet(.v3), displayName: "v3"), defaults: defaults))
+        XCTAssertFalse(isModelInUse(.init(kind: .parakeet(.v2), displayName: "v2"), defaults: defaults))
+        // Parakeet is active, so Whisper is never the in-use model.
+        XCTAssertFalse(
+            isModelInUse(
+                .init(kind: .whisper(SpeechEnginePreference.defaultWhisperModelVariant), displayName: "whisper"),
+                defaults: defaults
+            )
+        )
+    }
+
+    func testIsModelInUseProtectsWhisperWhenActive() throws {
+        let (defaults, suite) = try makeDeleteDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        SpeechEnginePreference.whisper.save(to: defaults)
+        let variant = SpeechEnginePreference.whisperModelVariant(defaults: defaults)
+
+        XCTAssertTrue(isModelInUse(.init(kind: .whisper(variant), displayName: "whisper"), defaults: defaults))
+        // Parakeet builds aren't in use while Whisper is the active engine.
+        XCTAssertFalse(isModelInUse(.init(kind: .parakeet(.v3), displayName: "v3"), defaults: defaults))
+    }
+
+    func testDeleteCommandParsesForceFlag() throws {
+        let plain = try ModelsCommand.Delete.parse(["parakeet-v2"])
+        XCTAssertEqual(plain.id, "parakeet-v2")
+        XCTAssertFalse(plain.force)
+
+        let forced = try ModelsCommand.Delete.parse(["parakeet-v2", "--force"])
+        XCTAssertTrue(forced.force)
+    }
+
     func testWarmUpRetriesConfiguredAttempts() async {
         let stt = StubSTTClient()
         let diarization = StubDiarizationService()

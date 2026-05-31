@@ -14,6 +14,7 @@ struct ModelsCommand: AsyncParsableCommand {
             Download.self,
             WarmUp.self,
             Repair.self,
+            Delete.self,
             Clear.self,
         ]
     )
@@ -228,6 +229,71 @@ extension ModelsCommand {
             )
             await sttClient.shutdown()
             sttClientNeedsShutdown = false
+        }
+    }
+
+    struct Delete: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "delete",
+            abstract: "Delete one downloaded speech model, freeing its disk space.",
+            discussion: """
+                Removes a single model (one Parakeet build or the Whisper variant) \
+                while leaving every other model in place — unlike `models clear`, \
+                which wipes the whole local stack.
+
+                The model currently in use is protected: deleting it would force a \
+                silent re-download on the next transcription. Switch models first, \
+                or pass --force to delete it anyway.
+                """
+        )
+
+        @Argument(help: "Model identifier from `models list`, e.g. parakeet-v2, parakeet-v3, or whisper-large-v3-v20240930-turbo-632MB.")
+        var id: String
+
+        @Flag(name: .long, help: "Delete even the model currently in use (it will re-download on next use).")
+        var force: Bool = false
+
+        func run() async throws {
+            let defaults = macParakeetAppDefaults()
+            let target = try resolveModelDeletionTarget(id, defaults: defaults)
+
+            if isModelInUse(target, defaults: defaults) {
+                guard force else {
+                    throw ValidationError(
+                        "\(target.displayName) is the model currently in use. Switch to another model first, "
+                            + "or pass --force to delete it anyway (it re-downloads on next use)."
+                    )
+                }
+                // --force overrides the guard; make the consequence explicit since
+                // there's no interactive confirmation on the CLI.
+                FileHandle.standardError.write(
+                    Data("Warning: deleting \(target.displayName), the model currently in use. It will re-download on next use.\n".utf8)
+                )
+            }
+
+            switch target.kind {
+            case .parakeet(let variant):
+                guard STTClient.isModelCached(version: variant.asrModelVersion) else {
+                    print("\(variant.modelName) is not downloaded — nothing to delete.")
+                    return
+                }
+                let removed = STTRuntime.deleteParakeetModel(version: variant.asrModelVersion)
+                guard removed else {
+                    throw ValidationError("Could not delete \(variant.modelName). It may be missing or in use by another process.")
+                }
+                print("Deleted \(target.displayName) · freed \(variant.approximateDownloadSize).")
+            case .whisper(let variant):
+                guard WhisperEngine.isModelDownloaded(model: variant) else {
+                    print("Whisper \(SpeechEnginePreference.friendlyVariantName(variant)) is not downloaded — nothing to delete.")
+                    return
+                }
+                let removed = STTRuntime.deleteWhisperModel(variant: variant, defaults: defaults)
+                guard removed else {
+                    throw ValidationError("Could not delete Whisper \(SpeechEnginePreference.friendlyVariantName(variant)). It may be missing or in use by another process.")
+                }
+                let freed = whisperModelSizeLabel(for: variant).map { " · freed \($0)" } ?? ""
+                print("Deleted \(target.displayName)\(freed).")
+            }
         }
     }
 
@@ -479,6 +545,61 @@ func resolveSelectableSpeechModel(
         engine: .whisper,
         whisperVariant: WhisperEngine.normalizeModelVariant(variantInput)
     )
+}
+
+/// One concrete model that `models delete` can target, resolved from a
+/// `models list` id. Carries a user-facing `displayName` for messages.
+struct ModelDeletionTarget: Equatable {
+    enum Kind: Equatable {
+        case parakeet(ParakeetModelVariant)
+        /// Normalized Whisper variant id (matches the stored preference).
+        case whisper(String)
+    }
+
+    let kind: Kind
+    let displayName: String
+}
+
+/// Maps a `models list` id (`parakeet-v2`, `whisper-…`, bare `parakeet` /
+/// `whisper`) to a single deletable model, reusing the selection parser so the
+/// delete and select grammars never drift. Throws `ValidationError` on an
+/// unknown id.
+func resolveModelDeletionTarget(
+    _ id: String,
+    defaults: UserDefaults = macParakeetAppDefaults()
+) throws -> ModelDeletionTarget {
+    let selection = try resolveSelectableSpeechModel(id, defaults: defaults)
+    if let parakeetVariant = selection.parakeetVariant {
+        return ModelDeletionTarget(
+            kind: .parakeet(parakeetVariant),
+            displayName: "\(parakeetVariant.modelName) (\(parakeetVariant.displayName))"
+        )
+    }
+    if let whisperVariant = selection.whisperVariant {
+        return ModelDeletionTarget(
+            kind: .whisper(whisperVariant),
+            displayName: "Whisper \(SpeechEnginePreference.friendlyVariantName(whisperVariant))"
+        )
+    }
+    throw ValidationError("Unknown model ID: '\(id)'. Run `macparakeet-cli models list` for valid IDs.")
+}
+
+/// Whether `target` is the model the active engine would load right now.
+/// Deleting it would force a silent re-download, so `models delete` protects it
+/// unless `--force` is passed.
+func isModelInUse(
+    _ target: ModelDeletionTarget,
+    defaults: UserDefaults = macParakeetAppDefaults()
+) -> Bool {
+    let currentEngine = SpeechEnginePreference.current(defaults: defaults)
+    switch target.kind {
+    case .parakeet(let variant):
+        return currentEngine == .parakeet
+            && SpeechEnginePreference.parakeetModelVariant(defaults: defaults) == variant
+    case .whisper(let variant):
+        return currentEngine == .whisper
+            && SpeechEnginePreference.whisperModelVariant(defaults: defaults) == variant
+    }
 }
 
 /// Recognizes `parakeet-v2`, `parakeet:v3`, `parakeet-english`,
