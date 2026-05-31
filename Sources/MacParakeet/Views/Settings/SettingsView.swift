@@ -1867,25 +1867,14 @@ struct SettingsView: View {
             .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
 
             if canDelete {
-                Menu {
-                    Button(role: .destructive) {
-                        pendingModelDeletion = .parakeet(variant)
-                    } label: {
-                        Text("Delete download")
-                    }
-                    .help("Remove this Parakeet build to free \(variant.approximateDownloadSize).")
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 22, height: 22)
+                ModelDeleteIconButton(
+                    helpText: "Remove this Parakeet build to free \(variant.approximateDownloadSize).",
+                    accessibilityLabel: "Delete \(variant.modelName) download"
+                ) {
+                    pendingModelDeletion = .parakeet(variant)
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
                 .padding(.top, 1)
                 .disabled(viewModel.speechEngineSwitching)
-                .help("More actions for \(variant.modelName)")
-                .accessibilityLabel("More actions for \(variant.modelName)")
             }
         }
     }
@@ -2290,6 +2279,32 @@ struct SettingsView: View {
             self.isDestructive = isDestructive
             self.help = help
             self.run = run
+        }
+    }
+
+    private struct ModelDeleteIconButton: View {
+        let helpText: String
+        let accessibilityLabel: String
+        let action: () -> Void
+
+        @State private var isHovered = false
+
+        var body: some View {
+            Button(role: .destructive, action: action) {
+                Image(systemName: "trash")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(isHovered ? DesignSystem.Colors.errorRed : DesignSystem.Colors.textTertiary)
+                    .frame(width: 26, height: 24)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(isHovered ? DesignSystem.Colors.errorRed.opacity(0.10) : .clear)
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+            .help(helpText)
+            .accessibilityLabel(accessibilityLabel)
         }
     }
 
