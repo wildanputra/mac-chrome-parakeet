@@ -8,6 +8,10 @@
 > Dashboard taxonomy update: Codex (2026-05-05). Deployed `surface` separation
 > for GUI vs CLI telemetry, split true operation failures from non-failure
 > terminal outcomes, and renamed the dashboard error panel to failure-event log.
+> Activation cohort caveats: Codex (2026-06-03). `first_dictation_completed`
+> shipped 2026-05-23; do not divide 30d `first_dictation` by 30d `onboarding_completed`
+> or compare 7d vs 30d without a ship-date cutoff. See
+> [`docs/audits/2026-06-03-activation-metrics-cohort-caveats.md`](audits/2026-06-03-activation-metrics-cohort-caveats.md).
 
 ## Philosophy
 
@@ -177,13 +181,37 @@ when the question is "what happened to this operation?"
 | `onboarding_completed` | `duration_seconds` | How long does setup take? |
 | `onboarding_step` | `step` (permissions, model_download, etc.) | Where do people get stuck in onboarding? |
 
+#### Activation analytics caveats (agents: read this)
+
+**Do not conflate** `first_dictation_completed`, `onboarding_completed`, and
+`dictation_completed` without reading
+[`docs/audits/2026-06-03-activation-metrics-cohort-caveats.md`](audits/2026-06-03-activation-metrics-cohort-caveats.md).
+
+| Pitfall | Correct approach |
+|---------|------------------|
+| `first_dictation_completed / onboarding_completed` over 30d → “~76% never activate” | **Invalid** if the window includes onboardings before **2026-05-23** (event did not exist). Pre-ship completers can have `dictation_completed` but zero `first_dictation_completed`. |
+| 7d vs 30d `first_dictation` same-session rate → “activation improved” | Usually **ship-date mix**, not product. Post-ship cohorts are ~**43–45%** for both windows (2026-06-03 verify). |
+| `app_launched` sessions = installs | **Session** resets every launch; install milestones fire once per UserDefaults install. |
+
+**Preferred T0 KPI (history-safe):** share of `onboarding_completed` **sessions**
+with at least one **`dictation_completed` in the same session** (~45–48% as of
+2026-06-03). Use **`first_dictation_completed`** only for installs that
+completed onboarding **on or after 2026-05-23**, for time-to-first-success
+(`activation_window`) — not for long-window “% never activate” unless the
+denominator is cohort-filtered.
+
+The public stats dashboard (`/stats/`, `GET /api/stats`) exposes these as
+`activation` (30d GUI): `t0_success_rate`, `post_ship_first_dictation_rate`
+(cohort-filtered), and `onboarding_abandon_rate`, plus the ship-date caveat in
+the UI. Setup **step views** remain a separate 24h funnel (`onboarding`).
+
 ### 2. Dictation — "Is the core feature working well?"
 
 | Event | Props | Question It Answers |
 |---|---|---|
 | `dictation_started` | `trigger` (hotkey, pill_click, menu_bar) | How do people start dictating? |
 | `dictation_completed` | `duration_seconds`, `word_count`, `mode` (hold, persistent), `speech_engine`, `engine_variant`, `language`, `app_category`, `device_*` | How long are dictations? Which mode, language, and STT engine are popular? Where do people dictate? |
-| `first_dictation_completed` | `activation_window` (under_1m, under_1h, under_1d, under_1w, over_1w, unknown) | Activation: do new users reach first value, and how fast? One-shot per install; counted against `onboarding_completed` |
+| `first_dictation_completed` | `activation_window` (under_1m, under_1h, under_1d, under_1w, over_1w, unknown) | First **successful** dictation per install (shipped **2026-05-23**). Not comparable to 30d `onboarding_completed` without ship-date cohort filter — see [activation caveats](audits/2026-06-03-activation-metrics-cohort-caveats.md) |
 | `dictation_cancelled` | `duration_seconds`, `reason` (escape, hotkey, ui), `device_*` | Are people cancelling often? Why? |
 | `dictation_empty` | `duration_seconds`, `device_*` | Are people getting empty results? (quality signal) |
 | `dictation_failed` | `error_type`, `device_*` | Core feature failures — blind spot without this |
@@ -591,6 +619,10 @@ Operation-health dashboard queries should keep true `failure` outcomes separate
 from non-failure terminal states such as `cancelled`, `empty`, and
 permission-gated `unavailable`; otherwise ordinary user cancellation can be
 mislabeled as an error bucket.
+
+Operation health groups by an **event-specific primary dimension** (for example
+`dictation_operation` uses `trigger · mode`, not a COALESCE chain that would
+prefer `speech_engine` and hide hotkey vs pill_click success rates).
 
 The deployed stats endpoint returns both `operations.failures` and
 `operations.non_failure`. The dashboard's "Failure Event Log" is only for
