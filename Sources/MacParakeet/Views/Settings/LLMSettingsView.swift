@@ -341,24 +341,35 @@ struct LLMSettingsView: View {
     private var aiFormatterSection: some View {
         VStack(spacing: DesignSystem.Spacing.md) {
             VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 7) {
-                        Text("AI Formatter")
-                            .font(DesignSystem.Typography.body.weight(.semibold))
-                        Text("Final step")
-                            .font(DesignSystem.Typography.micro.weight(.semibold))
-                            .foregroundStyle(DesignSystem.Colors.accentDark)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(
-                                Capsule()
-                                    .fill(DesignSystem.Colors.accent.opacity(0.12))
-                            )
+                HStack(alignment: .top, spacing: DesignSystem.Spacing.md) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 7) {
+                            Text("AI Formatter")
+                                .font(DesignSystem.Typography.body.weight(.semibold))
+                            Text("Final step")
+                                .font(DesignSystem.Typography.micro.weight(.semibold))
+                                .foregroundStyle(DesignSystem.Colors.accentDark)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(
+                                    Capsule()
+                                        .fill(DesignSystem.Colors.accent.opacity(0.12))
+                                )
+                        }
+                        Text("Uses the saved LLM provider after cleanup for file and meeting transcripts. Dictation use can add latency.")
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    Text("Uses the saved LLM provider for file and meeting transcripts after the usual cleanup step.")
-                        .font(DesignSystem.Typography.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: DesignSystem.Spacing.md)
+
+                    if viewModel.isAIFormatterAvailable {
+                        Toggle("Use for dictation", isOn: $viewModel.aiFormatterEnabledForDictation)
+                            .toggleStyle(.switch)
+                            .font(DesignSystem.Typography.caption.weight(.medium))
+                            .fixedSize()
+                    }
                 }
 
                 if let disabledReason = viewModel.aiFormatterUnavailableReason {
@@ -370,22 +381,6 @@ struct LLMSettingsView: View {
                             .font(DesignSystem.Typography.caption)
                             .foregroundStyle(.secondary)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if viewModel.isAIFormatterAvailable {
-                    Divider()
-                    Toggle(isOn: $viewModel.aiFormatterEnabledForDictation) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Also use for dictation")
-                                .font(DesignSystem.Typography.body.weight(.medium))
-                            Text("Run the AI Formatter on live dictation too. This can add latency on short utterances.")
-                                .font(DesignSystem.Typography.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .toggleStyle(.switch)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
