@@ -66,6 +66,11 @@ final class AppEnvironment {
         quickPromptRepo = QuickPromptRepository(dbQueue: databaseManager.dbQueue)
 
         // Services
+        let llmConfigStore = LLMConfigStore()
+        Self.syncAIFormatterAvailabilityWithLLMConfiguration(
+            defaults: .standard,
+            configStore: llmConfigStore
+        )
         let runtimePreferences = UserDefaultsAppRuntimePreferences()
         self.runtimePreferences = runtimePreferences
         let selectedInputDeviceUIDProvider: @Sendable () -> String? = { [runtimePreferences] in
@@ -180,6 +185,14 @@ final class AppEnvironment {
             runtimePreferences.aiFormatterEnabled
         }
 
+        // Dictation gates the AI Formatter on BOTH the global switch and the
+        // dictation-specific switch, so users can keep AI formatting for
+        // file/meeting transcripts (which use `aiFormatterEnabledClosure`) while
+        // keeping live dictation fast. See issue #408.
+        let dictationAIFormatterEnabledClosure: @Sendable () -> Bool = { [runtimePreferences] in
+            runtimePreferences.aiFormatterEnabled && runtimePreferences.aiFormatterEnabledForDictation
+        }
+
         let aiFormatterPromptClosure: @Sendable () -> String = { [runtimePreferences] in
             runtimePreferences.aiFormatterPrompt
         }
@@ -196,7 +209,7 @@ final class AppEnvironment {
         }
 
         llmClient = RoutingLLMClient()
-        llmConfigStore = LLMConfigStore()
+        self.llmConfigStore = llmConfigStore
         llmService = LLMService(
             client: llmClient,
             contextResolver: StoredLLMExecutionContextResolver(
@@ -218,7 +231,7 @@ final class AppEnvironment {
             processingMode: processingModeClosure,
             llmService: llmService,
             llmRunRepo: llmRunRepo,
-            shouldUseAIFormatter: aiFormatterEnabledClosure,
+            shouldUseAIFormatter: dictationAIFormatterEnabledClosure,
             aiFormatterPromptResolver: aiFormatterPromptResolver,
             markFirstDictationCompleted: { [runtimePreferences] in
                 // Fire the activation milestone exactly once, the first time a
@@ -268,5 +281,37 @@ final class AppEnvironment {
 
         derivedFieldsBackfill = DerivedFieldsBackfillService(dbQueue: databaseManager.dbQueue)
         derivedFieldsBackfill.runInBackground()
+    }
+
+    nonisolated static func syncAIFormatterAvailabilityWithLLMConfiguration(
+        defaults: UserDefaults,
+        configStore: LLMConfigStoreProtocol
+    ) {
+        let config: LLMProviderConfig?
+        do {
+            config = try configStore.loadConfig()
+        } catch {
+            return
+        }
+        let hasDictationRoutingPreference = defaults.object(
+            forKey: UserDefaultsAppRuntimePreferences.aiFormatterEnabledForDictationKey
+        ) != nil
+        if config != nil {
+            let legacyFormatterWasEnabled = defaults.object(
+                forKey: UserDefaultsAppRuntimePreferences.aiFormatterEnabledKey
+            ) as? Bool == true
+            if !hasDictationRoutingPreference {
+                defaults.set(
+                    legacyFormatterWasEnabled,
+                    forKey: UserDefaultsAppRuntimePreferences.aiFormatterEnabledForDictationKey
+                )
+            }
+            defaults.set(true, forKey: UserDefaultsAppRuntimePreferences.aiFormatterEnabledKey)
+        } else {
+            defaults.removeObject(forKey: UserDefaultsAppRuntimePreferences.aiFormatterEnabledKey)
+            if !hasDictationRoutingPreference {
+                defaults.set(false, forKey: UserDefaultsAppRuntimePreferences.aiFormatterEnabledForDictationKey)
+            }
+        }
     }
 }
