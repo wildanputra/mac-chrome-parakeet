@@ -10,6 +10,7 @@ struct FeedbackView: View {
     @State private var hoveredCategory: FeedbackCategory?
     @State private var isDraggingScreenshot = false
     @State private var isCommunityHovered = false
+    @State private var showsDiagnosticLogSample = false
     @FocusState private var messageFocused: Bool
 
     var body: some View {
@@ -355,7 +356,7 @@ struct FeedbackView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Text("No audio or transcript text. You can also give this log to Claude Code, Codex, or another coding agent for debugging.")
+                    Text("It contains no audio or transcript text. You can also give this log to Claude Code, Codex, or another coding agent for debugging.")
                         .font(DesignSystem.Typography.caption)
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -383,6 +384,10 @@ struct FeedbackView: View {
                     .accessibilityLabel("Attach capture diagnostics")
                     .accessibilityHint("Includes the dictation audio diagnostics log with this feedback report")
             }
+
+            if isAvailable {
+                diagnosticLogSample
+            }
         }
         .padding(DesignSystem.Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -399,6 +404,47 @@ struct FeedbackView: View {
                     lineWidth: viewModel.includeDiagnosticLog ? 1 : 0.5
                 )
         )
+    }
+
+    // Real, representative lines from `dictation-audio.log`. Kept verbatim so the
+    // Feedback form can show users exactly what they share — counts and device
+    // state, never audio or transcript text.
+    private static let diagnosticLogExampleLines = [
+        "dictation_transcribe_complete chars=49 words=9 engine=parakeet",
+        "dictation_capture_heartbeat input_buffers=100 isRunning=true",
+        "dictation_capture_insufficient sample_count=3200 required=4800",
+        "meeting_mic_capture_started effective_mode=vpio sr=16000 ch=1",
+    ]
+
+    private var diagnosticLogSample: some View {
+        DisclosureGroup(isExpanded: $showsDiagnosticLogSample) {
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(Self.diagnosticLogExampleLines, id: \.self) { line in
+                    Text(line)
+                        .font(DesignSystem.Typography.micro.monospaced())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+
+                Text("The first line logs a finished dictation — that you spoke 9 words, never which words. Every entry is capture timing, buffers, and device state like this.")
+                    .font(DesignSystem.Typography.micro)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(DesignSystem.Spacing.sm)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(DesignSystem.Colors.background.opacity(0.6))
+            )
+            .padding(.top, 6)
+        } label: {
+            Text("See exactly what's in the log")
+                .font(DesignSystem.Typography.caption.weight(.medium))
+                .foregroundStyle(DesignSystem.Colors.accent)
+        }
     }
 
     private func errorBanner(_ error: String) -> some View {
