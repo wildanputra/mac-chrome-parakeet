@@ -345,6 +345,31 @@ final class MeetingRecordingPanelViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.notesViewModel.notesText, "")
     }
 
+    func testResetClearsComposedAskContext() async throws {
+        let viewModel = MeetingRecordingPanelViewModel(
+            transcriptAIContextModeProvider: { .richTranscript }
+        )
+        let mockService = MockLLMService()
+        viewModel.chatViewModel.configure(llmService: mockService, transcriptText: "")
+        viewModel.updatePreviewLines([
+            MeetingRecordingPreviewLine(
+                id: "1",
+                timestamp: "0:42",
+                speakerLabel: "Them",
+                text: "Previous meeting context",
+                source: .system
+            )
+        ])
+
+        viewModel.reset()
+        viewModel.chatViewModel.inputText = "What was said?"
+        viewModel.chatViewModel.sendMessage()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(mockService.lastChatTranscript, "")
+        XCTAssertEqual(viewModel.chatViewModel.messages.count, 2)
+    }
+
     func testNotesAndTranscriptTabsHaveNoBadgeInAnyState() {
         let viewModel = MeetingRecordingPanelViewModel()
 

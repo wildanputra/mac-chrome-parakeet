@@ -170,6 +170,7 @@ public final class MeetingRecordingPanelViewModel {
         showCopiedConfirmation = false
         selectedTab = .notes
         notesViewModel.reset()
+        chatViewModel.loadTranscript("", transcriptionId: nil)
     }
 
     public var formattedElapsed: String {
