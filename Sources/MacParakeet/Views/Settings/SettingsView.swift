@@ -1013,7 +1013,7 @@ struct SettingsView: View {
 
                 settingsToggleRow(
                     title: "Instant dictation",
-                    detail: "Keeps the microphone warm and prepends a short in-memory buffer. macOS will show the microphone indicator while this is on.",
+                    detail: "Keeps dictation ready so it starts faster and is less likely to miss your first words. macOS will show the microphone indicator while this is on.",
                     isBeta: true,
                     isOn: $viewModel.instantDictationEnabled
                 )
