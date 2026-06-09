@@ -175,6 +175,26 @@ final class TranscriptionViewModelTests: XCTestCase {
         XCTAssertTrue(detail.contains("Platform: TikTok"))
     }
 
+    func testNonURLErrorAfterURLFailureClearsStaleDetail() async throws {
+        // A URL failure populates errorDetail with that link's diagnostic...
+        await mockService.configure(error: NSError(domain: "test", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "Download failed: ERROR 404"
+        ]))
+        viewModel.configure(transcriptionService: mockService, transcriptionRepo: mockRepo)
+        viewModel.urlInput = "https://www.tiktok.com/@tiktok/video/7647963131938901278"
+        viewModel.transcribeURL()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNotNil(viewModel.errorDetail)
+
+        // ...and a later non-URL error (here: an unsupported-file drop, which sets
+        // only errorMessage) must NOT leave the stale URL diagnostic behind, or the
+        // copy button would copy the previous link under an unrelated error.
+        let accepted = viewModel.transcribeFiles(urls: [URL(fileURLWithPath: "/tmp/note.xyz")])
+        XCTAssertFalse(accepted, "Unsupported type is rejected")
+        XCTAssertNotNil(viewModel.errorMessage, "Unsupported-drop headline is shown")
+        XCTAssertNil(viewModel.errorDetail, "Stale URL diagnostic must be cleared")
+    }
+
     func testTranscribeFileProgressMessage() async throws {
         viewModel.configure(transcriptionService: mockService, transcriptionRepo: mockRepo)
 

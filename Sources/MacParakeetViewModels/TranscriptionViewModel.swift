@@ -67,7 +67,14 @@ public final class TranscriptionViewModel {
     public private(set) var progressPhase: ProgressPhase = .preparing
     public private(set) var progressHeadline: String = "Preparing transcription pipeline"
     public private(set) var progressSubline: String? = nil
-    public var errorMessage: String?
+    /// Setting a headline invalidates any `errorDetail` built for a *previous*
+    /// failure, so the copy button can never surface a stale URL diagnostic under
+    /// an unrelated error (e.g. a URL failure followed by an unsupported-file
+    /// drop). The URL-failure path assigns `errorDetail` immediately *after*
+    /// `errorMessage`, so its diagnostic survives this reset.
+    public var errorMessage: String? {
+        didSet { errorDetail = nil }
+    }
     /// Rich, copyable diagnostic for the most recent URL-download failure: the
     /// terse `errorMessage` headline plus the source link and environment. Only
     /// ever shown/copied on explicit user action (the banner's copy button), so —
@@ -796,7 +803,6 @@ public final class TranscriptionViewModel {
         currentTranscription = nil
         selectedTab = .transcript
         errorMessage = nil
-        errorDetail = nil
     }
 
     /// `failedURL` is the link that was being downloaded, when the failure came
@@ -850,7 +856,6 @@ public final class TranscriptionViewModel {
         transcriptionTask = nil
         activeTranscriptionTaskID = nil
         errorMessage = nil
-        errorDetail = nil
         endTranscription()
         // Any cancellation ends the whole batch — there is no per-item cancel,
         // so "Cancel all" and a stray single cancel converge to the same reset.
@@ -870,7 +875,6 @@ public final class TranscriptionViewModel {
         progressHeadline = Self.headline(for: .preparing)
         progressSubline = nil
         errorMessage = nil
-        errorDetail = nil
         selectedTab = .transcript
     }
 

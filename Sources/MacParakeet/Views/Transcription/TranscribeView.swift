@@ -322,7 +322,6 @@ struct TranscribeView: View {
                 .help("Copy full error details")
                 Button {
                     viewModel.errorMessage = nil
-                    viewModel.errorDetail = nil
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .semibold))
