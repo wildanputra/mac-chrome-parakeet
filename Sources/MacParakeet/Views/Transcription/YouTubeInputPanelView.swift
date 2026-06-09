@@ -34,6 +34,16 @@ struct YouTubeInputPanelView: View {
         MediaPlatform.recognize(draft)
     }
 
+    /// Mirrors the brand glyph beside it: once a link is recognized the header
+    /// names the platform ("Transcribe Vimeo"), so logo and title move together.
+    /// Falls back to the general invitation while idle or on an unrecognized link.
+    private var headerTitle: String {
+        if let platform = draftPlatform {
+            return "Transcribe \(platform.displayName)"
+        }
+        return "Transcribe YouTube & more"
+    }
+
     /// Reactive footer copy: confirms a recognized link, acknowledges any other
     /// link, or invites a paste while idle.
     private var footerCaption: String {
@@ -69,9 +79,11 @@ struct YouTubeInputPanelView: View {
                 .animation(.spring(response: 0.35, dampingFraction: 0.8), value: draftPlatform)
                 .accessibilityHidden(true)
 
-                Text("Transcribe YouTube & more")
+                Text(headerTitle)
                     .font(DesignSystem.Typography.sectionTitle)
                     .accessibilityAddTraits(.isHeader)
+                    .contentTransition(.opacity)
+                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: draftPlatform)
 
                 Spacer()
             }

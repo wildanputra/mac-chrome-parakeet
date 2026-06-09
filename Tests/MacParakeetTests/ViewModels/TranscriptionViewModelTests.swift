@@ -101,6 +101,78 @@ final class TranscriptionViewModelTests: XCTestCase {
         XCTAssertNotNil(viewModel.errorMessage, "Error message should be set")
         XCTAssertEqual(viewModel.errorMessage, "Transcription failed")
         XCTAssertNil(viewModel.currentTranscription, "No transcription on error")
+        XCTAssertNil(
+            viewModel.errorDetail,
+            "File failures carry no source link, so the copy button falls back to the headline"
+        )
+    }
+
+    // MARK: - URL failure diagnostics
+
+    func testURLFailureDiagnosticIncludesLinkAndEnvironment() {
+        let system = SystemInfo(
+            appVersion: "0.6.21",
+            buildNumber: "20260607023821",
+            gitCommit: "abc1234",
+            buildSource: "release",
+            macOSVersion: "26.5.0",
+            chipType: "Apple M4 Pro"
+        )
+
+        let diagnostic = TranscriptionViewModel.urlFailureDiagnostic(
+            message: "Download failed: ERROR: [generic] HTTP Error 404: Not Found",
+            url: "https://www.tiktok.com/@tiktok/video/7647963131938901278",
+            platform: .tiktok,
+            system: system
+        )
+
+        // Headline leads, so a truncated read still shows the error first.
+        XCTAssertTrue(diagnostic.hasPrefix("Download failed:"))
+        XCTAssertTrue(diagnostic.contains("URL: https://www.tiktok.com/@tiktok/video/7647963131938901278"))
+        XCTAssertTrue(diagnostic.contains("Platform: TikTok"))
+        XCTAssertTrue(diagnostic.contains("App: 0.6.21 (20260607023821)"))
+        XCTAssertTrue(diagnostic.contains("macOS 26.5.0"))
+        XCTAssertTrue(diagnostic.contains("Apple M4 Pro"))
+    }
+
+    func testURLFailureDiagnosticLabelsUnrecognizedLink() {
+        let system = SystemInfo(
+            appVersion: "1.0.0",
+            buildNumber: "1",
+            gitCommit: "x",
+            buildSource: "dev",
+            macOSVersion: "14.5.0",
+            chipType: "Apple M1"
+        )
+
+        let diagnostic = TranscriptionViewModel.urlFailureDiagnostic(
+            message: "Download failed: ERROR",
+            url: "https://example.com/about",
+            platform: nil,
+            system: system
+        )
+
+        XCTAssertTrue(diagnostic.contains("URL: https://example.com/about"))
+        XCTAssertTrue(diagnostic.contains("Platform: Unrecognized link"))
+    }
+
+    func testTranscribeURLFailurePopulatesErrorDetailWithLink() async throws {
+        await mockService.configure(error: NSError(domain: "test", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "Download failed: ERROR: [generic] HTTP Error 404: Not Found"
+        ]))
+
+        viewModel.configure(transcriptionService: mockService, transcriptionRepo: mockRepo)
+        let link = "https://www.tiktok.com/@tiktok/video/7647963131938901278"
+        viewModel.urlInput = link
+
+        viewModel.transcribeURL()
+        try await Task.sleep(for: .milliseconds(200))
+
+        XCTAssertEqual(viewModel.errorMessage, "Download failed: ERROR: [generic] HTTP Error 404: Not Found")
+        let detail = try XCTUnwrap(viewModel.errorDetail)
+        XCTAssertTrue(detail.hasPrefix("Download failed:"))
+        XCTAssertTrue(detail.contains("URL: \(link)"), "Diagnostic should carry the source link")
+        XCTAssertTrue(detail.contains("Platform: TikTok"))
     }
 
     func testTranscribeFileProgressMessage() async throws {

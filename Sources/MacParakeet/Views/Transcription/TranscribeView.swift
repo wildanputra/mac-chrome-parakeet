@@ -176,8 +176,10 @@ struct TranscribeView: View {
                     .frame(width: 118, height: 118)
                     .accessibilityHidden(true)
 
-                Text("Transcribe YouTube & more")
+                Text(urlCardTitle)
                     .font(DesignSystem.Typography.pageTitle)
+                    .contentTransition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: urlCardTitle)
 
                 // URL input row
                 HStack(spacing: DesignSystem.Spacing.sm) {
@@ -271,6 +273,17 @@ struct TranscribeView: View {
         MediaPlatform.recognize(viewModel.urlInput)
     }
 
+    /// Mirrors the brand glyph and `urlCardCaption`: once a link is recognized the
+    /// heading names the platform ("Transcribe TikTok"), so logo, title, and caption
+    /// move together. Falls back to the general invitation while idle or on an
+    /// unrecognized (but still transcribable) link.
+    private var urlCardTitle: String {
+        if let platform = recognizedURLPlatform {
+            return "Transcribe \(platform.displayName)"
+        }
+        return "Transcribe YouTube & more"
+    }
+
     /// Reactive helper copy beneath the link field: confirms a recognized link,
     /// acknowledges any other link, or lists what's supported while idle.
     private var urlCardCaption: String {
@@ -298,15 +311,18 @@ struct TranscribeView: View {
                 Spacer()
                 Button {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(error, forType: .string)
+                    // Prefer the rich diagnostic (link + app version) when the
+                    // failure came from the URL lane; fall back to the headline.
+                    NSPasteboard.general.setString(viewModel.errorDetail ?? error, forType: .string)
                 } label: {
                     Image(systemName: "doc.on.doc")
                         .font(.system(size: 10, weight: .semibold))
                 }
                 .buttonStyle(.plain)
-                .help("Copy full error")
+                .help("Copy full error details")
                 Button {
                     viewModel.errorMessage = nil
+                    viewModel.errorDetail = nil
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .semibold))
@@ -315,7 +331,7 @@ struct TranscribeView: View {
             }
             .foregroundStyle(DesignSystem.Colors.errorRed)
 
-            Text("Click copy icon for full error. Report persistent issues via **Feedback** in the sidebar.")
+            Text("Click copy icon for full error details. Report persistent issues via **Feedback** in the sidebar.")
                 .font(DesignSystem.Typography.micro)
                 .foregroundStyle(DesignSystem.Colors.textTertiary)
         }

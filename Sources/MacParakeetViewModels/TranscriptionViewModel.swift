@@ -68,6 +68,13 @@ public final class TranscriptionViewModel {
     public private(set) var progressHeadline: String = "Preparing transcription pipeline"
     public private(set) var progressSubline: String? = nil
     public var errorMessage: String?
+    /// Rich, copyable diagnostic for the most recent URL-download failure: the
+    /// terse `errorMessage` headline plus the source link and environment. Only
+    /// ever shown/copied on explicit user action (the banner's copy button), so —
+    /// unlike `errorMessage`, which telemetry classifies — it can safely carry the
+    /// URL. `nil` for non-URL failures, where the copy button falls back to
+    /// `errorMessage`.
+    public var errorDetail: String?
     public private(set) var transcribingFileName: String = ""
     public var isDragging = false
     public var urlInput: String = ""
@@ -337,7 +344,7 @@ public final class TranscriptionViewModel {
             } catch is CancellationError {
                 completeCancelledTranscription(taskID: taskID)
             } catch {
-                completeFailedTranscription(taskID: taskID, error: error)
+                completeFailedTranscription(taskID: taskID, error: error, failedURL: url)
             }
         }
     }
@@ -789,9 +796,13 @@ public final class TranscriptionViewModel {
         currentTranscription = nil
         selectedTab = .transcript
         errorMessage = nil
+        errorDetail = nil
     }
 
-    private func completeFailedTranscription(taskID: UUID, error: Error) {
+    /// `failedURL` is the link that was being downloaded, when the failure came
+    /// from the URL lane — it drives the richer `errorDetail` copy payload. File
+    /// and batch failures pass `nil` and keep the plain headline as the copy text.
+    private func completeFailedTranscription(taskID: UUID, error: Error, failedURL: String? = nil) {
         guard activeTranscriptionTaskID == taskID else { return }
         transcriptionTask = nil
         activeTranscriptionTaskID = nil
@@ -805,9 +816,33 @@ public final class TranscriptionViewModel {
             loadTranscriptions()
             advanceBatch()
         } else {
-            errorMessage = error.localizedDescription
+            let message = error.localizedDescription
+            errorMessage = message
+            errorDetail = failedURL.map {
+                Self.urlFailureDiagnostic(message: message, url: $0, platform: MediaPlatform.recognize($0))
+            }
             loadTranscriptions()
         }
+    }
+
+    /// Builds the rich, copyable diagnostic for a failed URL transcription: the
+    /// headline plus the source link and environment — exactly the context a
+    /// yt-dlp/site bug report needs. Kept separate from `errorMessage` (which
+    /// telemetry classifies) so the URL never reaches telemetry; this string is
+    /// only surfaced when the user clicks the banner's copy button.
+    static func urlFailureDiagnostic(
+        message: String,
+        url: String,
+        platform: MediaPlatform?,
+        system: SystemInfo = .current
+    ) -> String {
+        [
+            message,
+            "",
+            "URL: \(url)",
+            "Platform: \(platform?.displayName ?? "Unrecognized link")",
+            "App: \(system.appVersion) (\(system.buildNumber)) · macOS \(system.macOSVersion) · \(system.chipType)",
+        ].joined(separator: "\n")
     }
 
     private func completeCancelledTranscription(taskID: UUID) {
@@ -815,6 +850,7 @@ public final class TranscriptionViewModel {
         transcriptionTask = nil
         activeTranscriptionTaskID = nil
         errorMessage = nil
+        errorDetail = nil
         endTranscription()
         // Any cancellation ends the whole batch — there is no per-item cancel,
         // so "Cancel all" and a stray single cancel converge to the same reset.
@@ -834,6 +870,7 @@ public final class TranscriptionViewModel {
         progressHeadline = Self.headline(for: .preparing)
         progressSubline = nil
         errorMessage = nil
+        errorDetail = nil
         selectedTab = .transcript
     }
 
