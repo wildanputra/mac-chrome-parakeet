@@ -24,7 +24,7 @@
 
 | Plan | Title | Status | Priority | What's left |
 |------|-------|--------|----------|-------------|
-| [2026-05-dictation-first-onboarding](active/2026-05-dictation-first-onboarding.md) | Dictation-first onboarding | **TODO** ⭐ | **P1** | Confirmed *not* shipped — onboarding is still 8 steps on `main` (`OnboardingViewModel.Step`), with Meeting Recording + Calendar in the critical path before hotkey/engine setup. Your own funnel analysis records a **−21pt completion cliff** at that screen-recording step. **Highest activation leverage in the backlog.** Part A is pure subtraction (8→6 steps); ship + instrument the funnel. |
+| [2026-05-dictation-first-onboarding](active/2026-05-dictation-first-onboarding.md) | Dictation-first onboarding | **EXECUTOR-READY** ⭐ | **P1** | Confirmed *not* shipped — onboarding is still 8 steps on `main` (`OnboardingViewModel.Step`), with Meeting Recording + Calendar in the critical path before hotkey/engine setup. Your own funnel analysis records a **−21pt completion cliff** at that screen-recording step. **Highest activation leverage in the backlog.** Plan refreshed to executor-grade 2026-06-13 (drift check, per-step verify gates, done criteria, post-ship funnel recipe). Part A (8→6 steps) is pure subtraction, ship-on-its-own; Part B (download head-start) soft-depends on the warm-up watchdog test. |
 | [2026-06-onboarding-stall-watchdog-test](active/2026-06-onboarding-stall-watchdog-test.md) | Make the warm-up stall watchdog testable + test it | **EXECUTOR-READY** | **P1** | Closes a trust-critical coverage gap on the onboarding model warm-up (incident history: silent stalls). Dispatchable now. |
 | [2026-06-12-telemetry-allowlist-ci-guard](active/2026-06-12-telemetry-allowlist-ci-guard.md) | Cross-repo telemetry allowlist CI guard | **EXECUTOR-READY** ✅ | P2 | Re-verified 2026-06-13: assumptions hold, repos in sync (97 events, 0 missing). Closes a 3×-recurring silent data-loss class. **One follow-up only a maintainer can do:** add the `WEBSITE_REPO_TOKEN` CI secret to flip it from skip→enforce. |
 | [2026-06-12-june-churn-regression-tests](active/2026-06-12-june-churn-regression-tests.md) | Regression tests: mic self-heal + Nemotron live dictation | **EXECUTOR-READY** | P2 | Adds the missing assertions on the June audio/STT hardening (#496, #507). Dispatchable now. |
@@ -46,7 +46,7 @@
 
 ## Execute next (recommended order)
 
-1. **Ship dictation-first onboarding (Part A).** Biggest activation lever, low risk, already specified, telemetry-backed. Refresh the plan to executor-grade + add funnel instrumentation first.
+1. **Ship dictation-first onboarding (Part A).** Biggest activation lever, low risk, telemetry-backed. Plan is executor-grade as of 2026-06-13 — dispatchable now. (Funnel is already instrumented via `onboarding_step`; the lift is confirmed by post-ship analysis, not new telemetry — see the plan's "Verifying the lift".)
 2. **Dispatch the two P1/P2 executor-ready test plans** (onboarding-stall-watchdog → june-churn regression). They close the named coverage gaps in the highest-incident area.
 3. **Land the telemetry-allowlist CI guard**, then add the `WEBSITE_REPO_TOKEN` secret to enforce it.
 
