@@ -23,8 +23,6 @@ public final class OnboardingViewModel {
         case welcome
         case microphone
         case accessibility
-        case meetingRecording
-        case calendar
         case hotkey
         case engine
         case done
@@ -36,8 +34,6 @@ public final class OnboardingViewModel {
             case .welcome: return "Welcome"
             case .microphone: return "Microphone"
             case .accessibility: return "Accessibility"
-            case .meetingRecording: return "Meeting Recording"
-            case .calendar: return "Calendar"
             case .hotkey: return "Hotkey"
             case .engine: return "Speech Model"
             case .done: return "Ready"
@@ -59,11 +55,6 @@ public final class OnboardingViewModel {
     public private(set) var step: Step = .welcome
     public private(set) var micStatus: PermissionStatus = .notDetermined
     public private(set) var accessibilityGranted: Bool = false
-    public private(set) var screenRecordingGranted: Bool = false
-    public private(set) var meetingRecordingSkipped: Bool
-    public private(set) var calendarPermissionGranted: Bool = false
-    public private(set) var calendarSkipped: Bool
-    public private(set) var showRelaunchHint: Bool = false
     public private(set) var engineState: EngineState = .idle
     public private(set) var whisperRecommendation: WhisperOnboardingRecommendation?
 
@@ -82,7 +73,6 @@ public final class OnboardingViewModel {
     private let defaults: UserDefaults
     private let now: @Sendable () -> Date
     private let permissionPollingInterval: Duration
-    private let relaunchHintDelay: TimeInterval
     private var engineGeneration: Int = 0
     private var refreshTask: Task<Void, Never>?
     private var permissionPollingTask: Task<Void, Never>?
@@ -97,16 +87,11 @@ public final class OnboardingViewModel {
     /// this strongly suggests a stuck connection or a hung dependency.
     /// Memory: v0.4.22 stranded ~23 users for ~24h with no escape hatch.
     public static let warmUpStallTimeout: Duration = .seconds(180)
-    private var screenRecordingGrantRequestedAt: Date?
-    private var hasLoadedInitialScreenRecordingState = false
-    private var hasEmittedScreenRecordingGranted = false
     private let requiredFirstSetupDiskBytes: Int64 = 7 * 1_024 * 1_024 * 1_024
     private let requiredDiarizationSetupDiskBytes: Int64 = 512 * 1_024 * 1_024
     private let requiredWhisperSetupDiskBytes: Int64 = 2 * 1_024 * 1_024 * 1_024
 
     public nonisolated static let onboardingCompletedKey = "onboarding.completedAtISO"
-    public nonisolated static let meetingRecordingSkippedKey = "onboarding.meetingRecordingSkipped"
-    public nonisolated static let calendarSkippedKey = "onboarding.calendarSkipped"
 
     public init(
         permissionService: PermissionServiceProtocol,
@@ -122,8 +107,7 @@ public final class OnboardingViewModel {
         preferredLanguages: (@Sendable () -> [String])? = nil,
         defaults: UserDefaults = .standard,
         now: @escaping @Sendable () -> Date = { Date() },
-        permissionPollingInterval: Duration = .seconds(2),
-        relaunchHintDelay: TimeInterval = 10
+        permissionPollingInterval: Duration = .seconds(2)
     ) {
         self.permissionService = permissionService
         self.sttClient = sttClient
@@ -142,10 +126,6 @@ public final class OnboardingViewModel {
         self.defaults = defaults
         self.now = now
         self.permissionPollingInterval = permissionPollingInterval
-        self.relaunchHintDelay = relaunchHintDelay
-        self.meetingRecordingSkipped = defaults.bool(forKey: Self.meetingRecordingSkippedKey)
-        self.calendarSkipped = defaults.bool(forKey: Self.calendarSkippedKey)
-        self.calendarPermissionGranted = CalendarService.shared.permissionStatus == .granted
         self.whisperRecommendation = Self.recommendedWhisperLanguage(
             preferredLanguages: (preferredLanguages ?? { Locale.preferredLanguages })()
         )
@@ -165,17 +145,8 @@ public final class OnboardingViewModel {
 
     public func resetOnboarding() {
         defaults.removeObject(forKey: Self.onboardingCompletedKey)
-        defaults.removeObject(forKey: Self.meetingRecordingSkippedKey)
-        defaults.removeObject(forKey: Self.calendarSkippedKey)
         step = .welcome
         engineState = .idle
-        meetingRecordingSkipped = false
-        calendarSkipped = false
-        // Re-resolve from the live calendar permission so a previously-
-        // granted user re-entering onboarding sees the correct "completed"
-        // state, not the stale value carried over from VM init.
-        calendarPermissionGranted = CalendarService.shared.permissionStatus == .granted
-        clearMeetingRecordingPendingState()
     }
 
     public func refresh() {
@@ -183,52 +154,24 @@ public final class OnboardingViewModel {
         refreshTask = Task {
             let mic = await permissionService.checkMicrophonePermission()
             let ax = permissionService.checkAccessibilityPermission()
-            let screenRecording = permissionService.checkScreenRecordingPermission()
             guard !Task.isCancelled else { return }
-            await MainActor.run {
-                let previousScreenRecordingGranted = self.screenRecordingGranted
-                self.micStatus = mic
-                self.accessibilityGranted = ax
-                self.screenRecordingGranted = screenRecording
-                if self.hasLoadedInitialScreenRecordingState,
-                   !previousScreenRecordingGranted,
-                   screenRecording,
-                   !self.hasEmittedScreenRecordingGranted {
-                    self.hasEmittedScreenRecordingGranted = true
-                    Telemetry.send(.permissionGranted(permission: .screenRecording))
-                }
-                self.hasLoadedInitialScreenRecordingState = true
-                self.updateMeetingRecordingRelaunchHint(now: self.now())
-                self.refreshTask = nil
-            }
+            // The class is @MainActor, so this Task already runs on the main
+            // actor — assign directly rather than hopping through MainActor.run.
+            self.micStatus = mic
+            self.accessibilityGranted = ax
+            self.refreshTask = nil
         }
     }
 
-    /// Steps the user actually sees. Hidden steps (gated by `AppFeatures`) are
-    /// filtered out so next/back/jump all walk the visible list — no flicker or
-    /// silent no-ops when flags are off. Calendar requires BOTH meeting
-    /// recording and calendar to be enabled; gating the inner flag alone lets
-    /// us hide the (untested) calendar flow without dropping meeting recording.
+    /// Steps the user actually sees in the dictation-first onboarding flow.
     public static var visibleSteps: [Step] {
-        Step.allCases.filter { step in
-            switch step {
-            case .meetingRecording:
-                return AppFeatures.meetingRecordingEnabled
-            case .calendar:
-                return AppFeatures.meetingRecordingEnabled && AppFeatures.calendarEnabled
-            default:
-                return true
-            }
-        }
+        [.welcome, .microphone, .accessibility, .hotkey, .engine, .done]
     }
 
     public func goNext() {
         let visible = Self.visibleSteps
         let currentRaw = step.rawValue
         guard let next = visible.first(where: { $0.rawValue > currentRaw }) else { return }
-        if step == .meetingRecording {
-            clearMeetingRecordingPendingState()
-        }
         step = next
         Telemetry.send(.onboardingStep(step: next.title.lowercased()))
         refresh()
@@ -238,17 +181,11 @@ public final class OnboardingViewModel {
         let visible = Self.visibleSteps
         let currentRaw = step.rawValue
         guard let prev = visible.last(where: { $0.rawValue < currentRaw }) else { return }
-        if step == .meetingRecording {
-            clearMeetingRecordingPendingState()
-        }
         step = prev
         refresh()
     }
 
     public func jump(to target: Step) {
-        if step == .meetingRecording, target != .meetingRecording {
-            clearMeetingRecordingPendingState()
-        }
         step = target
         refresh()
     }
@@ -261,10 +198,6 @@ public final class OnboardingViewModel {
             return micStatus == .granted
         case .accessibility:
             return accessibilityGranted
-        case .meetingRecording:
-            return true
-        case .calendar:
-            return true
         case .hotkey:
             return true
         case .engine:
@@ -311,68 +244,6 @@ public final class OnboardingViewModel {
         if accessibilityGranted {
             Telemetry.send(.permissionGranted(permission: .accessibility))
         }
-    }
-
-    public func requestScreenRecordingAccess() {
-        Telemetry.send(.permissionPrompted(permission: .screenRecording))
-        screenRecordingGrantRequestedAt = now()
-        showRelaunchHint = false
-        _ = permissionService.requestScreenRecordingPermission()
-        refresh()
-    }
-
-    public func skipMeetingRecordingStep() {
-        meetingRecordingSkipped = true
-        defaults.set(true, forKey: Self.meetingRecordingSkippedKey)
-        clearMeetingRecordingPendingState()
-        goNext()
-    }
-
-    /// Trigger the EventKit permission prompt. On grant, default the user
-    /// into `.notify` mode so the feature works out of the box and request
-    /// notification authorization in the same flow — without it, macOS
-    /// silently drops every reminder we post and the user concludes the
-    /// feature is broken. We write directly to UserDefaults + post the
-    /// shared notification so a running `MeetingAutoStartCoordinator`
-    /// re-evaluates immediately.
-    public func requestCalendarAccess() {
-        isBusy = true
-        Telemetry.send(.permissionPrompted(permission: .calendar))
-        Task {
-            let granted = await CalendarService.shared.requestPermission()
-            let notificationsGranted = granted
-                ? await CalendarNotificationAuthorization.requestIfNeeded()
-                : false
-            await MainActor.run {
-                self.isBusy = false
-                self.calendarPermissionGranted = granted
-                if granted {
-                    Telemetry.send(.permissionGranted(permission: .calendar))
-                    self.applyCalendarMode(notificationsGranted ? .notify : .off)
-                } else {
-                    Telemetry.send(.permissionDenied(permission: .calendar))
-                }
-            }
-        }
-    }
-
-    /// Skip the calendar onboarding step. Persists `.off` mode explicitly so
-    /// the SettingsViewModel default doesn't silently flip back to enabled
-    /// later. Symmetric to `skipMeetingRecordingStep()`.
-    public func skipCalendarStep() {
-        calendarSkipped = true
-        defaults.set(true, forKey: Self.calendarSkippedKey)
-        applyCalendarMode(.off)
-        goNext()
-    }
-
-    private func applyCalendarMode(_ mode: CalendarAutoStartMode) {
-        defaults.set(mode.rawValue, forKey: CalendarAutoStartPreferences.modeKey)
-        NotificationCenter.default.post(name: .macParakeetCalendarSettingsDidChange, object: nil)
-    }
-
-    public func openScreenRecordingSystemSettings() {
-        permissionService.openScreenRecordingSettings()
     }
 
     public func startPermissionPolling() {
@@ -735,25 +606,6 @@ public final class OnboardingViewModel {
     public func stopObservingWarmUp() {
         cancelWarmUpObservation()
         stopPermissionPolling()
-    }
-
-    private func clearMeetingRecordingPendingState() {
-        screenRecordingGrantRequestedAt = nil
-        showRelaunchHint = false
-    }
-
-    private func updateMeetingRecordingRelaunchHint(now currentTime: Date) {
-        guard !screenRecordingGranted else {
-            clearMeetingRecordingPendingState()
-            return
-        }
-
-        guard step == .meetingRecording, let requestTime = screenRecordingGrantRequestedAt else {
-            showRelaunchHint = false
-            return
-        }
-
-        showRelaunchHint = currentTime.timeIntervalSince(requestTime) >= relaunchHintDelay
     }
 
     private func cancelWarmUpObservation() {

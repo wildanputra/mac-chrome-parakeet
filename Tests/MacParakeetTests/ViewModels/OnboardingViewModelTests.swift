@@ -1,4 +1,5 @@
 import XCTest
+import os
 @testable import MacParakeetCore
 @testable import MacParakeetViewModels
 
@@ -34,14 +35,6 @@ private final class OnboardingTelemetrySpy: TelemetryServiceProtocol, @unchecked
     }
 }
 
-private final class MutableDateBox: @unchecked Sendable {
-    var value: Date
-
-    init(_ value: Date) {
-        self.value = value
-    }
-}
-
 private actor WhisperDownloadSpy {
     private var calls: [String] = []
     var error: Error?
@@ -62,6 +55,43 @@ private actor WhisperDownloadSpy {
 
     func snapshot() -> [String] {
         calls
+    }
+}
+
+private final class PollingPermissionService: PermissionServiceProtocol, @unchecked Sendable {
+    private let microphoneCheckCount = OSAllocatedUnfairLock(initialState: 0)
+
+    var checkMicrophonePermissionCallCount: Int {
+        microphoneCheckCount.withLock { $0 }
+    }
+
+    func checkMicrophonePermission() async -> PermissionStatus {
+        microphoneCheckCount.withLock { $0 += 1 }
+        return .granted
+    }
+
+    func requestMicrophonePermission() async -> Bool {
+        true
+    }
+
+    func checkScreenRecordingPermission() -> Bool {
+        true
+    }
+
+    func requestScreenRecordingPermission() -> Bool {
+        true
+    }
+
+    func openMicrophoneSettings() {}
+
+    func openScreenRecordingSettings() {}
+
+    func checkAccessibilityPermission() -> Bool {
+        true
+    }
+
+    func requestAccessibilityPermission(prompt _: Bool) -> Bool {
+        true
     }
 }
 
@@ -99,8 +129,7 @@ final class OnboardingViewModelTests: XCTestCase {
         downloadWhisperModel: OnboardingViewModel.WhisperModelDownloader? = nil,
         preferredLanguages: @escaping @Sendable () -> [String] = { ["en-US"] },
         now: @escaping @Sendable () -> Date = { Date() },
-        permissionPollingInterval: Duration = .seconds(2),
-        relaunchHintDelay: TimeInterval = 10
+        permissionPollingInterval: Duration = .seconds(2)
     ) -> OnboardingViewModel {
         OnboardingViewModel(
             permissionService: permissionService,
@@ -116,8 +145,7 @@ final class OnboardingViewModelTests: XCTestCase {
             preferredLanguages: preferredLanguages,
             defaults: defaults,
             now: now,
-            permissionPollingInterval: permissionPollingInterval,
-            relaunchHintDelay: relaunchHintDelay
+            permissionPollingInterval: permissionPollingInterval
         )
     }
 
@@ -163,11 +191,120 @@ final class OnboardingViewModelTests: XCTestCase {
         XCTAssertTrue(vm.canContinueFromCurrentStep())
     }
 
-    func testMeetingRecordingStepOrdering() {
+    func testStepOrdering() {
         XCTAssertEqual(
             OnboardingViewModel.Step.allCases,
-            [.welcome, .microphone, .accessibility, .meetingRecording, .calendar, .hotkey, .engine, .done]
+            [.welcome, .microphone, .accessibility, .hotkey, .engine, .done]
         )
+    }
+
+    // MARK: - Six-step dictation-first flow
+
+    func testVisibleStepsIsCanonicalSixStepList() {
+        XCTAssertEqual(
+            OnboardingViewModel.visibleSteps,
+            [.welcome, .microphone, .accessibility, .hotkey, .engine, .done]
+        )
+    }
+
+    func testGoNextWalksSixSteps() async throws {
+        let perms = MockPermissionService()
+        perms.microphonePermission = .granted
+        perms.accessibilityPermission = true
+        let stt = MockSTTClient()
+        let suite = "com.macparakeet.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+
+        let vm = makeViewModel(permissionService: perms, sttClient: stt, defaults: defaults)
+        XCTAssertEqual(vm.step, .welcome)
+
+        vm.goNext()
+        XCTAssertEqual(vm.step, .microphone)
+
+        vm.goNext()
+        XCTAssertEqual(vm.step, .accessibility)
+
+        vm.goNext()
+        XCTAssertEqual(vm.step, .hotkey)
+
+        vm.goNext()
+        XCTAssertEqual(vm.step, .engine)
+
+        XCTAssertFalse(vm.canContinueFromCurrentStep())
+    }
+
+    func testGoBackWalksSixSteps() {
+        let perms = MockPermissionService()
+        let stt = MockSTTClient()
+        let suite = "com.macparakeet.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+
+        let vm = makeViewModel(permissionService: perms, sttClient: stt, defaults: defaults)
+        vm.jump(to: .done)
+
+        vm.goBack()
+        XCTAssertEqual(vm.step, .engine)
+
+        vm.goBack()
+        XCTAssertEqual(vm.step, .hotkey)
+
+        vm.goBack()
+        XCTAssertEqual(vm.step, .accessibility)
+
+        vm.goBack()
+        XCTAssertEqual(vm.step, .microphone)
+
+        vm.goBack()
+        XCTAssertEqual(vm.step, .welcome)
+
+        vm.goBack()
+        XCTAssertEqual(vm.step, .welcome)
+    }
+
+    func testCanContinueForEachStep() {
+        let perms = MockPermissionService()
+        perms.microphonePermission = .granted
+        perms.accessibilityPermission = true
+        let stt = MockSTTClient()
+        let suite = "com.macparakeet.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+
+        let vm = makeViewModel(permissionService: perms, sttClient: stt, defaults: defaults)
+
+        vm.jump(to: .welcome)
+        XCTAssertTrue(vm.canContinueFromCurrentStep(), "welcome should always allow continue")
+
+        vm.jump(to: .hotkey)
+        XCTAssertTrue(vm.canContinueFromCurrentStep(), "hotkey should always allow continue")
+
+        vm.jump(to: .done)
+        XCTAssertTrue(vm.canContinueFromCurrentStep(), "done should always allow continue")
+
+        vm.jump(to: .engine)
+        XCTAssertFalse(vm.canContinueFromCurrentStep(), "engine requires ready state")
+    }
+
+    func testExistingUsersDoNotReOnboard() {
+        let perms = MockPermissionService()
+        let stt = MockSTTClient()
+        let suite = "com.macparakeet.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defaults.set("2026-01-01T00:00:00Z", forKey: OnboardingViewModel.onboardingCompletedKey)
+
+        let vm = makeViewModel(permissionService: perms, sttClient: stt, defaults: defaults)
+        XCTAssertTrue(vm.hasCompletedOnboarding)
+    }
+
+    func testNoMeetingRecordingOrCalendarStepsInFlow() {
+        let steps = OnboardingViewModel.visibleSteps
+        let allCases = OnboardingViewModel.Step.allCases
+
+        XCTAssertEqual(steps, allCases)
+        XCTAssertEqual(steps.count, 6)
     }
 
     func testWhisperOnboardingRecommendationDetectsCJKPreferredLanguages() {
@@ -200,113 +337,8 @@ final class OnboardingViewModelTests: XCTestCase {
         XCTAssertNil(OnboardingViewModel.recommendedWhisperLanguage(preferredLanguages: ["zh-Hans-CN", "en-GB"]))
     }
 
-    func testMeetingRecordingStepCanContinueWithoutPermission() {
-        let perms = MockPermissionService()
-        perms.screenRecordingPermission = false
-        let stt = MockSTTClient()
-        let defaults = UserDefaults(suiteName: "com.macparakeet.tests.\(UUID().uuidString)")!
-
-        let vm = makeViewModel(permissionService: perms, sttClient: stt, defaults: defaults)
-        vm.jump(to: .meetingRecording)
-
-        XCTAssertTrue(vm.canContinueFromCurrentStep())
-    }
-
-    func testSkipMeetingRecordingStepSetsFlagAndAdvances() {
-        let perms = MockPermissionService()
-        let stt = MockSTTClient()
-        let suite = "com.macparakeet.tests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-
-        let vm = makeViewModel(permissionService: perms, sttClient: stt, defaults: defaults)
-        vm.jump(to: .meetingRecording)
-
-        vm.skipMeetingRecordingStep()
-
-        XCTAssertTrue(vm.meetingRecordingSkipped)
-        XCTAssertTrue(defaults.bool(forKey: OnboardingViewModel.meetingRecordingSkippedKey))
-        // Skip advances to the next *visible* step. With `calendarEnabled` on
-        // that's `.calendar`; with it off the calendar step is filtered out
-        // and the flow jumps straight to `.hotkey`.
-        let expected: OnboardingViewModel.Step = AppFeatures.calendarEnabled ? .calendar : .hotkey
-        XCTAssertEqual(vm.step, expected)
-    }
-
-    func testResetOnboardingClearsMeetingRecordingSkippedFlag() {
-        let perms = MockPermissionService()
-        let stt = MockSTTClient()
-        let suite = "com.macparakeet.tests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-
-        let vm = makeViewModel(permissionService: perms, sttClient: stt, defaults: defaults)
-        vm.jump(to: .meetingRecording)
-        vm.skipMeetingRecordingStep()
-        XCTAssertTrue(defaults.bool(forKey: OnboardingViewModel.meetingRecordingSkippedKey))
-
-        vm.resetOnboarding()
-
-        XCTAssertFalse(vm.meetingRecordingSkipped)
-        XCTAssertNil(defaults.object(forKey: OnboardingViewModel.meetingRecordingSkippedKey))
-        XCTAssertEqual(vm.step, .welcome)
-    }
-
-    func testScreenRecordingGrantTransitionEmitsPermissionGrantedOnce() async throws {
-        let telemetry = OnboardingTelemetrySpy()
-        Telemetry.configure(telemetry)
-        defer { Telemetry.configure(NoOpTelemetryService()) }
-
-        let perms = MockPermissionService()
-        perms.screenRecordingPermissionSequence = [false, true, true]
-        let stt = MockSTTClient()
-        let defaults = UserDefaults(suiteName: "com.macparakeet.tests.\(UUID().uuidString)")!
-        let vm = makeViewModel(permissionService: perms, sttClient: stt, defaults: defaults)
-
-        vm.refresh()
-        try await Task.sleep(for: .milliseconds(60))
-        vm.refresh()
-        try await Task.sleep(for: .milliseconds(60))
-        vm.refresh()
-        try await Task.sleep(for: .milliseconds(60))
-
-        let grantedEvents = telemetry.snapshot().filter {
-            if case .permissionGranted(let permission) = $0 {
-                return permission == .screenRecording
-            }
-            return false
-        }
-        XCTAssertEqual(grantedEvents.count, 1)
-    }
-
-    func testRelaunchHintShowsAfterDelayWhenScreenRecordingStillNotGranted() async throws {
-        let perms = MockPermissionService()
-        perms.screenRecordingPermission = false
-        perms.requestScreenRecordingResult = false
-        let stt = MockSTTClient()
-        let defaults = UserDefaults(suiteName: "com.macparakeet.tests.\(UUID().uuidString)")!
-        let nowBox = MutableDateBox(Date(timeIntervalSince1970: 0))
-        let vm = makeViewModel(
-            permissionService: perms,
-            sttClient: stt,
-            defaults: defaults,
-            now: { nowBox.value }
-        )
-
-        vm.jump(to: .meetingRecording)
-        vm.requestScreenRecordingAccess()
-        try await Task.sleep(for: .milliseconds(60))
-        XCTAssertFalse(vm.showRelaunchHint)
-
-        nowBox.value = nowBox.value.addingTimeInterval(11)
-        vm.refresh()
-        try await Task.sleep(for: .milliseconds(60))
-        XCTAssertTrue(vm.showRelaunchHint)
-    }
-
     func testPermissionPollingLifecycleStopsAfterCancellation() async throws {
-        let perms = MockPermissionService()
-        perms.screenRecordingPermission = false
+        let perms = PollingPermissionService()
         let stt = MockSTTClient()
         let defaults = UserDefaults(suiteName: "com.macparakeet.tests.\(UUID().uuidString)")!
         let vm = makeViewModel(
@@ -319,17 +351,17 @@ final class OnboardingViewModelTests: XCTestCase {
         vm.startPermissionPolling()
         vm.startPermissionPolling()
         try await waitUntil(timeout: .milliseconds(500)) {
-            perms.checkScreenRecordingPermissionCallCount > 1
+            perms.checkMicrophonePermissionCallCount > 1
         }
-        let beforeStopCount = perms.checkScreenRecordingPermissionCallCount
+        let beforeStopCount = perms.checkMicrophonePermissionCallCount
         XCTAssertGreaterThan(beforeStopCount, 1)
 
         vm.stopPermissionPolling()
-        let atStopCount = perms.checkScreenRecordingPermissionCallCount
+        let atStopCount = perms.checkMicrophonePermissionCallCount
         try await Task.sleep(for: .milliseconds(100))
-        let firstSettledCount = perms.checkScreenRecordingPermissionCallCount
+        let firstSettledCount = perms.checkMicrophonePermissionCallCount
         try await Task.sleep(for: .milliseconds(100))
-        let secondSettledCount = perms.checkScreenRecordingPermissionCallCount
+        let secondSettledCount = perms.checkMicrophonePermissionCallCount
 
         // Allow at most one in-flight refresh tick to finish after cancellation.
         XCTAssertLessThanOrEqual(firstSettledCount, atStopCount + 1)
@@ -353,6 +385,29 @@ final class OnboardingViewModelTests: XCTestCase {
         let called = await stt.wasWarmUpCalled()
         XCTAssertTrue(called)
         XCTAssertTrue(vm.canContinueFromCurrentStep())
+    }
+
+    func testEngineWarmUpDownloadRemainsOnPath() async throws {
+        let perms = MockPermissionService()
+        let stt = MockSTTClient()
+        let suite = "com.macparakeet.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+
+        let vm = makeViewModel(permissionService: perms, sttClient: stt, defaults: defaults)
+        vm.jump(to: .engine)
+        vm.startEngineWarmUp()
+        try await Task.sleep(for: .milliseconds(150))
+
+        XCTAssertEqual(vm.engineState, .ready)
+        let called = await stt.wasWarmUpCalled()
+        XCTAssertTrue(called, "Speech model warm-up must still occur on the 6-step path")
+
+        // Once the engine is ready, the final .engine -> .done transition must
+        // complete the 6-step flow end-to-end (the last goNext() in the path).
+        XCTAssertTrue(vm.canContinueFromCurrentStep(), "engine should allow continue once ready")
+        vm.goNext()
+        XCTAssertEqual(vm.step, .done, "the .engine -> .done transition completes the 6-step flow")
     }
 
     func testEngineWarmUpUsesWhisperForCJKPreferredLanguageWhenModelIsCached() async throws {
