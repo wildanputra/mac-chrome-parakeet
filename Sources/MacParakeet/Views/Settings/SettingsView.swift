@@ -1024,10 +1024,32 @@ struct SettingsView: View {
 
                 settingsToggleRow(
                     title: "Live transcript preview",
-                    detail: "Shows a short in-progress transcript above the dictation pill while recording. Available with the Parakeet and Nemotron engines, not Whisper.",
+                    detail: "Shows a running transcript above the dictation pill as you speak. Works with the Parakeet and Nemotron engines; not yet available with Whisper.",
                     isBeta: true,
-                    isOn: $viewModel.showLiveDictationPreview
+                    // Animate via the binding so only this toggle's state change
+                    // animates the sub-row reveal/reflow — not a blanket
+                    // container animation that could catch unrelated controls.
+                    isOn: $viewModel.showLiveDictationPreview.animation(.easeInOut(duration: 0.2))
                 )
+
+                if viewModel.showLiveDictationPreview {
+                    Divider()
+                    HStack(alignment: .center) {
+                        rowText(
+                            title: "Preview text size",
+                            detail: "Text size for the live preview above the dictation pill."
+                        )
+                        Spacer(minLength: DesignSystem.Spacing.md)
+                        Picker("Preview text size", selection: $viewModel.dictationPreviewTextSize) {
+                            ForEach(DictationPreviewTextSize.allCases, id: \.self) { size in
+                                Text(size.displayTitle).tag(size)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 200)
+                    }
+                }
 
                 Divider()
 
