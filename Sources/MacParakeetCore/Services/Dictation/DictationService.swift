@@ -1326,7 +1326,14 @@ public actor DictationService: DictationServiceProtocol {
                     startedAt: startedAt
                 )
             }
-            return FormatterOutcome(text: nil, run: run, resolution: resolution)
+            // Drop the routing resolution on the failure path: formatting did
+            // not run, so the dictation falls back to standard cleanup. Keeping
+            // the resolution here would stamp the matched profile onto the saved
+            // record (see the provenance write in stopRecording), making History
+            // claim "Formatted with the '<profile>' prompt" for text that was
+            // never formatted by it. The failed `run` still records the attempt
+            // for telemetry.
+            return FormatterOutcome(text: nil, run: run, resolution: nil)
         }
     }
 
