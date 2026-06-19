@@ -31,6 +31,17 @@
 > Remaining: SenseVoice/Paraformer reproduced locally (os_log capture gap; cited
 > from FluidAudio's published numbers for now), Qwen3-ASR & Moonshine (MLX, deferred).
 
+> **Outcome & decision 2026-06-19 (benchmark complete).** The harness is hardened
+> and independently verified in **PR #568** (bootstrap + paired-delta CIs, scorer
+> tests, speed/memory micro-benchmark, pinned-version reproducibility, committed
+> evidence). Decision recorded in **ADR-001 (2026-06-19 amendment + Cohere
+> addendum)**: **Cohere is the recommended next engine — an opt-in Beta gated to
+> ≥16 GB RAM — and it is FluidAudio CoreML, NOT MLX** (public `CoherePipeline` in
+> FluidAudio ≥ 0.15.4; no new runtime). The MLX runtime path (Phase 3) is
+> therefore needed only for Qwen3-ASR / Moonshine, which stay deferred. The
+> stale Tier-3 / Phase-3 text below that filed Cohere under the MLX path is
+> corrected inline.
+
 ## North Star tie-in
 
 MacParakeet is "a fast, local-first voice app for Mac." Every model decision
@@ -151,12 +162,15 @@ multilingual + EN (Beta), WhisperKit large-v3-turbo. All reachable via
 - **Kyutai STT 2.6B** — CC-BY-4.0, English, streaming (2.5s delay), MLX weights
   + moshi-swift. Larger; watch FluidAudio for a CoreML conversion.
 
-**Tier 3 — accuracy leaders, integration unproven on-device:**
+**Tier 3 — accuracy leaders (integration cost varies per model):**
 - **Cohere Transcribe (cohere-transcribe-03-2026)** — Apache-2.0, 2B, **#1 on
   the Open ASR Leaderboard at 5.42% avg** (LibriSpeech-clean 1.25%), 14 langs
-  incl. KO/JA/ZH/AR, Conformer enc + Transformer dec. **MLX path exists**
-  (mlx-audio); no production CoreML/Swift yet. Benchmark for quality now;
-  integrate only if the accuracy edge justifies the work.
+  incl. KO/JA/ZH/AR, Conformer enc + Transformer dec. **Runs on-device via
+  FluidAudio CoreML** (q8 repo `FluidInference/cohere-transcribe-03-2026-coreml`,
+  public `CoherePipeline` in FluidAudio ≥ 0.15.4) — **no MLX needed** (the earlier
+  "MLX path exists; no CoreML yet" note was wrong). Benchmarked this session;
+  recommended as an opt-in ≥16 GB add — see the 2026-06-19 outcome above and
+  ADR-001.
 - **Canary-1B-flash** — CC-BY-4.0, multilingual + translation; FluidInference
   (mobius) has CoreML conversion in progress. Watch the FluidAudio roadmap.
 
@@ -184,19 +198,23 @@ Small 24B (too large), all cloud APIs (Deepgram/AssemblyAI/ElevenLabs/Speechmati
 1. Tier 1: run SenseVoice/Paraformer via the FluidAudio CLI (already built at
    `~/asr-bench/FluidAudio-0154`). Near-free.
 2. Tier 2/3: standalone MLX/Python runners (not integrated) for Qwen3-ASR,
-   Moonshine, Kyutai, Cohere Transcribe — accuracy on the suite + on-device
-   speed/RSS on this machine. Score through the same normalizer.
+   Moonshine, Kyutai — accuracy on the suite + on-device speed/RSS on this
+   machine. (Cohere Transcribe is **done** — it ran via the FluidAudio CLI, not a
+   standalone MLX runner; see the 2026-06-19 outcome.) Score through the same
+   normalizer.
 3. Publish the full matrix: model | langs | WER (per dataset + macro) | streaming |
    license | size | RTFx | peak RSS | on-device runtime | verdict.
 
 ### Phase 3 — Integration decisions (needs owner steer + ADRs)
-- **Near-term, low-cost:** add SenseVoice-Small as an optional FluidAudio engine
-  (multilingual/ZH/JP/KO + emotion) — mirrors how Nemotron was added. Likely a
-  clear win if Phase 2 confirms.
+- **Near-term, low-cost (FluidAudio CoreML, no new runtime):** **Cohere
+  Transcribe** is the benchmark's recommended add — an opt-in Beta gated to
+  ≥16 GB RAM (ADR-001, 2026-06-19). SenseVoice-Small is a second candidate
+  (multilingual/ZH/JP/KO + emotion). Both mirror how Nemotron/Unified were added.
 - **Strategic, ADR-scale:** an **MLX runtime path** (new ADR, mirrors ADR-021
-  WhisperKit) to unlock Qwen3-ASR (multilingual flagship), Moonshine (low-latency
-  dictation), and eventually Cohere. This is the big fork — it adds a third
-  on-device runtime family alongside FluidAudio/CoreML and WhisperKit.
+  WhisperKit) to unlock Qwen3-ASR (multilingual flagship) and Moonshine
+  (low-latency dictation) — the candidates that genuinely need MLX. This is the
+  big fork — it adds a third on-device runtime family alongside FluidAudio/CoreML
+  and WhisperKit. (Cohere does **not** require this fork.)
 - Decide per winner: default vs opt-in, language routing, model download UX,
   Settings/CLI surfacing, telemetry.
 
