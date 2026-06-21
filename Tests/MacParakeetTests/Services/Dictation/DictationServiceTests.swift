@@ -310,16 +310,16 @@ final class DictationServiceTests: XCTestCase {
         XCTAssertEqual(operation["language"], "ko")
     }
 
-    func testStopRecordingUsesLiveNemotronResultWhenAvailable() async throws {
+    func testStopRecordingUsesRecordedFileEvenWhenLiveFinalIsAvailable() async throws {
         service = DictationService(
             audioProcessor: mockAudio,
             sttTranscriber: mockSTT,
             dictationRepo: dictationRepo,
             shouldAttemptLiveDictationTranscription: { true }
         )
-        await mockSTT.configure(result: STTResult(text: "file fallback"))
+        await mockSTT.configure(result: STTResult(text: "file final"))
         await mockSTT.configureLive(result: STTResult(
-            text: "live final",
+            text: "live final missing tail",
             words: [],
             language: "en",
             engine: .nemotron,
@@ -336,18 +336,16 @@ final class DictationServiceTests: XCTestCase {
         await mockAudio.emitLiveSamples([0.1, 0.2, 0.3])
         let result = try await service.stopRecording()
 
-        XCTAssertEqual(result.dictation.rawTranscript, "live final")
-        XCTAssertEqual(result.dictation.engine, "nemotron")
-        XCTAssertEqual(result.dictation.engineVariant, NemotronModelVariant.multilingual1120.rawValue)
+        XCTAssertEqual(result.dictation.rawTranscript, "file final")
         let transcribeCallCount = await mockSTT.transcribeCallCount
         let liveAppendCallCount = await mockSTT.liveAppendCallCount
         let liveFinishCallCount = await mockSTT.liveFinishCallCount
-        XCTAssertEqual(transcribeCallCount, 0)
+        XCTAssertEqual(transcribeCallCount, 1)
         XCTAssertEqual(liveAppendCallCount, 1)
         XCTAssertEqual(liveFinishCallCount, 1)
     }
 
-    func testLiveNemotronPreviewDisabledStillUsesLiveFinalButHidesPartials() async throws {
+    func testLiveNemotronPreviewDisabledStillUsesRecordedFileAndHidesPartials() async throws {
         service = DictationService(
             audioProcessor: mockAudio,
             sttTranscriber: mockSTT,
@@ -355,7 +353,7 @@ final class DictationServiceTests: XCTestCase {
             shouldAttemptLiveDictationTranscription: { true },
             shouldShowDictationPreview: { false }
         )
-        await mockSTT.configure(result: STTResult(text: "file fallback"))
+        await mockSTT.configure(result: STTResult(text: "file final"))
         await mockSTT.configureLive(result: STTResult(
             text: "live final",
             words: [],
@@ -374,11 +372,11 @@ final class DictationServiceTests: XCTestCase {
         await mockAudio.emitLiveSamples([0.1, 0.2, 0.3])
         let result = try await service.stopRecording()
 
-        XCTAssertEqual(result.dictation.rawTranscript, "live final")
+        XCTAssertEqual(result.dictation.rawTranscript, "file final")
         let transcribeCallCount = await mockSTT.transcribeCallCount
         let liveAppendCallCount = await mockSTT.liveAppendCallCount
         let liveFinishCallCount = await mockSTT.liveFinishCallCount
-        XCTAssertEqual(transcribeCallCount, 0)
+        XCTAssertEqual(transcribeCallCount, 1)
         XCTAssertEqual(liveAppendCallCount, 1)
         XCTAssertEqual(liveFinishCallCount, 1)
     }

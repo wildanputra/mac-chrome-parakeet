@@ -53,8 +53,9 @@ private struct LiveDictationTranscriptionState: Sendable {
     let task: Task<STTResult, Error>
     /// Set when the live stream is no longer a faithful rendition of the
     /// recorded WAV (backpressure dropped samples, or the pre-roll was
-    /// discarded from the file after being streamed). A degraded session's
-    /// final text is discarded and the recorded file is transcribed instead.
+    /// discarded from the file after being streamed). A degraded session is
+    /// cancelled instead of flushed; the final dictation result always comes
+    /// from recorded-file transcription.
     let degradeReason: OSAllocatedUnfairLock<String?>
 
     func markDegraded(reason: String) {
@@ -425,15 +426,14 @@ public actor DictationService: DictationServiceProtocol {
             let audioURL = try await audioProcessor.stopCapture()
             let device = await audioProcessor.recordingDeviceInfo
             await cancelDisplayPreview(sessionID: currentSession, clearText: false)
-            let liveResult = await finishLiveDictationTranscription(sessionID: currentSession)
+            _ = await finishLiveDictationTranscription(sessionID: currentSession)
             logger.debug(
                 "dictation_capture_stopped session=\(currentSession, privacy: .public) path=\(audioURL.path, privacy: .private)"
             )
             let result = try await withCurrentObservabilityContextIfAny {
                 try await processCapturedAudio(
                     audioURL: audioURL,
-                    formatterContext: formatterContext,
-                    liveResult: liveResult
+                    formatterContext: formatterContext
                 )
             }
             // Guard against reentrancy: a new session may have started during
@@ -531,9 +531,8 @@ public actor DictationService: DictationServiceProtocol {
             return
         }
         // The pre-roll was already mirrored into the live STT stream, but the
-        // recorder will now trim it from the WAV. The live final would keep
-        // the discarded media audio, so it can no longer stand in for the
-        // recorded file.
+        // recorder will now trim it from the WAV. Cancel the live stream rather
+        // than flushing a final over audio that is no longer in the source file.
         if let state = liveTranscriptionState, state.dictationSessionID == activeSessionID {
             state.markDegraded(reason: "preroll_discarded")
         }
@@ -1050,8 +1049,7 @@ public actor DictationService: DictationServiceProtocol {
             let trimmedText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmedText.isEmpty else {
                 // An empty live final is indistinguishable from a streaming
-                // hiccup; let the recorded file decide whether the dictation
-                // was really empty before it is silently dismissed.
+                // hiccup. The recorded-file final remains the source of truth.
                 AudioCaptureDiagnostics.append("dictation_live_transcribe_empty_fallback")
                 return nil
             }
@@ -1117,7 +1115,6 @@ public actor DictationService: DictationServiceProtocol {
     private func processCapturedAudio(
         audioURL: URL,
         formatterContext: AppPromptContext?,
-        liveResult: STTResult? = nil
     ) async throws -> DictationResult {
         // Track whether the audio file is consumed (moved or explicitly deleted).
         // If an error occurs before that point, clean up the temp file.
@@ -1131,15 +1128,7 @@ public actor DictationService: DictationServiceProtocol {
         AudioCaptureDiagnostics.append(
             "dictation_transcribe_begin file_bytes=\(Self.fileSizeBytes(at: audioURL).map(String.init) ?? "unknown")"
         )
-        let result: STTResult
-        if let liveResult {
-            result = liveResult
-            AudioCaptureDiagnostics.append(
-                "dictation_transcribe_live_result chars=\(liveResult.text.count) engine=\(liveResult.engine.rawValue) variant=\(liveResult.engineVariant ?? "none")"
-            )
-        } else {
-            result = try await sttTranscriber.transcribe(audioPath: audioURL.path, job: .dictation)
-        }
+        let result = try await sttTranscriber.transcribe(audioPath: audioURL.path, job: .dictation)
         logger.debug("dictation_transcription_complete chars=\(result.text.count, privacy: .public)")
         let transcriptWordCount = result.words.isEmpty
             ? Observability.wordCount(result.text)

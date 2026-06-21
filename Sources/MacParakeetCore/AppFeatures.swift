@@ -75,10 +75,10 @@ public enum AppFeatures {
     /// `vad_model_prep` allowlisted and deployed before shipping flag-on builds.
     public static let meetingVadLiveChunkingEnabled: Bool = true
 
-    /// Display-only live dictation preview. Nemotron multilingual uses its
-    /// native live partial path; Parakeet uses the single-flight tail-window
-    /// sample preview path. Whisper remains default-off until its per-pass
-    /// latency is measured on a real model.
+    /// Display-only live dictation preview. Nemotron and Parakeet Unified use
+    /// their native live partial paths; Parakeet TDT builds use the single-flight
+    /// tail-window sample preview path. Whisper remains default-off until its
+    /// per-pass latency is measured on a real model.
     public static let liveDictationStreamingEnabled: Bool = true
 
     /// App-aware AI Formatter profiles (REQ-LLM-004, issues #117/#412). When

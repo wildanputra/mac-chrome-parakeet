@@ -15,8 +15,9 @@ import os
 /// `parakeet-unified-offline-15s` path because that remains the best-quality
 /// stop-time transcription mode. Live dictation uses the native
 /// `StreamingUnifiedAsrManager` (`parakeet-unified-2080ms`) on the interactive
-/// lane to emit partial transcripts while capture is active; if that live path
-/// fails, `DictationService` falls back to the recorded-file offline result.
+/// lane only to emit partial transcripts while capture is active;
+/// `DictationService` still uses the recorded-file offline result for the final
+/// paste/history transcript.
 ///
 /// Two lanes (interactive for dictation, background for file/meeting) each get
 /// their own `UnifiedAsrManager` so concurrent dictation + file/meeting work

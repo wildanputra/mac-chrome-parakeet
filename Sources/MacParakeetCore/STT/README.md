@@ -136,9 +136,10 @@ dictation transcribe jobs are rejected with `engineBusy`, engine-switch
 availability reports `transcribing`, and quiesce/shutdown cancels the
 session (or waits out an in-flight finish). Meeting live chunks and
 finalize are unaffected — they stay on the background slot.
-`DictationService` always records the WAV alongside the live stream and
-falls back to recorded-file transcription if the live session fails,
-drops samples, or finishes empty.
+`DictationService` always records the WAV alongside the live stream and uses
+recorded-file transcription for the final paste/history result. Native live
+partials remain display-only; if the live stream fails, drops samples, or
+finishes empty, only the preview is degraded.
 
 **Display-only dictation preview (Parakeet/Whisper-capable path).**
 Dictation can request a single-flight tail-window preview via
