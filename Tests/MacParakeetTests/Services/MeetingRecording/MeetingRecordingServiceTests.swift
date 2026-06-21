@@ -816,6 +816,44 @@ final class MeetingRecordingServiceTests: XCTestCase {
         XCTAssertNotNil(output.sourceAlignment.microphone)
     }
 
+    func testLivePreviewEmitsTextOnlyChunkResults() async throws {
+        let captureService = MockMeetingAudioCaptureService()
+        let audioConverter = MockMeetingAudioFileConverter()
+        let sttClient = PrefixScriptedMeetingSTTClient(
+            microphoneSteps: [
+                .result(STTResult(text: "hello unified preview", words: [])),
+            ]
+        )
+        let service = MeetingRecordingService(
+            audioCaptureService: captureService,
+            audioConverter: audioConverter,
+            sttTranscriber: sttClient
+        )
+
+        let updates = await service.transcriptUpdates
+        let nextUpdate = Task {
+            var iterator = updates.makeAsyncIterator()
+            return await iterator.next()
+        }
+
+        try await service.startRecording()
+
+        let microphoneBuffer = try XCTUnwrap(makeMonoFloatBuffer(frameCount: 80_000, sampleValue: 0.25))
+        await captureService.yield(.microphoneBuffer(
+            microphoneBuffer,
+            AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: 100.0))
+        ))
+
+        let maybeUpdate = await nextUpdate.value
+        let update = try XCTUnwrap(maybeUpdate)
+        XCTAssertEqual(update.words.map(\.word), ["hello", "unified", "preview"])
+        XCTAssertEqual(update.speakers, [SpeakerInfo(id: "microphone", label: "Me")])
+
+        let output = try await service.stopRecording()
+        defer { try? FileManager.default.removeItem(at: output.folderURL) }
+        XCTAssertNotNil(output.sourceAlignment.microphone)
+    }
+
     func testStaleChunkFailureFromPreviousSessionDoesNotPoisonNextSession() async throws {
         let captureService = MockMeetingAudioCaptureService()
         let audioConverter = MockMeetingAudioFileConverter()
