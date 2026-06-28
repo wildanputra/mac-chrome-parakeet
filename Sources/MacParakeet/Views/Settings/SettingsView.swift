@@ -160,6 +160,7 @@ struct SettingsView: View {
     /// the shared delete-confirmation alert on the Engine tab.
     @State private var pendingModelDeletion: PendingModelDeletion?
     @State private var pendingMeetingAudioRetention: PendingMeetingAudioRetention?
+    @State private var coherePolicyRelaunchInFlight = false
 
     init(
         viewModel: SettingsViewModel,
@@ -2586,11 +2587,11 @@ struct SettingsView: View {
                                 : "Your change is saved but takes effect after MacParakeet relaunches."
                         )
                         Spacer(minLength: DesignSystem.Spacing.md)
-                        Button("Relaunch to apply") {
+                        Button(coherePolicyRelaunchInFlight ? "Relaunching..." : "Relaunch to apply") {
                             relaunchToApplyComputePolicy()
                         }
                         .parakeetAction(.secondary)
-                        .disabled(viewModel.isMeetingRecordingActive)
+                        .disabled(viewModel.isMeetingRecordingActive || coherePolicyRelaunchInFlight)
                     }
                 }
             }
@@ -2602,8 +2603,9 @@ struct SettingsView: View {
     /// engine captures its compute units at construction, so the new policy is
     /// only read on the next load. Launches a fresh instance, then terminates
     /// this one through the app's normal teardown. Gated on
-    /// `isMeetingRecordingActive` (both here and on the button) so a relaunch
-    /// cannot interrupt a recording — mirroring the `SparkleUpdateGuard` rule.
+    /// `isMeetingRecordingActive` and `coherePolicyRelaunchInFlight` (both here
+    /// and on the button) so a relaunch cannot interrupt a recording or spawn
+    /// duplicate replacement instances — mirroring the `SparkleUpdateGuard` rule.
     ///
     /// This is the only deliberate `createsNewApplicationInstance` launch in
     /// the app, so the new and old instances briefly coexist (~1–2 s until the
@@ -2612,7 +2614,8 @@ struct SettingsView: View {
     /// shared GRDB store serializes with a busy-timeout, so the short window of
     /// two readers/writers resolves without corruption.
     private func relaunchToApplyComputePolicy() {
-        guard !viewModel.isMeetingRecordingActive else { return }
+        guard !viewModel.isMeetingRecordingActive, !coherePolicyRelaunchInFlight else { return }
+        coherePolicyRelaunchInFlight = true
         // Force the persisted policy to flush before the replacement instance
         // boots and reads `ComputePolicy.current()`. cfprefsd normally
         // coordinates this across processes, but flushing here removes any
@@ -2627,7 +2630,12 @@ struct SettingsView: View {
             // Only terminate once the replacement instance is actually running.
             // If the launch failed, leave this app running rather than quitting
             // into nothing — the user can retry instead of being stranded.
-            guard newInstance != nil, error == nil else { return }
+            guard newInstance != nil, error == nil else {
+                Task { @MainActor in
+                    coherePolicyRelaunchInFlight = false
+                }
+                return
+            }
             Task { @MainActor in
                 NSApplication.shared.terminate(nil)
             }
