@@ -165,11 +165,26 @@ public enum AudioDeviceManager {
     /// surface behind a CoreAudio aggregate.
     public static func defaultOutputBluetoothState() -> Bool? {
         guard let deviceID = defaultOutputDevice() else { return nil }
-        let transport = transportType(deviceID)
-        let subTransports = transport == kAudioDeviceTransportTypeAggregate
-            ? activeSubDeviceIDs(deviceID).map(transportType)
-            : []
-        return isBluetoothInput(transport: transport, activeSubDeviceTransports: subTransports)
+        guard let transport = resolvedTransportType(deviceID) else { return nil }
+
+        let subTransports: [UInt32]?
+        if transport == kAudioDeviceTransportTypeAggregate {
+            guard let subDeviceIDs = activeSubDeviceIDsIfAvailable(deviceID) else { return nil }
+            var resolvedSubTransports: [UInt32] = []
+            resolvedSubTransports.reserveCapacity(subDeviceIDs.count)
+            for subDeviceID in subDeviceIDs {
+                guard let subTransport = resolvedTransportType(subDeviceID) else { return nil }
+                resolvedSubTransports.append(subTransport)
+            }
+            subTransports = resolvedSubTransports
+        } else {
+            subTransports = []
+        }
+
+        return bluetoothOutputState(
+            transport: transport,
+            activeSubDeviceTransports: subTransports
+        )
     }
 
     /// True when audio output is currently routed to a Bluetooth device.
@@ -265,6 +280,10 @@ public enum AudioDeviceManager {
 
     /// Returns the transport type of a device (built-in, bluetooth, USB, etc.).
     public static func transportType(_ deviceID: AudioDeviceID) -> UInt32 {
+        resolvedTransportType(deviceID) ?? 0
+    }
+
+    static func resolvedTransportType(_ deviceID: AudioDeviceID) -> UInt32? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyTransportType,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -273,7 +292,7 @@ public enum AudioDeviceManager {
         var transport: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)
         let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &transport)
-        guard status == noErr else { return 0 }
+        guard status == noErr else { return nil }
         return transport
     }
 
@@ -305,8 +324,20 @@ public enum AudioDeviceManager {
         transport: UInt32,
         activeSubDeviceTransports: [UInt32]
     ) -> Bool {
+        bluetoothOutputState(
+            transport: transport,
+            activeSubDeviceTransports: activeSubDeviceTransports
+        ) ?? false
+    }
+
+    static func bluetoothOutputState(
+        transport: UInt32?,
+        activeSubDeviceTransports: [UInt32]?
+    ) -> Bool? {
+        guard let transport else { return nil }
         if isBluetoothTransportType(transport) { return true }
         guard transport == kAudioDeviceTransportTypeAggregate else { return false }
+        guard let activeSubDeviceTransports else { return nil }
         return activeSubDeviceTransports.contains(where: isBluetoothTransportType)
     }
 
@@ -323,17 +354,19 @@ public enum AudioDeviceManager {
     /// Returns nil if the device is not aggregate or has no sub-devices.
     public static func subDeviceTransport(_ deviceID: AudioDeviceID) -> UInt32? {
         // Only applies to aggregate devices
-        guard transportType(deviceID) == kAudioDeviceTransportTypeAggregate else { return nil }
+        guard resolvedTransportType(deviceID) == kAudioDeviceTransportTypeAggregate else { return nil }
         guard let firstID = activeSubDeviceIDs(deviceID).first else { return nil }
 
-        let subTransport = transportType(firstID)
-        guard subTransport != 0 else { return nil }
-        return subTransport
+        return resolvedTransportType(firstID)
     }
 
     /// Active sub-device IDs of an aggregate device, or `[]` when the device
     /// is not aggregate / the property is unavailable.
     private static func activeSubDeviceIDs(_ deviceID: AudioDeviceID) -> [AudioDeviceID] {
+        activeSubDeviceIDsIfAvailable(deviceID) ?? []
+    }
+
+    private static func activeSubDeviceIDsIfAvailable(_ deviceID: AudioDeviceID) -> [AudioDeviceID]? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioAggregateDevicePropertyActiveSubDeviceList,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -342,12 +375,13 @@ public enum AudioDeviceManager {
 
         var dataSize: UInt32 = 0
         var status = AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &dataSize)
-        guard status == noErr, dataSize > 0 else { return [] }
+        guard status == noErr else { return nil }
+        guard dataSize > 0 else { return [] }
 
         let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
         var subDeviceIDs = [AudioDeviceID](repeating: 0, count: count)
         status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &dataSize, &subDeviceIDs)
-        guard status == noErr else { return [] }
+        guard status == noErr else { return nil }
         // The fetch updates dataSize to the bytes actually written, which can
         // shrink if the aggregate's topology changed since the size query.
         // Trim so trailing zeroed slots (kAudioObjectUnknown) are never

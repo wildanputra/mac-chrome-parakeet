@@ -217,7 +217,7 @@ private extension CLISpecCommand {
         CLISpecCommand(
             ["config", "get"],
             summary: "Read one shared app/CLI configuration value.",
-            arguments: [.argument("key", summary: "Configuration key, such as speech-engine, parakeet-model, nemotron-model, nemotron-language, whisper-language, cohere-language, auto-meeting-titles, meeting-artifacts-folder, meeting-hook-enabled, meeting-hook-path, or meeting-hook-timeout.")],
+            arguments: [.argument("key", summary: "Configuration key, such as speech-engine, parakeet-model, nemotron-model, nemotron-language, whisper-language, cohere-language, voice-return-enabled, voice-return-triggers, prefer-built-in-mic-bluetooth-output, meeting-artifacts-folder, or meeting-hook-timeout.")],
             output: "Configuration value."
         ),
         CLISpecCommand(

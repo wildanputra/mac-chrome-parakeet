@@ -210,6 +210,9 @@ final class SpecCommandTests: XCTestCase {
         let nemotronLanguage = try XCTUnwrap(configKeys.first { ($0["key"] as? String) == "nemotron-language" })
         XCTAssertNil(nemotronLanguage["allowedValues"] as? [String])
 
+        let whisperLanguage = try XCTUnwrap(configKeys.first { ($0["key"] as? String) == "whisper-language" })
+        XCTAssertNil(whisperLanguage["allowedValues"] as? [String])
+
         let meetingAudioRetention = try XCTUnwrap(configKeys.first { ($0["key"] as? String) == "meeting-audio-retention" })
         XCTAssertNil(meetingAudioRetention["allowedValues"] as? [String])
 
