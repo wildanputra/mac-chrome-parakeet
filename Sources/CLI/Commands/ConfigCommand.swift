@@ -42,6 +42,8 @@ struct ConfigCommand: ParsableCommand {
           cohere-language           <Cohere language code>          default: en
           speaker-detection         on|off                          default: off
           auto-meeting-titles       on|off                          default: on
+          voice-return-enabled      on|off                          default: off
+          voice-return-triggers     phrase[|phrase...]              default: press return
           save-transcription-audio  on|off                          default: on
           meeting-audio-retention   keep-forever|                   default: keep-forever
                                     delete-after-<1-365>-days|
@@ -50,6 +52,7 @@ struct ConfigCommand: ParsableCommand {
           meeting-audio-source      microphone-and-system|          default: microphone-and-system
                                     microphone-only|
                                     system-only
+          prefer-built-in-mic-bluetooth-output on|off               default: on
           save-meeting-audio        on|off                          legacy alias
           youtube-audio-quality     m4a|best-available              default: m4a
           meeting-artifacts-folder  absolute path|default           default: app support
@@ -132,6 +135,18 @@ struct ConfigCommand: ParsableCommand {
             summary: "Enable or disable automatic meeting title generation."
         ),
         CLIConfigKeySpec(
+            key: "voice-return-enabled",
+            valueSyntax: "on|off",
+            allowedValues: ["on", "off"],
+            summary: "Enable or disable Voice Return phrase insertion."
+        ),
+        CLIConfigKeySpec(
+            key: "voice-return-triggers",
+            valueSyntax: "phrase[|phrase...]",
+            allowedValues: nil,
+            summary: "Voice Return trigger phrases separated by |."
+        ),
+        CLIConfigKeySpec(
             key: "save-transcription-audio",
             valueSyntax: "on|off",
             allowedValues: ["on", "off"],
@@ -148,6 +163,12 @@ struct ConfigCommand: ParsableCommand {
             valueSyntax: "microphone-and-system|microphone-only|system-only",
             allowedValues: ["microphone-and-system", "microphone-only", "system-only"],
             summary: "Default meeting capture source mode."
+        ),
+        CLIConfigKeySpec(
+            key: "prefer-built-in-mic-bluetooth-output",
+            valueSyntax: "on|off",
+            allowedValues: ["on", "off"],
+            summary: "Prefer the built-in mic while output is routed to Bluetooth."
         ),
         CLIConfigKeySpec(
             key: "save-meeting-audio",
@@ -310,6 +331,13 @@ struct ConfigCommand: ParsableCommand {
         case "auto-meeting-titles":
             let on = store.object(forKey: UserDefaultsAppRuntimePreferences.autoGenerateMeetingTitlesKey) as? Bool ?? true
             return on ? "on" : "off"
+        case "voice-return-enabled":
+            let on = store.object(forKey: UserDefaultsAppRuntimePreferences.voiceReturnEnabledKey) as? Bool ?? false
+            return on ? "on" : "off"
+        case "voice-return-triggers":
+            return displayVoiceReturnTriggers(
+                UserDefaultsAppRuntimePreferences.voiceReturnTriggerList(defaults: store)
+            )
         case "save-transcription-audio":
             let on = store.object(forKey: UserDefaultsAppRuntimePreferences.saveTranscriptionAudioKey) as? Bool ?? true
             return on ? "on" : "off"
@@ -317,6 +345,11 @@ struct ConfigCommand: ParsableCommand {
             return UserDefaultsAppRuntimePreferences.meetingAudioRetention(defaults: store).configurationValue
         case "meeting-audio-source":
             return MeetingAudioSourceMode.current(defaults: store).configurationValue
+        case "prefer-built-in-mic-bluetooth-output":
+            let on = store.object(
+                forKey: UserDefaultsAppRuntimePreferences.preferBuiltInMicWhenBluetoothOutputKey
+            ) as? Bool ?? true
+            return on ? "on" : "off"
         case "save-meeting-audio":
             let on = UserDefaultsAppRuntimePreferences(defaults: store).shouldSaveMeetingAudio
             return on ? "on" : "off"
@@ -392,6 +425,15 @@ struct ConfigCommand: ParsableCommand {
             let parsed = try parseBool(value, key: key)
             store.set(parsed, forKey: UserDefaultsAppRuntimePreferences.autoGenerateMeetingTitlesKey)
             return parsed ? "on" : "off"
+        case "voice-return-enabled":
+            let parsed = try parseBool(value, key: key)
+            store.set(parsed, forKey: UserDefaultsAppRuntimePreferences.voiceReturnEnabledKey)
+            return parsed ? "on" : "off"
+        case "voice-return-triggers":
+            let triggers = try parseVoiceReturnTriggers(value)
+            store.set(triggers, forKey: UserDefaultsAppRuntimePreferences.voiceReturnTriggersKey)
+            store.set(triggers.first, forKey: UserDefaultsAppRuntimePreferences.voiceReturnTriggerKey)
+            return displayVoiceReturnTriggers(triggers)
         case "save-transcription-audio":
             let parsed = try parseBool(value, key: key)
             store.set(parsed, forKey: UserDefaultsAppRuntimePreferences.saveTranscriptionAudioKey)
@@ -404,6 +446,10 @@ struct ConfigCommand: ParsableCommand {
             let mode = try parseMeetingAudioSourceMode(value)
             store.set(mode.rawValue, forKey: UserDefaultsAppRuntimePreferences.meetingAudioSourceModeKey)
             return mode.configurationValue
+        case "prefer-built-in-mic-bluetooth-output":
+            let parsed = try parseBool(value, key: key)
+            store.set(parsed, forKey: UserDefaultsAppRuntimePreferences.preferBuiltInMicWhenBluetoothOutputKey)
+            return parsed ? "on" : "off"
         case "save-meeting-audio":
             let parsed = try parseBool(value, key: key)
             UserDefaultsAppRuntimePreferences.saveMeetingAudioRetention(
@@ -591,6 +637,21 @@ struct ConfigCommand: ParsableCommand {
             throw ValidationError("Invalid value for meeting-audio-source: '\(value)'. Use microphone-and-system, microphone-only, or system-only.")
         }
         return mode
+    }
+
+    static func parseVoiceReturnTriggers(_ value: String) throws -> [String] {
+        let rawTriggers = value
+            .split(separator: "|", omittingEmptySubsequences: false)
+            .map(String.init)
+        let triggers = VoiceReturnTriggerPhrases.normalized(rawTriggers)
+        guard !triggers.isEmpty else {
+            throw ValidationError("Invalid value for voice-return-triggers: '\(value)'. Provide at least one trigger phrase.")
+        }
+        return triggers
+    }
+
+    static func displayVoiceReturnTriggers(_ triggers: [String]) -> String {
+        triggers.joined(separator: "|")
     }
 
     static func parseMeetingArtifactsFolder(_ value: String) throws -> String? {

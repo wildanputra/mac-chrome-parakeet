@@ -123,6 +123,10 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
   `on` maps to `keep-forever`, and `off` maps to `delete-immediately`.
 - `config get|set|list` now includes `meeting-audio-source`:
   `microphone-and-system` (default), `microphone-only`, or `system-only`.
+- `config get|set|list` now includes
+  `prefer-built-in-mic-bluetooth-output`, `voice-return-enabled`, and
+  `voice-return-triggers`, so support scripts can reproduce Bluetooth headset
+  routing and Voice Return settings without opening the GUI.
 - `prompts set --source file|youtube|podcast|meeting` scopes `--auto-run` /
   `--no-auto-run` to one transcription source, matching the app's
   source-scoped auto-run controls.

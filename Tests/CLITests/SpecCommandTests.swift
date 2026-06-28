@@ -213,6 +213,13 @@ final class SpecCommandTests: XCTestCase {
         let meetingAudioRetention = try XCTUnwrap(configKeys.first { ($0["key"] as? String) == "meeting-audio-retention" })
         XCTAssertNil(meetingAudioRetention["allowedValues"] as? [String])
 
+        let voiceReturnTriggers = try XCTUnwrap(configKeys.first { ($0["key"] as? String) == "voice-return-triggers" })
+        XCTAssertEqual(voiceReturnTriggers["valueSyntax"] as? String, "phrase[|phrase...]")
+        XCTAssertNil(voiceReturnTriggers["allowedValues"] as? [String])
+
+        let bluetoothMicPreference = try XCTUnwrap(configKeys.first { ($0["key"] as? String) == "prefer-built-in-mic-bluetooth-output" })
+        XCTAssertEqual(bluetoothMicPreference["allowedValues"] as? [String], ["on", "off"])
+
         let timeout = try XCTUnwrap(configKeys.first { ($0["key"] as? String) == "meeting-hook-timeout" })
         XCTAssertEqual(timeout["valueSyntax"] as? String, "seconds 1-300")
     }
