@@ -33,6 +33,34 @@ transcription so future helper updates never mutate the signed app bundle. To
 use a pre-fetched helper in release builds, set `YTDLP_PATH`; set
 `BUNDLE_YTDLP=0` only for diagnostic builds.
 
+Meeting echo suppression assets are optional for local/dev bundles, but any
+build that claims speaker-mode AEC readiness must bundle and verify both native
+assets:
+
+```bash
+export MACPARAKEET_MEETING_ECHO_LIBRARY=/absolute/path/to/liblocalvqe.dylib
+export MACPARAKEET_MEETING_ECHO_MODEL=/absolute/path/to/localvqe-v1.4-aec-200K-f32.gguf
+export MACPARAKEET_MEETING_ECHO_MODEL_SHA256=b6e43138588a83bfe903ab5e143b4020b91c1e1629f5a575ac5855ff0003c731
+export REQUIRE_MEETING_ECHO_ASSETS=1
+VERSION=X.Y.Z scripts/dist/build_app_bundle.sh
+```
+
+`build_app_bundle.sh` preserves the source GGUF filename by default; override
+with `MACPARAKEET_MEETING_ECHO_MODEL_NAME=<filename>.gguf` only when the source
+path is not the intended bundled name. The bundled runtime is copied to
+`Contents/Frameworks/liblocalvqe.dylib`; the selected model is copied under
+`Contents/Resources/MeetingEchoSuppression/`. Release bundles must contain
+exactly one GGUF model so asset verification and runtime model resolution cannot
+drift.
+
+`scripts/dist/verify_meeting_echo_assets.sh dist/MacParakeet.app` is the release
+gate. With `REQUIRE_MEETING_ECHO_ASSETS=1`, it fails if either asset is missing,
+if the model checksum does not match, if `liblocalvqe.dylib` is not executable,
+if required LocalVQE C symbols are not exported, or if `otool -L` shows
+non-portable dylib references outside `@rpath`, `@loader_path`, `/System/Library`,
+or `/usr/lib`. Without `REQUIRE_MEETING_ECHO_ASSETS=1`, missing assets are
+accepted and the app intentionally runs the meeting echo path as passthrough.
+
 Retained purchase activation config (normally unset in current free builds):
 
 ```bash
@@ -160,7 +188,13 @@ scripts/dist/build_app_bundle.sh                   # local/dev only: VERSION def
 VERSION=X.Y.Z scripts/dist/build_app_bundle.sh
 ```
 
-Verify: Look for `Embedded Sparkle.framework` and `Adding @executable_path/../Frameworks to rpath` in the output. The script will `exit 1` if Sparkle is missing.
+Verify: Look for `Embedded Sparkle.framework` and `Adding @executable_path/../Frameworks to rpath` in the output. For AEC-ready releases, also look for `Meeting echo assets verified`; the explicit post-build check is:
+
+```bash
+REQUIRE_MEETING_ECHO_ASSETS=1 scripts/dist/verify_meeting_echo_assets.sh dist/MacParakeet.app
+```
+
+The script will `exit 1` if Sparkle is missing or required echo assets fail verification.
 
 ### Step 2: Sign + notarize
 

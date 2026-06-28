@@ -144,6 +144,13 @@ enum MeetingEchoSuppressionFactory {
     static let defaultLibraryName = "liblocalvqe.dylib"
     static let defaultModelDirectoryName = "MeetingEchoSuppression"
     static let defaultModelName = "localvqe-v1.2-1.3M-f32.gguf"
+    static let bundledModelNames = [
+        "localvqe-v1.4-aec-200K-f32.gguf",
+        defaultModelName,
+        "localvqe-v1.3-4.8M-f32.gguf",
+        "localvqe-v1.4-aec-200K-bf16.gguf",
+        "localvqe-v1.4-aec-2.7K-f32.gguf",
+    ]
     private static let logger = Logger(
         subsystem: "com.macparakeet.core",
         category: "MeetingEchoSuppression"
@@ -218,17 +225,56 @@ enum MeetingEchoSuppressionFactory {
             fileManager: fileManager
         )
         let modelURL = existingFile(
-            candidates: [
-                configuration.modelURL,
-                bundle.resourceURL?
-                    .appendingPathComponent(defaultModelDirectoryName)
-                    .appendingPathComponent(defaultModelName),
-            ],
+            candidates: bundledModelCandidates(
+                configuration: configuration,
+                bundle: bundle,
+                fileManager: fileManager
+            ),
             fileManager: fileManager
         )
 
         guard let libraryURL, let modelURL else { return nil }
         return DynamicAssets(libraryURL: libraryURL, modelURL: modelURL)
+    }
+
+    static func bundledModelCandidates(
+        configuration: MeetingEchoSuppressionConfiguration,
+        bundle: Bundle,
+        fileManager: FileManager
+    ) -> [URL?] {
+        var candidates: [URL?] = [configuration.modelURL]
+        guard let modelDirectory = bundle.resourceURL?
+            .appendingPathComponent(defaultModelDirectoryName)
+        else {
+            return candidates
+        }
+
+        let knownNames = Set(bundledModelNames.map { $0.lowercased() })
+        candidates += bundledModelNames.map { modelDirectory.appendingPathComponent($0) }
+
+        let discovered = (try? fileManager.contentsOfDirectory(
+            at: modelDirectory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ))?
+            .filter { url in
+                guard url.pathExtension.lowercased() == "gguf",
+                      !knownNames.contains(url.lastPathComponent.lowercased())
+                else {
+                    return false
+                }
+                return (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
+        if discovered.count == 1 {
+            candidates += discovered
+        } else if discovered.count > 1 {
+            let names = discovered.map(\.lastPathComponent).joined(separator: ",")
+            logger.warning(
+                "meeting_echo_unknown_models_ambiguous count=\(discovered.count, privacy: .public) names=\(names, privacy: .public)"
+            )
+        }
+        return candidates
     }
 
     private static func existingFile(
@@ -346,7 +392,7 @@ private enum DynamicLibraryMeetingEchoProcessorError: Error, CustomStringConvert
     case libraryLoadFailed(String)
     case missingSymbol(String)
     case createFailed(String)
-    case invalidFrameSize(expected: Int, microphone: Int, reference: Int)
+    case invalidFrameSize(expected: Int, microphone: Int, reference: Int, output: Int)
     case processingFailed(code: Int32, message: String)
 
     var description: String {
@@ -357,8 +403,8 @@ private enum DynamicLibraryMeetingEchoProcessorError: Error, CustomStringConvert
             return "missing symbol: \(symbol)"
         case .createFailed(let message):
             return "create failed: \(message)"
-        case let .invalidFrameSize(expected, microphone, reference):
-            return "invalid frame size: expected=\(expected) microphone=\(microphone) reference=\(reference)"
+        case let .invalidFrameSize(expected, microphone, reference, output):
+            return "invalid frame size: expected=\(expected) microphone=\(microphone) reference=\(reference) output=\(output)"
         case let .processingFailed(code, message):
             return "processing failed: code=\(code) message=\(message)"
         }
@@ -461,7 +507,8 @@ final class DynamicLibraryMeetingEchoProcessor: MeetingEchoSuppressing, @uncheck
             throw DynamicLibraryMeetingEchoProcessorError.invalidFrameSize(
                 expected: frameSize,
                 microphone: microphone.count,
-                reference: reference.count
+                reference: reference.count,
+                output: output.count
             )
         }
 

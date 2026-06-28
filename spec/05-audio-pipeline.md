@@ -198,7 +198,12 @@ Mic Input    → SharedMicrophoneStream (+ Voice Processing I/O when active)┘ 
   AEC/noise suppression/AGC. The optional `StreamingMeetingEchoSuppressor`
   can transform paired mic/system samples when a LocalVQE-compatible runtime
   and model are available; otherwise it falls back to raw mic samples with
-  diagnostics. When the suppressor runs it aligns the system reference to the
+  diagnostics. Release bundles that claim meeting AEC readiness must include
+  `Contents/Frameworks/liblocalvqe.dylib` plus exactly one selected GGUF under
+  `Contents/Resources/MeetingEchoSuppression/`; distribution verification
+  checks the model checksum, required LocalVQE C symbols, executable bit, and
+  portable dylib references before the app can claim that path. When the
+  suppressor runs it aligns the system reference to the
   microphone using a runtime delay recovered from the audio by
   `MeetingEchoDelayEstimator` (normalized cross-correlation, confidence-gated),
   because the measurement harness showed that mic/reference time alignment is

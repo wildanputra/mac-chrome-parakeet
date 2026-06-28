@@ -36,6 +36,7 @@ set -euo pipefail
 #   MACPARAKEET_MEETING_ECHO_LIBRARY source dylib for meeting echo suppression
 #   MACPARAKEET_MEETING_ECHO_DYLIB_DIR optional directory of dependent dylibs to copy into Frameworks
 #   MACPARAKEET_MEETING_ECHO_MODEL source GGUF model for meeting echo suppression
+#   MACPARAKEET_MEETING_ECHO_MODEL_NAME optional bundled GGUF filename (default: source basename)
 #   MACPARAKEET_MEETING_ECHO_MODEL_SHA256 optional expected model SHA256
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -435,10 +436,20 @@ bundle_meeting_echo_assets() {
     exit 1
   fi
 
+  local model_name="${MACPARAKEET_MEETING_ECHO_MODEL_NAME:-$(basename "$model_src")}"
+  local model_name_lc
+  model_name_lc="$(printf '%s' "$model_name" | tr '[:upper:]' '[:lower:]')"
+  if [[ -z "$model_name" || "$model_name" == */* || "$model_name_lc" != *.gguf ]]; then
+    echo "Error: MACPARAKEET_MEETING_ECHO_MODEL_NAME must be a GGUF filename, not a path." >&2
+    exit 1
+  fi
+
   if [[ -n "${MACPARAKEET_MEETING_ECHO_MODEL_SHA256:-}" ]]; then
     local actual_sha
+    local expected_sha_lc
     actual_sha="$(shasum -a 256 "$model_src" | awk '{print $1}')"
-    if [[ "$actual_sha" != "$MACPARAKEET_MEETING_ECHO_MODEL_SHA256" ]]; then
+    expected_sha_lc="$(printf '%s' "$MACPARAKEET_MEETING_ECHO_MODEL_SHA256" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+    if [[ "$actual_sha" != "$expected_sha_lc" ]]; then
       echo "Error: meeting echo model SHA256 verification failed." >&2
       echo "  Expected: $MACPARAKEET_MEETING_ECHO_MODEL_SHA256" >&2
       echo "  Actual:   $actual_sha" >&2
@@ -458,12 +469,17 @@ bundle_meeting_echo_assets() {
   fi
 
   install -m 0755 "$library_src" "$FRAMEWORKS_DIR/liblocalvqe.dylib"
+  if command -v install_name_tool >/dev/null 2>&1; then
+    install_name_tool -id "@rpath/liblocalvqe.dylib" "$FRAMEWORKS_DIR/liblocalvqe.dylib"
+  else
+    echo "Warning: install_name_tool is not available; leaving meeting echo runtime install name unchanged." >&2
+  fi
   mkdir -p "$RESOURCES_DIR/MeetingEchoSuppression"
-  install -m 0644 "$model_src" "$RESOURCES_DIR/MeetingEchoSuppression/localvqe-v1.2-1.3M-f32.gguf"
+  install -m 0644 "$model_src" "$RESOURCES_DIR/MeetingEchoSuppression/$model_name"
   echo "Bundled meeting echo runtime: $FRAMEWORKS_DIR/liblocalvqe.dylib"
-  echo "Bundled meeting echo model: $RESOURCES_DIR/MeetingEchoSuppression/localvqe-v1.2-1.3M-f32.gguf"
+  echo "Bundled meeting echo model: $RESOURCES_DIR/MeetingEchoSuppression/$model_name"
 
-  "$ROOT_DIR/scripts/dist/verify_meeting_echo_assets.sh" "$APP_DIR"
+  MACPARAKEET_MEETING_ECHO_MODEL_NAME="$model_name" "$ROOT_DIR/scripts/dist/verify_meeting_echo_assets.sh" "$APP_DIR"
 }
 
 bundle_meeting_echo_assets
