@@ -120,6 +120,7 @@ public actor DictationService: DictationServiceProtocol {
     private var cancelResetTask: Task<Void, Never>?
     private var cancelGeneration: Int = 0
     private var pendingCancelledAudioURL: URL?
+    private var pendingCancelledDurationMs: Int?
     private var currentTelemetryContext = DictationTelemetryContext()
     private var recordingStartedAt: Date?
     private var currentOperationID: String?
@@ -432,6 +433,11 @@ public actor DictationService: DictationServiceProtocol {
         _state = .processing
         logger.debug("dictation_stop_processing_started session=\(currentSession, privacy: .public)")
 
+        // Sample recording length at the stop request, before stopCapture()'s
+        // WAV finalization, so the no-timestamp duration fallback and any
+        // failure/empty telemetry report capture length rather than length plus
+        // finalization/STT latency. Mirrors cancelRecording's capture point.
+        let capturedDurationMs = currentRecordingDurationMs()
         do {
             let audioURL = try await audioProcessor.stopCapture()
             let captureHealth = await audioProcessor.lastCaptureHealth
@@ -445,6 +451,7 @@ public actor DictationService: DictationServiceProtocol {
             let result = try await withCurrentObservabilityContextIfAny {
                 try await processCapturedAudio(
                     audioURL: audioURL,
+                    capturedDurationMs: capturedDurationMs,
                     formatterContext: formatterContext
                 )
             }
@@ -501,15 +508,18 @@ public actor DictationService: DictationServiceProtocol {
             if Self.isNoSpeechError(error) {
                 sendDictationOperation(
                     outcome: .empty,
-                    durationSeconds: currentRecordingDurationSeconds(),
+                    durationSeconds: resolvedDurationSeconds(capturedMs: capturedDurationMs),
                     errorType: Self.errorType(for: error),
                     device: device
                 )
-                Telemetry.send(.dictationEmpty(durationSeconds: currentRecordingDurationSeconds(), device: device))
+                Telemetry.send(.dictationEmpty(
+                    durationSeconds: resolvedDurationSeconds(capturedMs: capturedDurationMs),
+                    device: device
+                ))
             } else {
                 sendDictationOperation(
                     outcome: .failure,
-                    durationSeconds: currentRecordingDurationSeconds(),
+                    durationSeconds: resolvedDurationSeconds(capturedMs: capturedDurationMs),
                     errorType: Self.errorType(for: error),
                     device: device
                 )
@@ -576,12 +586,14 @@ public actor DictationService: DictationServiceProtocol {
         cancellationRequestedDuringStartSessionID = activeSessionID
         await cancelLiveDictationTranscription(sessionID: activeSessionID)
         await cancelDisplayPreview(sessionID: activeSessionID, clearText: true)
+        let capturedDurationMs = currentRecordingDurationMs()
         let audioURL = try? await audioProcessor.stopCapture()
         let device = await audioProcessor.recordingDeviceInfo
         pendingCancelledAudioURL = audioURL
+        pendingCancelledDurationMs = capturedDurationMs
         _state = .cancelled
         Telemetry.send(.dictationCancelled(
-            durationSeconds: currentRecordingDurationSeconds(),
+            durationSeconds: resolvedDurationSeconds(capturedMs: capturedDurationMs),
             reason: reason,
             device: device
         ))
@@ -607,6 +619,7 @@ public actor DictationService: DictationServiceProtocol {
         cancelGeneration += 1
         cancelResetTask?.cancel()
         cancelResetTask = nil
+        let cancelledDurationSeconds = resolvedDurationSeconds(capturedMs: pendingCancelledDurationMs)
         discardPendingCancelledAudio()
 
         if case .recording = _state {
@@ -621,7 +634,7 @@ public actor DictationService: DictationServiceProtocol {
         let device = await audioProcessor.recordingDeviceInfo
         sendDictationOperation(
             outcome: .cancelled,
-            durationSeconds: currentRecordingDurationSeconds(),
+            durationSeconds: cancelledDurationSeconds,
             cancelReason: pendingCancelReason,
             device: device
         )
@@ -635,6 +648,7 @@ public actor DictationService: DictationServiceProtocol {
             throw DictationServiceError.notCancelled
         }
         guard let audioURL = pendingCancelledAudioURL else {
+            pendingCancelledDurationMs = nil
             _state = .idle
             throw DictationServiceError.noPendingCancelledAudio
         }
@@ -643,6 +657,8 @@ public actor DictationService: DictationServiceProtocol {
         cancelResetTask?.cancel()
         cancelResetTask = nil
         pendingCancelledAudioURL = nil
+        let capturedDurationMs = pendingCancelledDurationMs
+        pendingCancelledDurationMs = nil
 
         let currentSession = activeSessionID
         let formatterContext = currentAIFormatterFinishContext ?? currentAIFormatterStartContext
@@ -651,7 +667,11 @@ public actor DictationService: DictationServiceProtocol {
         do {
             try rejectUnavailableCaptureIfNeeded(captureHealth, audioURL: audioURL)
             let result = try await withCurrentObservabilityContextIfAny {
-                try await processCapturedAudio(audioURL: audioURL, formatterContext: formatterContext)
+                try await processCapturedAudio(
+                    audioURL: audioURL,
+                    capturedDurationMs: capturedDurationMs,
+                    formatterContext: formatterContext
+                )
             }
             let device = await audioProcessor.recordingDeviceInfo
             // Guard against reentrancy: a new session may have started while we
@@ -701,15 +721,18 @@ public actor DictationService: DictationServiceProtocol {
             if Self.isNoSpeechError(error) {
                 sendDictationOperation(
                     outcome: .empty,
-                    durationSeconds: currentRecordingDurationSeconds(),
+                    durationSeconds: resolvedDurationSeconds(capturedMs: capturedDurationMs),
                     errorType: Self.errorType(for: error),
                     device: device
                 )
-                Telemetry.send(.dictationEmpty(durationSeconds: currentRecordingDurationSeconds(), device: device))
+                Telemetry.send(.dictationEmpty(
+                    durationSeconds: resolvedDurationSeconds(capturedMs: capturedDurationMs),
+                    device: device
+                ))
             } else {
                 sendDictationOperation(
                     outcome: .failure,
-                    durationSeconds: currentRecordingDurationSeconds(),
+                    durationSeconds: resolvedDurationSeconds(capturedMs: capturedDurationMs),
                     errorType: Self.errorType(for: error),
                     device: device
                 )
@@ -743,6 +766,7 @@ public actor DictationService: DictationServiceProtocol {
             try? FileManager.default.removeItem(at: url)
         }
         pendingCancelledAudioURL = nil
+        pendingCancelledDurationMs = nil
     }
 
     private func withCurrentObservabilityContextIfAny<T: Sendable>(
@@ -888,7 +912,7 @@ public actor DictationService: DictationServiceProtocol {
             return nil
         }
         guard let speechEngine = dictationPreviewSpeechEngine() else { return nil }
-        guard speechEngine.engine != .nemotron else { return nil }
+        guard speechEngine.engine != .nemotron, speechEngine.engine != .cohere else { return nil }
 
         var continuation: AsyncStream<[Float]>.Continuation?
         let stream = AsyncStream<[Float]>(bufferingPolicy: .bufferingNewest(120)) {
@@ -1143,6 +1167,7 @@ public actor DictationService: DictationServiceProtocol {
 
     private func processCapturedAudio(
         audioURL: URL,
+        capturedDurationMs: Int?,
         formatterContext: AppPromptContext?
     ) async throws -> DictationResult {
         // Track whether the audio file is consumed (moved or explicitly deleted).
@@ -1240,7 +1265,7 @@ public actor DictationService: DictationServiceProtocol {
 
         var dictation = Dictation(
             id: dictationID,
-            durationMs: computeDurationMs(from: result),
+            durationMs: Self.computeDurationMs(from: result, capturedDurationMs: capturedDurationMs),
             rawTranscript: result.text,
             cleanTranscript: formattedTranscript ?? cleanTranscript,
             processingMode: mode,
@@ -1294,9 +1319,12 @@ public actor DictationService: DictationServiceProtocol {
         )
     }
 
-    private func computeDurationMs(from result: STTResult) -> Int {
+    static func computeDurationMs(from result: STTResult, capturedDurationMs: Int?) -> Int {
         if let lastWord = result.words.last {
             return lastWord.endMs
+        }
+        if let capturedDurationMs, capturedDurationMs > 0 {
+            return capturedDurationMs
         }
         return result.text.split(separator: " ").count * 150
     }
@@ -1306,7 +1334,7 @@ public actor DictationService: DictationServiceProtocol {
         if case .cancelled = _state {
             sendDictationOperation(
                 outcome: .cancelled,
-                durationSeconds: currentRecordingDurationSeconds(),
+                durationSeconds: resolvedDurationSeconds(capturedMs: pendingCancelledDurationMs),
                 cancelReason: pendingCancelReason
             )
             discardPendingCancelledAudio()
@@ -1320,6 +1348,25 @@ public actor DictationService: DictationServiceProtocol {
     private func currentRecordingDurationSeconds() -> Double? {
         guard let recordingStartedAt else { return nil }
         return max(0, Date().timeIntervalSince(recordingStartedAt))
+    }
+
+    private func currentRecordingDurationMs() -> Int? {
+        guard let seconds = currentRecordingDurationSeconds() else { return nil }
+        return max(1, Int((seconds * 1000).rounded()))
+    }
+
+    /// Duration to report in telemetry, in seconds, preferring the snapshot
+    /// taken at stop/cancel time. The live-clock fallback is only a safety net
+    /// for the rare path that never captured a snapshot; by the time these
+    /// telemetry calls fire `recordingStartedAt` has usually drifted past the
+    /// real capture length, which is exactly why the snapshot wins.
+    private func resolvedDurationSeconds(capturedMs: Int?) -> Double? {
+        durationSeconds(fromMilliseconds: capturedMs) ?? currentRecordingDurationSeconds()
+    }
+
+    private func durationSeconds(fromMilliseconds milliseconds: Int?) -> Double? {
+        guard let milliseconds, milliseconds > 0 else { return nil }
+        return Double(milliseconds) / 1000.0
     }
 
     private static func fileSizeBytes(at url: URL) -> UInt64? {

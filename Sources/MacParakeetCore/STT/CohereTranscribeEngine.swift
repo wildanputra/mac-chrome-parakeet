@@ -230,7 +230,7 @@ public actor CohereTranscribeEngine: STTTranscribing {
         let outputCap = CohereAsrConfig.maxSeqLen - language.promptSequence.count
 
         if samples.count <= CohereAsrConfig.maxSamples {
-            let result = try await pipeline.transcribe(
+            let result = try await transcribeWithInferenceGate(
                 audio: samples, models: models, language: language)
             // Stopped on EOS before the ceiling → complete; return as-is.
             if result.tokenIds.count < outputCap - 1 {
@@ -298,7 +298,7 @@ public actor CohereTranscribeEngine: STTTranscribing {
             try Task.checkCancellation()
             let end = min(start + window, samples.count)
             let chunk = Array(samples[start..<end])
-            let result = try await pipeline.transcribe(
+            let result = try await transcribeWithInferenceGate(
                 audio: chunk, models: models, language: language)
             let text: String
             if result.tokenIds.count < outputCap - 1 {
@@ -329,6 +329,27 @@ public actor CohereTranscribeEngine: STTTranscribing {
             start += hop
         }
         return merged
+    }
+
+    private func transcribeWithInferenceGate(
+        audio: [Float],
+        models: CoherePipeline.LoadedModels,
+        language: CohereAsrConfig.Language
+    ) async throws -> CoherePipeline.TranscriptionResult {
+        // Cohere's default compute policy uses the Neural Engine, and the `.all`
+        // policy may still select ANE-backed Core ML kernels. Keep every
+        // Cohere inference on the same process-wide gate as Parakeet, Nemotron,
+        // Whisper, and diarization. The gate is a no-op on macOS 15+.
+        //
+        // Capture the pipeline actor in a local so the gate closure stays
+        // value-isolated rather than `self`-isolated: Swift 6 region isolation
+        // rejects sending a `self`-isolated closure across the gate. This
+        // mirrors the Parakeet/Nemotron engines, which hand the gate a local
+        // `manager` rather than touching `self` inside the closure.
+        let pipeline = self.pipeline
+        return try await ANEInferenceGate.shared.withExclusiveAccess {
+            try await pipeline.transcribe(audio: audio, models: models, language: language)
+        }
     }
 
     /// Joins two transcript fragments produced from overlapping audio windows by
@@ -706,7 +727,7 @@ public actor CohereTranscribeEngine: STTTranscribing {
         try Task.checkCancellation()
         let warmUpSamples = [Float](repeating: 0, count: CohereAsrConfig.sampleRate)
         do {
-            _ = try await pipeline.transcribe(
+            _ = try await transcribeWithInferenceGate(
                 audio: warmUpSamples, models: loaded, language: defaultLanguage)
         } catch {
             if error is CancellationError { throw error }
