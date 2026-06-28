@@ -2559,7 +2559,7 @@ struct SettingsView: View {
         if engine.speechEnginePreference == .cohere {
             SettingsCard(
                 title: "Cohere Performance",
-                subtitle: "Fastest runs on the GPU (~0.6 s per phrase) and pays a one-time ~2-minute optimization in the background after each launch. Balanced runs on the Neural Engine (~1.5 s) with no startup wait. Takes effect the next time Cohere loads.",
+                subtitle: "Fastest runs on the GPU (~0.6 s per phrase) and pays a one-time ~2-minute optimization in the background after each launch. Balanced runs on the Apple Neural Engine (ANE, ~1.5 s) with no startup wait. Takes effect the next time Cohere loads.",
                 icon: "bolt"
             ) {
                 HStack(alignment: .center) {
@@ -2604,6 +2604,13 @@ struct SettingsView: View {
     /// this one through the app's normal teardown. Gated on
     /// `isMeetingRecordingActive` (both here and on the button) so a relaunch
     /// cannot interrupt a recording — mirroring the `SparkleUpdateGuard` rule.
+    ///
+    /// This is the only deliberate `createsNewApplicationInstance` launch in
+    /// the app, so the new and old instances briefly coexist (~1–2 s until the
+    /// completion handler quits the old one). That overlap is intentional and
+    /// safe: the meeting gate above rules out the data-loss case, and the
+    /// shared GRDB store serializes with a busy-timeout, so the short window of
+    /// two readers/writers resolves without corruption.
     private func relaunchToApplyComputePolicy() {
         guard !viewModel.isMeetingRecordingActive else { return }
         // Force the persisted policy to flush before the replacement instance
