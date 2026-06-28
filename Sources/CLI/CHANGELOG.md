@@ -100,6 +100,13 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
   `transcribe` where applicable, and emits either `--json` or `--envelope`
   machine-readable output.
 
+### Changed
+
+- `spec --json` now documents `meetings export` JSON stdout mode as
+  `--stdout --format json`, matching the command's file-output default.
+- Plain-text `retranscribe` validation/misuse failures now use exit code `2`,
+  matching the JSON envelope path and the public exit-code contract.
+
 ## [2.11.0] -- 2026-06-28
 
 ### Added
@@ -424,10 +431,11 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
 - `meetings results list|add` exposes saved meeting PromptResults through the
   CLI. `add` stores externally generated output as a `PromptResult` without
   invoking an LLM, preserving the meeting transcript as the canonical object.
-- `meetings list --json`, `meetings show --json`, and `meetings export --format json`
-  now include `hasPromptResults` and `promptResultCount`, and Markdown exports
-  include the same count in metadata, so agents can tell whether structured
-  meeting outputs already exist before fetching result rows.
+- `meetings list --json`, `meetings show --json`, and `meetings export` with
+  `--stdout --format json` now include `hasPromptResults` and
+  `promptResultCount`, and Markdown exports include the same count in metadata,
+  so agents can tell whether structured meeting outputs already exist before
+  fetching result rows.
 - `llm` commands using `--provider lmstudio` now honor optional LM Studio API
   tokens via `--api-key`, `--api-key-env`, or `LM_API_TOKEN`.
 - `vocab snippets edit <id> --trigger ... --expansion ...` updates an existing
