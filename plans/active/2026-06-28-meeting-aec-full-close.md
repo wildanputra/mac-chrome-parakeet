@@ -31,25 +31,47 @@ assets or hardware that cannot be produced in a sandbox.
 - **U7 — diagnostics: PARTIAL.** Delay, last-adopted confidence, adopted-count,
   and rejected-count added to `MeetingEchoSuppressionDiagnostics` (metadata
   only) and the existing `meeting_echo_suppression_summary` log. Feedback-surface
-  wiring remains.
-- **U8 — docs: PARTIAL.** `spec/05-audio-pipeline.md` updated. Contract/CLI
-  updates wait on the cleaned-mic artifact (U3).
+  wiring remains. The cleaned-mic render emits a `meeting_cleaned_mic` capture
+  diagnostics line (outcome, processed/raw-fallback frames, failures, RMS ratio).
+- **U3 — cleaned mic artifact rendering after stop: DONE** (branch
+  `feat/meeting-aec-cleaned-mic`). `MeetingCleanedMicRenderer` (decode → align by
+  recorded start offsets → condition through a freshly built suppressor → AAC
+  encode) is wired into `MeetingRecordingService.stopRecording` (off-actor,
+  dual-source only) and `MeetingRecordingRecoveryService`. `MeetingRecordingOutput`
+  carries `cleanedMicrophoneAudioURL` and re-surfaces it via `loadArchived`.
+  Retention deletes `microphone-cleaned.m4a` with the other managed audio.
+- **U4 — prefer cleaned mic for final meeting STT: DONE.**
+  `transcribeMeetingSources` resolves the `.microphone` source through
+  `MeetingRecordingOutput.microphoneTranscriptionURL`, which prefers the cleaned
+  file when present and falls back to raw otherwise. The "health gate" is
+  presence + on-disk existence: the renderer guarantees every output frame is
+  either echo-cancelled or raw-fallback (never worse than raw per frame), so no
+  separate numeric runtime gate is applied. A global RMS/energy gate was
+  deliberately NOT used — on a real meeting it cannot distinguish good echo
+  removal (mic that was mostly bleed → correctly quiet) from a model that mutes
+  near-end voice; that near-end-fidelity risk is owned by model selection
+  (U5 chose echo-only v1.4) and real QA (U9), not a runtime heuristic.
 - **U5 — release verification + model decision gate: IN PROGRESS.** The
   packaging/verification half landed in PR #646
   (`scripts/dist/verify_meeting_echo_assets.sh`, runtime asset gates). The model
-  decision gate is now scored on the synthetic harness (branch
-  `feat/localvqe-u5-model-gate`, `MeetingAecModelScoringTests`): **echo-only
-  `localvqe-v1.4-aec-200K-f32` is the chosen release default candidate** because the
-  joint `v1.2` model zeroes the near-end voice (retain 0.00) while v1.4 preserves it
-  (retain ~1.0) at 35.6 dB ERLE — see "Model decision gate — result (2026-06-28)"
-  under U5. Remaining U5: build/sign/notarize the proprietary universal
-  `liblocalvqe.dylib` + bundle the chosen model, then flip `defaultModelName`.
-- **U3/U4/U6/U9 — DEFERRED.** These are blocked on bundling and
-  signing/notarizing the proprietary LocalVQE dylib + model (the remaining U5
-  binary work) and on real no-headphones speaker-mode QA (U9). Until a canceller is
-  bundled, production resolves to `PassthroughMicConditioner`, so an offline
-  cleaned-mic renderer (U3) and cleaned-mic final-STT routing (U4) would be inert;
-  landing them now would ship no-op scaffolding. They follow once U5's assets exist.
+  decision gate was scored on the synthetic harness (PR #650,
+  `MeetingAecModelScoringTests`): **echo-only `localvqe-v1.4-aec-200K-f32` is the
+  chosen release default candidate** because the joint `v1.2` model zeroes the
+  near-end voice (retain 0.00) while v1.4 preserves it (retain ~1.0) at 35.6 dB
+  ERLE — see "Model decision gate — result (2026-06-28)" under U5. Remaining U5:
+  build/sign/notarize the proprietary universal `liblocalvqe.dylib` + bundle the
+  chosen model, then flip `defaultModelName`.
+- **U8 — docs: UPDATED.** `spec/05-audio-pipeline.md` and
+  `spec/contracts/meeting-artifacts-v1.md` describe the derived artifact + STT
+  routing. CLI artifact output intentionally omits the cleaned mic: it is an
+  internal STT input, not a user-facing export the user opens.
+- **U3/U4 are inert in shipped builds until U5 bundles assets** — production
+  resolves to `PassthroughMicConditioner`, so `renderCleanedMicrophone` skips and
+  final STT reads raw `microphone.m4a` exactly as today. Landing the wiring now is
+  safe (no behavior change without assets), fully tested, and is the prerequisite
+  for U9; it is no longer deferred.
+- **U6/U9 — REMAINING.** U6: optional WebRTC AEC3 benchmark or skip-decision
+  record. U9: real no-headphones speaker-mode QA closes #605.
 
 ## Goal Capsule
 

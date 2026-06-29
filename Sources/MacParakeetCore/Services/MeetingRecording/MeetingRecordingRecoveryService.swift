@@ -45,14 +45,43 @@ public final class MeetingRecordingRecoveryService: MeetingRecordingRecoveryServ
     private let transcriptionRepo: TranscriptionRepositoryProtocol
     private let audioConverter: AudioFileConverting
     private let fileManager: FileManager
+    /// Builds the echo suppressor used to re-derive `microphone-cleaned.m4a`
+    /// during recovery when trustworthy source alignment is available. Set from
+    /// the injected `echoSuppressionConfiguration`; resolves to passthrough
+    /// (→ no cleaned file) without bundled AEC assets.
+    private let micConditionerFactory: @Sendable () -> any MicConditioning
 
-    public init(
+    public convenience init(
         meetingsRoot: URL = URL(fileURLWithPath: AppPaths.meetingRecordingsDir, isDirectory: true),
         lockFileStore: MeetingRecordingLockFileStoring = MeetingRecordingLockFileStore(),
         transcriptionService: TranscriptionServiceProtocol,
         transcriptionRepo: TranscriptionRepositoryProtocol,
         audioConverter: AudioFileConverting = AudioFileConverter(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        echoSuppressionConfiguration: MeetingEchoSuppressionConfiguration = .fromEnvironment()
+    ) {
+        self.init(
+            meetingsRoot: meetingsRoot,
+            lockFileStore: lockFileStore,
+            transcriptionService: transcriptionService,
+            transcriptionRepo: transcriptionRepo,
+            audioConverter: audioConverter,
+            fileManager: fileManager,
+            micConditionerFactory: {
+                MeetingEchoSuppressionFactory.makeConditioner(
+                    configuration: echoSuppressionConfiguration)
+            }
+        )
+    }
+
+    init(
+        meetingsRoot: URL = URL(fileURLWithPath: AppPaths.meetingRecordingsDir, isDirectory: true),
+        lockFileStore: MeetingRecordingLockFileStoring = MeetingRecordingLockFileStore(),
+        transcriptionService: TranscriptionServiceProtocol,
+        transcriptionRepo: TranscriptionRepositoryProtocol,
+        audioConverter: AudioFileConverting = AudioFileConverter(),
+        fileManager: FileManager = .default,
+        micConditionerFactory: @escaping @Sendable () -> any MicConditioning
     ) {
         self.meetingsRoot = meetingsRoot
         self.lockFileStore = lockFileStore
@@ -60,6 +89,7 @@ public final class MeetingRecordingRecoveryService: MeetingRecordingRecoveryServ
         self.transcriptionRepo = transcriptionRepo
         self.audioConverter = audioConverter
         self.fileManager = fileManager
+        self.micConditionerFactory = micConditionerFactory
     }
 
     /// Minimum size (bytes) for either `microphone.m4a` or `system.m4a` to
@@ -185,6 +215,16 @@ public final class MeetingRecordingRecoveryService: MeetingRecordingRecoveryServ
             logger.error("meeting_recovery_mix_failed_nonfatal session=\(lock.sessionId.uuidString, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
 
+        let recoveredBySource = Dictionary(
+            recoveredSources.map { ($0.source, $0.url) }, uniquingKeysWith: { first, _ in first })
+        let cleanedMicrophoneAudioURL = await renderCleanedMicrophone(
+            folderURL: folderURL,
+            microphoneURL: recoveredBySource[.microphone],
+            systemURL: recoveredBySource[.system],
+            sourceAlignment: sourceAlignment,
+            sessionID: lock.sessionId
+        )
+
         // Clamp the wall-clock fallback to non-negative. If the user's clock
         // skewed (NTP correction backwards, manual time change) between when
         // the lock file was written and when recovery runs, `startedAt` can
@@ -200,6 +240,7 @@ public final class MeetingRecordingRecoveryService: MeetingRecordingRecoveryServ
             mixedAudioURL: mixedURL,
             microphoneAudioURL: microphoneURL,
             systemAudioURL: systemURL,
+            cleanedMicrophoneAudioURL: cleanedMicrophoneAudioURL,
             durationSeconds: duration,
             sourceAlignment: sourceAlignment,
             speechEngine: lock.speechEngine,
@@ -234,6 +275,98 @@ public final class MeetingRecordingRecoveryService: MeetingRecordingRecoveryServ
                 return
             }
             try fileManager.removeItem(at: folderURL)
+        }
+    }
+
+    /// Re-derive `microphone-cleaned.m4a` from the recovered mic + system audio
+    /// (plan #605 U3) only when source alignment is trustworthy. Interrupted
+    /// sessions currently synthesize zero start offsets because lock files do not
+    /// persist per-source host times; in that case, return `nil` so final STT
+    /// falls back to raw mic instead of preferring a possibly misaligned cleaned
+    /// artifact. Render failures/cancellation fall back to raw mic and never
+    /// throw into the recovery path.
+    private func renderCleanedMicrophone(
+        folderURL: URL,
+        microphoneURL: URL?,
+        systemURL: URL?,
+        sourceAlignment: MeetingSourceAlignment,
+        sessionID: UUID
+    ) async -> URL? {
+        let outputURL = folderURL.appendingPathComponent(
+            MeetingCleanedMicRenderer.cleanedMicrophoneFileName)
+        guard let microphoneURL, let systemURL else {
+            discardCleanedMicrophoneArtifact(
+                at: outputURL, sessionID: sessionID, reason: "missing_source")
+            return nil
+        }
+        guard sourceAlignment.meetingOriginHostTime != nil,
+              sourceAlignment.microphone?.firstHostTime != nil,
+              sourceAlignment.system?.firstHostTime != nil else {
+            discardCleanedMicrophoneArtifact(
+                at: outputURL, sessionID: sessionID, reason: "synthetic_alignment")
+            logger.info("meeting_recovery_cleaned_mic session=\(sessionID.uuidString, privacy: .public) outcome=skipped reason=synthetic_alignment")
+            return nil
+        }
+        let conditionerFactory = micConditionerFactory
+        let rendererFileManager = UncheckedSendableBox(fileManager)
+
+        let task = Task.detached(priority: .utility) {
+            try await MeetingCleanedMicRenderer(fileManager: rendererFileManager.value).render(
+                microphoneURL: microphoneURL,
+                systemURL: systemURL,
+                sourceAlignment: sourceAlignment,
+                outputURL: outputURL,
+                conditioner: conditionerFactory())
+        }
+
+        let outcome: MeetingCleanedMicRenderer.Outcome
+        do {
+            outcome = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        } catch is CancellationError {
+            discardCleanedMicrophoneArtifact(
+                at: outputURL, sessionID: sessionID, reason: "renderer_cancelled")
+            logger.info("meeting_recovery_cleaned_mic session=\(sessionID.uuidString, privacy: .public) outcome=cancelled")
+            return nil
+        } catch {
+            discardCleanedMicrophoneArtifact(
+                at: outputURL, sessionID: sessionID, reason: "renderer_threw")
+            logger.info("meeting_recovery_cleaned_mic session=\(sessionID.uuidString, privacy: .public) outcome=skipped reason=renderer_threw")
+            return nil
+        }
+
+        switch outcome {
+        case .rendered(let result):
+            logger.info("meeting_recovery_cleaned_mic session=\(sessionID.uuidString, privacy: .public) outcome=rendered failures=\(result.processingFailures, privacy: .public)")
+            return result.outputURL
+        case .skipped(let reason):
+            discardCleanedMicrophoneArtifact(
+                at: outputURL,
+                sessionID: sessionID,
+                reason: "renderer_skipped_\(String(describing: reason))")
+            logger.info("meeting_recovery_cleaned_mic session=\(sessionID.uuidString, privacy: .public) outcome=skipped reason=\(String(describing: reason), privacy: .public)")
+            return nil
+        }
+    }
+
+    private func discardCleanedMicrophoneArtifact(
+        at outputURL: URL,
+        sessionID: UUID,
+        reason: String
+    ) {
+        guard fileManager.fileExists(atPath: outputURL.path) else { return }
+        do {
+            try fileManager.removeItem(at: outputURL)
+        } catch {
+            let removeError = error
+            if fileManager.createFile(atPath: outputURL.path, contents: Data(), attributes: nil) {
+                logger.warning("meeting_recovery_cleaned_mic_cleanup session=\(sessionID.uuidString, privacy: .public) outcome=truncated reason=\(reason, privacy: .public) remove_error=\(removeError.localizedDescription, privacy: .private)")
+            } else {
+                logger.error("meeting_recovery_cleaned_mic_cleanup session=\(sessionID.uuidString, privacy: .public) outcome=failed reason=\(reason, privacy: .public) remove_error=\(removeError.localizedDescription, privacy: .private) truncate_error=createFile returned false")
+            }
         }
     }
 

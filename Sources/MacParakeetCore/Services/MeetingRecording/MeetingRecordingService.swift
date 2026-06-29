@@ -560,8 +560,9 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
             throw MeetingAudioError.noAudioCaptured
         }
 
+        let availableSources = Set(inputURLs.map(source(for:)))
         let sourceAlignment = buildSourceAlignment(
-            availableSources: Set(inputURLs.map(source(for:))),
+            availableSources: availableSources,
             writerMetrics: writerMetrics
         )
         do {
@@ -591,6 +592,12 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
             )
             preservePlayableMeetingAudioFallback(inputURLs: inputURLs, outputURL: session.mixedAudioURL)
         }
+
+        let cleanedMicrophoneAudioURL = await renderCleanedMicrophone(
+            session: session,
+            availableSources: availableSources,
+            sourceAlignment: sourceAlignment
+        )
 
         let finalNotes = currentNotes
         let notesFileManager = MeetingNotesFile.SendableFileManager(fileManager)
@@ -644,6 +651,7 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
             mixedAudioURL: session.mixedAudioURL,
             microphoneAudioURL: session.microphoneAudioURL,
             systemAudioURL: session.systemAudioURL,
+            cleanedMicrophoneAudioURL: cleanedMicrophoneAudioURL,
             durationSeconds: durationSeconds,
             sourceAlignment: sourceAlignment,
             speechEngine: session.speechEngine,
@@ -1236,6 +1244,104 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
             assertionFailure("Unexpected URL passed to source(for:): \(url.path)")
         }
         return .system
+    }
+
+    /// Derive `microphone-cleaned.m4a` from the raw mic + system sources using a
+    /// freshly built echo suppressor (plan #605 U3). Returns the cleaned file URL
+    /// when a real suppressor is loaded and both sources exist; `nil` (raw mic
+    /// stays the truth) for single-source meetings, when no AEC assets are
+    /// bundled, or on any render failure/cancellation. Never throws into finalize.
+    private func renderCleanedMicrophone(
+        session: Session,
+        availableSources: Set<AudioSource>,
+        sourceAlignment: MeetingSourceAlignment
+    ) async -> URL? {
+        let outputURL = session.folderURL.appendingPathComponent(
+            MeetingCleanedMicRenderer.cleanedMicrophoneFileName)
+        // A cleaned mic needs a system reference to cancel against; single-source
+        // meetings have nothing to subtract.
+        guard availableSources.contains(.microphone),
+              availableSources.contains(.system) else {
+            discardCleanedMicrophoneArtifact(
+                at: outputURL, sessionID: session.id, reason: "missing_source")
+            return nil
+        }
+
+        let microphoneURL = session.microphoneAudioURL
+        let systemURL = session.systemAudioURL
+        let conditionerFactory = micConditionerFactory
+        let rendererFileManager = UncheckedSendableBox(fileManager)
+
+        // Heavy decode/DSP/encode runs off the actor; the suppressor (and its
+        // dylib load) is built inside the detached task so it never blocks
+        // recording state. A fresh suppressor starts from clean filter state
+        // rather than inheriting the live preview's adapted taps.
+        let task = Task.detached(priority: .utility) {
+            try await MeetingCleanedMicRenderer(fileManager: rendererFileManager.value).render(
+                microphoneURL: microphoneURL,
+                systemURL: systemURL,
+                sourceAlignment: sourceAlignment,
+                outputURL: outputURL,
+                conditioner: conditionerFactory())
+        }
+
+        let outcome: MeetingCleanedMicRenderer.Outcome
+        do {
+            outcome = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        } catch is CancellationError {
+            discardCleanedMicrophoneArtifact(
+                at: outputURL, sessionID: session.id, reason: "renderer_cancelled")
+            AudioCaptureDiagnostics.append(
+                "meeting_cleaned_mic session=\(session.id.uuidString) outcome=cancelled")
+            return nil
+        } catch {
+            discardCleanedMicrophoneArtifact(
+                at: outputURL, sessionID: session.id, reason: "renderer_threw")
+            AudioCaptureDiagnostics.append(
+                "meeting_cleaned_mic session=\(session.id.uuidString) outcome=skipped reason=renderer_threw_\(error.localizedDescription)")
+            return nil
+        }
+
+        switch outcome {
+        case .rendered(let result):
+            AudioCaptureDiagnostics.append(
+                "meeting_cleaned_mic session=\(session.id.uuidString) outcome=rendered duration_s=\(String(format: "%.3f", result.durationSeconds)) processed_frames=\(result.processedFrames) raw_fallback_frames=\(result.rawFallbackFrames) failures=\(result.processingFailures) rms_ratio=\(String(format: "%.2f", result.outputToRawRmsRatio))"
+            )
+            return result.outputURL
+        case .skipped(let reason):
+            discardCleanedMicrophoneArtifact(
+                at: outputURL,
+                sessionID: session.id,
+                reason: "renderer_skipped_\(String(describing: reason))")
+            AudioCaptureDiagnostics.append(
+                "meeting_cleaned_mic session=\(session.id.uuidString) outcome=skipped reason=\(String(describing: reason))"
+            )
+            return nil
+        }
+    }
+
+    private func discardCleanedMicrophoneArtifact(
+        at outputURL: URL,
+        sessionID: UUID,
+        reason: String
+    ) {
+        guard fileManager.fileExists(atPath: outputURL.path) else { return }
+        do {
+            try fileManager.removeItem(at: outputURL)
+        } catch {
+            let removeError = error
+            if fileManager.createFile(atPath: outputURL.path, contents: Data(), attributes: nil) {
+                AudioCaptureDiagnostics.append(
+                    "meeting_cleaned_mic_cleanup session=\(sessionID.uuidString) outcome=truncated reason=\(reason) remove_error=\(removeError.localizedDescription)")
+            } else {
+                AudioCaptureDiagnostics.append(
+                    "meeting_cleaned_mic_cleanup session=\(sessionID.uuidString) outcome=failed reason=\(reason) remove_error=\(removeError.localizedDescription) truncate_error=createFile returned false")
+            }
+        }
     }
 
     private func buildSourceAlignment(

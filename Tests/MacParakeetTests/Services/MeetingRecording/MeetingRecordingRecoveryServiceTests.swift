@@ -244,6 +244,56 @@ final class MeetingRecordingRecoveryServiceTests: XCTestCase {
         XCTAssertTrue(rows.first?.recoveredFromCrash == true)
     }
 
+    func testRecoverSkipsCleanedMicWhenRecoveredAlignmentIsSynthetic() async throws {
+        let fixture = try makeRecoverableSession()
+        let conditionerProbe = RecoveryMicConditionerFactoryProbe()
+        recoveryService = MeetingRecordingRecoveryService(
+            meetingsRoot: tempRoot,
+            lockFileStore: lockStore,
+            transcriptionService: transcriptionService,
+            transcriptionRepo: transcriptionRepo,
+            audioConverter: audioConverter,
+            micConditionerFactory: { @Sendable in conditionerProbe.make() }
+        )
+
+        _ = try await recoveryService.recover(fixture.lock)
+
+        let recording = try XCTUnwrap(transcriptionService.recordings.first)
+        XCTAssertNil(
+            recording.cleanedMicrophoneAudioURL,
+            "recovery synthesizes zero source offsets, so it must not prefer a derived cleaned mic")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.folderURL.appendingPathComponent("microphone-cleaned.m4a").path))
+        XCTAssertEqual(
+            conditionerProbe.buildCount,
+            0,
+            "synthetic alignment should skip before building or running the cleaner")
+    }
+
+    func testRecoverDeletesStaleCleanedMicWhenRecoveredAlignmentIsSynthetic() async throws {
+        let fixture = try makeRecoverableSession()
+        let staleCleanedURL = fixture.folderURL.appendingPathComponent("microphone-cleaned.m4a")
+        try Data("partial m4a fragment".utf8).write(to: staleCleanedURL)
+
+        _ = try await recoveryService.recover(fixture.lock)
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: staleCleanedURL.path),
+            "synthetic recovery alignment must remove stale cleaned artifacts so reopened sessions use raw mic")
+    }
+
+    func testRecoverDeletesStaleCleanedMicWhenSourceMissing() async throws {
+        let fixture = try makeRecoverableSession(systemAudio: .corrupt)
+        let staleCleanedURL = fixture.folderURL.appendingPathComponent("microphone-cleaned.m4a")
+        try Data("partial m4a fragment".utf8).write(to: staleCleanedURL)
+
+        _ = try await recoveryService.recover(fixture.lock)
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: staleCleanedURL.path),
+            "missing recovered sources must remove stale cleaned artifacts so reopened sessions use raw mic")
+    }
+
     private enum SourceFixture {
         case valid
         case corrupt
@@ -501,6 +551,43 @@ private enum RecoveryTestError: Error {
     case transcriptionFailed
     case lockDeleteFailed
     case mixFailed
+}
+
+private final class RecoveryMicConditionerFactoryProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var buildCount: Int {
+        lock.withLock { count }
+    }
+
+    func make() -> any MicConditioning {
+        lock.withLock {
+            count += 1
+        }
+        return RecoveryLoadedMicConditioner()
+    }
+}
+
+private final class RecoveryLoadedMicConditioner: MicConditioning, @unchecked Sendable {
+    var diagnostics: MeetingEchoSuppressionDiagnostics {
+        MeetingEchoSuppressionDiagnostics(
+            processorName: "test-loaded-cleaner",
+            loaded: true,
+            micFrames: 0,
+            processedFrames: 0,
+            rawFallbackFrames: 0,
+            fullReferenceFrames: 0,
+            partialReferenceFrames: 0,
+            missingReferenceFrames: 0,
+            processingFailures: 0)
+    }
+
+    func condition(microphone: [Float], speaker: [Float], hasSpeakerReference: Bool) -> [Float] {
+        microphone
+    }
+
+    func reset() {}
 }
 
 private struct RecoveryProcessChecker: ProcessAliveChecking {
