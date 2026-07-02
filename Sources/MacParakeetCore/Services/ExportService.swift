@@ -1,7 +1,6 @@
-import Foundation
 import AppKit
+import Foundation
 
-@MainActor
 public protocol ExportServiceProtocol: Sendable {
     func exportToTxt(transcription: Transcription, url: URL) throws
     func exportToSRT(transcription: Transcription, url: URL) throws
@@ -52,8 +51,8 @@ public struct TranscriptExportOptions: Sendable, Equatable {
 }
 
 /// Handles exporting transcriptions to files and clipboard.
-/// @MainActor because PDF/DOCX paths use NSTextStorage/NSLayoutManager (AppKit, not thread-safe).
-@MainActor
+/// PDF/DOCX paths stay on MainActor because they use NSTextStorage/NSLayoutManager
+/// (AppKit, not thread-safe). Text, subtitle, and JSON exports are safe off-main.
 public final class ExportService: ExportServiceProtocol, Sendable {
     public init() {}
 
@@ -136,7 +135,7 @@ public final class ExportService: ExportServiceProtocol, Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(transcription)
-        try data.write(to: url)
+        try data.write(to: url, options: .atomic)
     }
 
     /// Export transcription as PDF file using Core Graphics PDF context.
@@ -192,6 +191,7 @@ public final class ExportService: ExportServiceProtocol, Sendable {
             // Save graphics state, set up coordinate system for this page.
             // We flip the CGContext so y goes top-down (needed for pagination math)
             // and tell NSGraphicsContext it's flipped so AppKit draws glyphs upright.
+            context.saveGState()
             let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = nsContext
@@ -205,6 +205,7 @@ public final class ExportService: ExportServiceProtocol, Sendable {
             layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: drawOrigin)
 
             NSGraphicsContext.restoreGraphicsState()
+            context.restoreGState()
             context.endPage()
 
             yOffset += textHeight
@@ -220,7 +221,7 @@ public final class ExportService: ExportServiceProtocol, Sendable {
             from: range,
             documentAttributes: [.documentType: NSAttributedString.DocumentType.officeOpenXML]
         )
-        try data.write(to: url)
+        try data.write(to: url, options: .atomic)
     }
 
     /// Format word timestamps as SRT subtitle string

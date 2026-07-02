@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import MacParakeetCore
 import MacParakeetViewModels
@@ -15,6 +16,21 @@ struct TranscriptionLibraryView: View {
     @State private var pendingDelete: Transcription?
     @State private var pendingDeleteAudio: Transcription?
     @State private var audioSaveErrorMessage: String?
+    @State private var showingBulkExportOptions = false
+    @AppStorage("com.macparakeet.libraryBulkExportFormat")
+    private var selectedBulkExportFormatRawValue = TranscriptExportFormat.txt.rawValue
+    @AppStorage("com.macparakeet.libraryBulkExportIncludeTimestamps")
+    private var bulkExportIncludeTimestamps = true
+    @AppStorage("com.macparakeet.libraryBulkExportIncludeSpeakerLabels")
+    private var bulkExportIncludeSpeakerLabels = true
+    @AppStorage("com.macparakeet.libraryBulkExportIncludeMetadata")
+    private var bulkExportIncludeMetadata = true
+    @State private var bulkExportInProgress = false
+    @State private var bulkExportResult: BulkTranscriptExportResult?
+    @State private var bulkExportErrorMessage: String?
+    @State private var bulkExportCoordinatorTask: Task<Void, Never>?
+    @State private var bulkExportWorkerTask: Task<BulkTranscriptExportResult, Error>?
+    @State private var bulkExportRunID = UUID()
     @FocusState private var selectionKeyboardFocused: Bool
 
     private var visibleLibraryFilters: [LibraryFilter] {
@@ -190,6 +206,25 @@ struct TranscriptionLibraryView: View {
         } message: {
             Text(audioSaveErrorMessage ?? "Unable to save meeting audio.")
         }
+        .alert(
+            "Export Failed",
+            isPresented: Binding(
+                get: { bulkExportErrorMessage != nil },
+                set: { if !$0 { bulkExportErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                bulkExportErrorMessage = nil
+            }
+        } message: {
+            Text(bulkExportErrorMessage ?? "Unable to export selected transcripts.")
+        }
+        .popover(item: $bulkExportResult, arrowEdge: .top) { result in
+            bulkExportConfirmationPopover(result)
+        }
+        .onDisappear {
+            cancelBulkExport()
+        }
     }
 
     private var thumbnailGrid: some View {
@@ -206,7 +241,7 @@ struct TranscriptionLibraryView: View {
                             isSelected: viewModel.isTranscriptionSelected(transcription),
                             showsSelectionControls: viewModel.isBulkSelectionModeEnabled
                         ) {
-                            if viewModel.isBulkOperationInProgress {
+                            if viewModel.isBulkOperationInProgress || bulkExportInProgress {
                                 return
                             }
                             if viewModel.isBulkSelectionModeEnabled {
@@ -242,7 +277,7 @@ struct TranscriptionLibraryView: View {
                             isSelected: viewModel.isTranscriptionSelected(transcription),
                             showsSelectionControls: viewModel.isBulkSelectionModeEnabled,
                             onTap: {
-                                if viewModel.isBulkOperationInProgress {
+                                if viewModel.isBulkOperationInProgress || bulkExportInProgress {
                                     return
                                 }
                                 if viewModel.isBulkSelectionModeEnabled {
@@ -364,17 +399,23 @@ struct TranscriptionLibraryView: View {
 
     private var selectionActionsBar: some View {
         BulkTranscriptionSelectionBar(
-            selectedCount: viewModel.selectedTranscriptionCount,
+            selectedCount: selectedBulkExportTargets.count,
             selectedMeetingAudioCount: viewModel.selectedMeetingAudioCount,
             isMeetingContext: isMeetingListMode,
             areAllVisibleSelected: viewModel.areAllLoadedVisibleTranscriptionsSelected,
-            isPerformingOperation: viewModel.isBulkOperationInProgress,
+            isPerformingOperation: viewModel.isBulkOperationInProgress || bulkExportInProgress,
+            operationLabel: bulkExportInProgress ? "Exporting..." : "Deleting...",
+            isExportDisabled: isBulkExportActionDisabled,
             onSelectVisible: { viewModel.selectLoadedVisibleTranscriptions() },
             onClear: { viewModel.clearSelection() },
             onCancel: { viewModel.exitBulkSelection() },
+            onExport: { showingBulkExportOptions = true },
             onDeleteAudioOnly: { viewModel.requestDeleteSelectedMeetingAudio() },
             onDeleteItems: { viewModel.requestDeleteSelectedItems() }
         )
+        .popover(isPresented: $showingBulkExportOptions, arrowEdge: .top) {
+            bulkExportOptionsPopover
+        }
     }
 
     private var showsSelectManyButton: Bool {
@@ -401,6 +442,319 @@ struct TranscriptionLibraryView: View {
                 audioSaveErrorMessage = error.localizedDescription
             }
         }
+    }
+
+    // Static so the completeness check runs once at first use rather than
+    // allocating two Sets on every body re-render (the popover re-renders on
+    // each format selection).
+    private static let bulkExportFormatOrder: [TranscriptExportFormat] = {
+        let preferredOrder: [TranscriptExportFormat] = [.txt, .md, .srt, .vtt, .json, .pdf, .docx]
+        precondition(
+            preferredOrder.count == TranscriptExportFormat.allCases.count &&
+                Set(preferredOrder) == Set(TranscriptExportFormat.allCases),
+            "Bulk export format order must include every TranscriptExportFormat case"
+        )
+        return preferredOrder
+    }()
+
+    private var selectedBulkExportFormat: TranscriptExportFormat {
+        get {
+            TranscriptExportFormat(rawValue: selectedBulkExportFormatRawValue) ?? .txt
+        }
+        nonmutating set {
+            selectedBulkExportFormatRawValue = newValue.rawValue
+        }
+    }
+
+    private var bulkExportOptions: TranscriptExportOptions {
+        TranscriptExportOptions(
+            includeTimestamps: bulkExportIncludeTimestamps,
+            includeSpeakerLabels: bulkExportIncludeSpeakerLabels,
+            includeMetadata: bulkExportIncludeMetadata
+        )
+    }
+
+    private var selectedBulkExportTargets: [Transcription] {
+        viewModel.selectedLoadedTranscriptionsForExport
+    }
+
+    private var isBulkExportActionDisabled: Bool {
+        selectedBulkExportTargets.isEmpty ||
+            bulkExportInProgress ||
+            viewModel.isBulkOperationInProgress
+    }
+
+    private var bulkExportOptionsPopover: some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
+            HStack(spacing: DesignSystem.Spacing.sm) {
+                Label("Export Selected", systemImage: "arrow.down.doc")
+                    .font(DesignSystem.Typography.body.bold())
+
+                Spacer()
+
+                Button {
+                    showingBulkExportOptions = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close export options")
+            }
+
+            Text(
+                "\(selectedBulkExportTargets.count) \(selectedBulkExportTargets.count == 1 ? "item" : "items")"
+            )
+            .font(DesignSystem.Typography.caption.weight(.medium))
+            .foregroundStyle(DesignSystem.Colors.textSecondary)
+
+            VStack(alignment: .leading, spacing: DesignSystem.Spacing.xs) {
+                Text("Format")
+                    .font(DesignSystem.Typography.caption.weight(.medium))
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 104), spacing: 8)],
+                    alignment: .leading,
+                    spacing: 8
+                ) {
+                    ForEach(Self.bulkExportFormatOrder) { format in
+                        Button {
+                            selectedBulkExportFormat = format
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: format.iconName)
+                                    .frame(width: 16)
+                                Text(format.shortName)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
+                                Spacer(minLength: 0)
+                            }
+                            .font(DesignSystem.Typography.caption)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 7)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(
+                                        selectedBulkExportFormat == format
+                                            ? DesignSystem.Colors.accent.opacity(0.14)
+                                            : DesignSystem.Colors.surface)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .strokeBorder(
+                                        selectedBulkExportFormat == format
+                                            ? DesignSystem.Colors.accent.opacity(0.7)
+                                            : DesignSystem.Colors.border.opacity(0.7),
+                                        lineWidth: 1
+                                    )
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(format.displayName)
+                        .accessibilityValue(selectedBulkExportFormat == format ? "Selected" : "")
+                    }
+                }
+            }
+
+            if selectedBulkExportFormat.supportsTranscriptOptions {
+                VStack(alignment: .leading, spacing: DesignSystem.Spacing.xs) {
+                    Text("Options")
+                        .font(DesignSystem.Typography.caption.weight(.medium))
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+
+                    Toggle("Include timestamps when available", isOn: $bulkExportIncludeTimestamps)
+                    Toggle("Include speaker labels when available", isOn: $bulkExportIncludeSpeakerLabels)
+                    Toggle("Include metadata", isOn: $bulkExportIncludeMetadata)
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button {
+                    showingBulkExportOptions = false
+                    runBulkExport()
+                } label: {
+                    Label("Choose Folder...", systemImage: "folder")
+                }
+                .parakeetAction(.primaryProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(isBulkExportActionDisabled)
+            }
+        }
+        .padding(DesignSystem.Spacing.md)
+        .frame(width: 390)
+    }
+
+    @ViewBuilder
+    private func bulkExportConfirmationPopover(_ result: BulkTranscriptExportResult) -> some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: result.isCompleteSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(
+                        result.isCompleteSuccess ? DesignSystem.Colors.successGreen : DesignSystem.Colors.warningAmber)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(bulkExportResultTitle(result))
+                        .font(DesignSystem.Typography.body.bold())
+                    Text(result.directory.lastPathComponent)
+                        .font(DesignSystem.Typography.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if result.failedCount > 0 {
+                        Text("\(result.failedCount) \(result.failedCount == 1 ? "file" : "files") failed.")
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(DesignSystem.Colors.warningAmber)
+                    }
+                }
+
+                Spacer(minLength: 4)
+
+                Button {
+                    bulkExportResult = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close export confirmation")
+            }
+
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting(result.exportedURLs)
+                bulkExportResult = nil
+            } label: {
+                Label("Show in Finder", systemImage: "folder")
+                    .font(DesignSystem.Typography.caption)
+            }
+            .parakeetAction(.secondary)
+        }
+        .padding(DesignSystem.Spacing.md)
+        .frame(minWidth: 240)
+    }
+
+    private func bulkExportResultTitle(_ result: BulkTranscriptExportResult) -> String {
+        if result.isCompleteSuccess {
+            return
+                "Exported \(result.exportedCount) \(result.format.shortName) \(result.exportedCount == 1 ? "file" : "files")"
+        }
+        if result.exportedCount > 0 {
+            return "Exported \(result.exportedCount) of \(result.requestedCount)"
+        }
+        return "No files exported"
+    }
+
+    private func runBulkExport() {
+        guard !isBulkExportActionDisabled else { return }
+        let targets = selectedBulkExportTargets
+
+        cancelBulkExport()
+        let outcome = runBulkExportFolderPanel()
+        guard case .selected(let directory) = outcome else { return }
+
+        let runID = UUID()
+        let format = selectedBulkExportFormat
+        let options = bulkExportOptions
+
+        bulkExportRunID = runID
+        bulkExportInProgress = true
+        bulkExportErrorMessage = nil
+        bulkExportResult = nil
+
+        bulkExportCoordinatorTask = Task { @MainActor in
+            defer {
+                finishBulkExportRun(runID)
+            }
+
+            do {
+                await Task.yield()
+                guard bulkExportRunID == runID, !Task.isCancelled else { return }
+
+                let exportTask = Task.detached(priority: .userInitiated) {
+                    try await TranscriptResultActions.exportTranscriptsToDirectory(
+                        transcriptions: targets,
+                        format: format,
+                        options: options,
+                        directory: directory
+                    )
+                }
+                bulkExportWorkerTask = exportTask
+                let result = try await withTaskCancellationHandler {
+                    try await exportTask.value
+                } onCancel: {
+                    exportTask.cancel()
+                }
+                guard bulkExportRunID == runID else { return }
+                bulkExportWorkerTask = nil
+
+                guard result.exportedCount > 0 else {
+                    bulkExportErrorMessage = result.firstErrorDescription ?? "No files were exported."
+                    SoundManager.shared.play(.errorSoft)
+                    return
+                }
+
+                SoundManager.shared.play(result.isCompleteSuccess ? .transcriptionComplete : .errorSoft)
+                bulkExportResult = result
+            } catch is CancellationError {
+                guard bulkExportRunID == runID else { return }
+            } catch {
+                guard bulkExportRunID == runID else { return }
+                bulkExportErrorMessage = error.localizedDescription
+                SoundManager.shared.play(.errorSoft)
+            }
+        }
+    }
+
+    @MainActor
+    private func finishBulkExportRun(_ runID: UUID) {
+        guard bulkExportRunID == runID else { return }
+        bulkExportInProgress = false
+        bulkExportCoordinatorTask = nil
+        bulkExportWorkerTask = nil
+    }
+
+    @MainActor
+    private func cancelBulkExport() {
+        bulkExportCoordinatorTask?.cancel()
+        bulkExportCoordinatorTask = nil
+        bulkExportWorkerTask?.cancel()
+        bulkExportWorkerTask = nil
+        bulkExportInProgress = false
+        bulkExportResult = nil
+        bulkExportErrorMessage = nil
+        bulkExportRunID = UUID()
+    }
+
+    private enum BulkExportFolderOutcome: Sendable {
+        case selected(URL)
+        case cancelled
+    }
+
+    // Synchronous app-modal panel, matching MeetingAudioActions.runSaveAudioPanel
+    // and DictationHistoryViewModel. It runs before the async export coordinator
+    // starts, so no Task is suspended inside the modal interaction.
+    @MainActor
+    private func runBulkExportFolderPanel() -> BulkExportFolderOutcome {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Export Folder"
+        panel.prompt = "Export"
+        panel.message = "Choose a folder for the selected transcript files."
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        if let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+            panel.directoryURL = downloads
+        }
+
+        guard panel.runModal() == .OK, let directory = panel.url else { return .cancelled }
+        return .selected(directory)
     }
 
     private var emptyState: some View {
@@ -523,7 +877,11 @@ struct TranscriptionLibraryView: View {
     }
 
     private func handleSelectionKeyPress(_ press: KeyPress) -> KeyPress.Result {
-        guard viewModel.isBulkSelectionModeEnabled, !viewModel.isBulkOperationInProgress else { return .ignored }
+        guard
+            viewModel.isBulkSelectionModeEnabled,
+            !viewModel.isBulkOperationInProgress,
+            !bulkExportInProgress
+        else { return .ignored }
         if press.key == .delete || press.key == .deleteForward {
             guard viewModel.hasSelectedTranscriptions else { return .ignored }
             viewModel.requestDeleteSelectedItems()
@@ -595,8 +953,8 @@ private struct LibraryFilterChip: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             isHovered = hovering
-            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
         }
+        .pointingHandCursor(isActive: isHovered)
     }
 }
 
@@ -635,8 +993,8 @@ private struct LibraryPrimaryActionButton: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             isHovered = hovering
-            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
         }
+        .pointingHandCursor(isActive: isHovered)
         .accessibilityLabel(title)
         .accessibilityHint("Starts a new transcription")
     }

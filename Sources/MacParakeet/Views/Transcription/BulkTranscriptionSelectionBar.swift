@@ -6,9 +6,12 @@ struct BulkTranscriptionSelectionBar: View {
     let isMeetingContext: Bool
     let areAllVisibleSelected: Bool
     let isPerformingOperation: Bool
+    var operationLabel = "Deleting..."
+    var isExportDisabled = false
     let onSelectVisible: () -> Void
     let onClear: () -> Void
     let onCancel: () -> Void
+    var onExport: (() -> Void)?
     let onDeleteAudioOnly: () -> Void
     let onDeleteItems: () -> Void
 
@@ -45,7 +48,7 @@ struct BulkTranscriptionSelectionBar: View {
                 .opacity(0.55)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(isPerformingOperation ? "Deleting selected items" : "\(selectedCount) selected")
+        .accessibilityLabel(isPerformingOperation ? operationLabel : "\(selectedCount) selected")
         // Resolve the bar's internal layout as one unit so the enclosing
         // selection-mode animation moves it as a cohesive block. Without this,
         // the container animation interpolates the inner `Spacer` from
@@ -84,7 +87,7 @@ struct BulkTranscriptionSelectionBar: View {
                     .foregroundStyle(DesignSystem.Colors.accent)
             }
 
-            Text(isPerformingOperation ? "Deleting..." : "\(selectedCount) selected")
+            Text(isPerformingOperation ? operationLabel : "\(selectedCount) selected")
                 .font(DesignSystem.Typography.bodySmall.weight(.semibold))
                 .foregroundStyle(DesignSystem.Colors.textPrimary)
         }
@@ -116,6 +119,7 @@ struct BulkTranscriptionSelectionBar: View {
             cancelAction
             selectVisibleAction
             clearAction
+            exportAction
         }
     }
 
@@ -133,6 +137,7 @@ struct BulkTranscriptionSelectionBar: View {
             cancelAction
             selectVisibleAction
             clearAction
+            exportAction
             if showsAudioAction {
                 deleteAudioAction
             }
@@ -174,6 +179,19 @@ struct BulkTranscriptionSelectionBar: View {
             isDisabled: selectedCount == 0 || isPerformingOperation,
             action: onClear
         )
+    }
+
+    @ViewBuilder
+    private var exportAction: some View {
+        if let onExport {
+            SelectionBarActionButton(
+                title: "Export...",
+                systemImage: "arrow.down.doc",
+                tone: .utility,
+                isDisabled: isExportDisabled,
+                action: onExport
+            )
+        }
     }
 
     private var deleteAudioAction: some View {
@@ -251,7 +269,6 @@ private struct SelectionBarActionButton: View {
     let action: () -> Void
 
     @State private var isHovered = false
-    @State private var didPushCursor = false
 
     var body: some View {
         Group {
@@ -291,37 +308,14 @@ private struct SelectionBarActionButton: View {
         .opacity(isDisabled ? 0.48 : 1)
         .onHover { hovering in
             isHovered = hovering && !isDisabled
-            updateCursor(isHovering: hovering)
         }
         .onChange(of: isDisabled) { _, _ in
             if isDisabled {
                 isHovered = false
             }
-            updateCursor(isHovering: isHovered)
         }
-        .onDisappear {
-            releaseCursorIfNeeded()
-        }
+        .pointingHandCursor(isActive: isHovered && !isDisabled)
         .animation(DesignSystem.Animation.hoverTransition, value: isHovered)
         .animation(DesignSystem.Animation.hoverTransition, value: isDisabled)
-    }
-
-    private func updateCursor(isHovering: Bool) {
-        let shouldShowPointer = isHovering && !isDisabled
-        if shouldShowPointer, !didPushCursor {
-            NSCursor.pointingHand.push()
-            didPushCursor = true
-            return
-        }
-        if !shouldShowPointer, didPushCursor {
-            releaseCursorIfNeeded()
-        }
-    }
-
-    private func releaseCursorIfNeeded() {
-        if didPushCursor {
-            NSCursor.pop()
-            didPushCursor = false
-        }
     }
 }
