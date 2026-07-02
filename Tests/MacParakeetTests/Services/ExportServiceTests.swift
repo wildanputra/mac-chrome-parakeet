@@ -717,6 +717,99 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(exportService.formatReadableTimestamp(ms: 3661000), "1:01:01")
     }
 
+    // MARK: - Export Color Legibility
+
+    /// Every run in an exported PDF/DOCX — across all content branches — must
+    /// carry an explicit, appearance-independent dark color. A missing color
+    /// falls back to the dynamic default text color, and a dynamic label color
+    /// resolves to near-white in Dark Mode; both make the export invisible on
+    /// its white page.
+    func testBuildRichTranscriptUsesAppearanceIndependentDarkColors() throws {
+        // Precondition: the resolver must actually distinguish appearances,
+        // otherwise the per-run checks below would be vacuous. A dynamic label
+        // color resolves dark under Light and near-white under Dark.
+        let dynamicLight = concreteColor(.labelColor, appearance: .aqua)
+        let dynamicDark = concreteColor(.labelColor, appearance: .darkAqua)
+        XCTAssertNotEqual(dynamicLight, dynamicDark, "Precondition: resolver must distinguish light vs dark")
+        XCTAssertGreaterThan(brightness(of: dynamicDark), 0.6, "Precondition: labelColor near-white in Dark Mode")
+
+        // Cover every content branch of buildRichTranscript: word-timestamp
+        // speaker cues, an edited-transcript override, and the plain fallback.
+        let timestampedWithSpeakers = Transcription(
+            fileName: "meeting.mp3",
+            durationMs: 5000,
+            wordTimestamps: [
+                WordTimestamp(word: "Hello.", startMs: 0, endMs: 500, confidence: 0.99, speakerId: "S1"),
+                WordTimestamp(word: "Hi.", startMs: 600, endMs: 1000, confidence: 0.98, speakerId: "S2"),
+            ],
+            speakers: [
+                SpeakerInfo(id: "S1", label: "Alice"),
+                SpeakerInfo(id: "S2", label: "Bob"),
+            ],
+            status: .completed
+        )
+        let editedOverride = Transcription(
+            fileName: "edited.mp3",
+            durationMs: 5000,
+            rawTranscript: "Original text",
+            cleanTranscript: "Edited transcript body",
+            wordTimestamps: [
+                WordTimestamp(word: "Original", startMs: 0, endMs: 500, confidence: 0.99)
+            ],
+            status: .completed,
+            isTranscriptEdited: true
+        )
+        let plainText = Transcription(
+            fileName: "note.mp3",
+            durationMs: 3000,
+            rawTranscript: "Just a plain transcript.",
+            status: .completed
+        )
+
+        for transcription in [timestampedWithSpeakers, editedOverride, plainText] {
+            let name = transcription.fileName
+            let attributed = try exportService.buildRichTranscript(transcription: transcription)
+            XCTAssertGreaterThan(attributed.length, 0, "\(name): empty export")
+            let fullRange = NSRange(location: 0, length: attributed.length)
+
+            var inspectedRuns = 0
+            attributed.enumerateAttribute(.foregroundColor, in: fullRange) { value, range, _ in
+                inspectedRuns += 1
+                guard let color = value as? NSColor else {
+                    XCTFail("\(name) run \(range): no explicit foreground color; would vanish on white in Dark Mode")
+                    return
+                }
+                let light = concreteColor(color, appearance: .aqua)
+                let dark = concreteColor(color, appearance: .darkAqua)
+                XCTAssertEqual(light, dark, "\(name): exported color must be appearance-independent")
+                XCTAssertLessThan(brightness(of: color), 0.6, "\(name): exported text must be dark on white")
+            }
+            XCTAssertGreaterThan(inspectedRuns, 0, "\(name): no runs inspected")
+        }
+    }
+
+    /// Resolve a (possibly dynamic) color to a concrete sRGB value under a fixed
+    /// appearance, for comparing how it renders in Light vs Dark.
+    private func concreteColor(_ color: NSColor, appearance name: NSAppearance.Name) -> NSColor {
+        guard let appearance = NSAppearance(named: name) else {
+            return color.usingColorSpace(.sRGB) ?? color
+        }
+        var resolved = color
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = color.usingColorSpace(.sRGB) ?? color
+        }
+        return resolved
+    }
+
+    /// HSB brightness read from a guaranteed-sRGB copy, so it never raises on a
+    /// non-RGB color space (`brightnessComponent` would).
+    private func brightness(of color: NSColor) -> CGFloat {
+        guard let rgb = color.usingColorSpace(.sRGB) else { return 0 }
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        return max(red, green, blue)
+    }
+
     private func firstPageContentStream(from url: URL) throws -> String {
         guard let document = CGPDFDocument(url as CFURL),
               let page = document.page(at: 1),
