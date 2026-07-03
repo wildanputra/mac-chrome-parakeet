@@ -1233,7 +1233,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         let activeSources = [AudioSource.microphone, .system].filter { recording.sourceAlignment.track(for: $0) != nil }
         let speechEngine = speechEngineOverride ?? (recording.speechEngineWasCaptured ? recording.speechEngine : nil)
         let microphoneDecision = activeSources.contains(.microphone)
-            ? await resolveMeetingMicrophoneSource(for: recording)
+            ? try await resolveMeetingMicrophoneSource(for: recording)
             : nil
 
         for (index, source) in activeSources.enumerated() {
@@ -1336,14 +1336,14 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
 
     private func resolveMeetingMicrophoneSource(
         for recording: MeetingRecordingOutput
-    ) async -> MeetingCleanedMicrophoneSourceDecision {
-        let decision = await recording.resolvedMicrophoneTranscriptionSource(
-            policy: meetingCleanedMicrophoneReadinessPolicy
-        )
-        let selected = decision.usesCleanedMicrophone ? "cleaned" : "raw"
+    ) async throws -> MeetingCleanedMicrophoneSourceDecision {
         let timeoutSeconds = meetingCleanedMicrophoneReadinessPolicy.timeoutSeconds(
             for: recording.durationSeconds
         )
+        let decision = try await recording.resolvedMicrophoneTranscriptionSource(
+            policy: meetingCleanedMicrophoneReadinessPolicy
+        )
+        let selected = decision.usesCleanedMicrophone ? "cleaned" : "raw"
         logger.info(
             "meeting_cleaned_mic_source session=\(recording.sessionID.uuidString, privacy: .public) selected=\(selected, privacy: .public) reason=\(decision.reason.rawValue, privacy: .public) timeout_s=\(timeoutSeconds, format: .fixed(precision: 3), privacy: .public)"
         )

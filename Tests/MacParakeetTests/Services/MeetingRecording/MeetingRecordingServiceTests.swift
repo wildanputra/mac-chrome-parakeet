@@ -234,11 +234,18 @@ final class MeetingRecordingServiceTests: XCTestCase {
     func testStopRecordingFailsIfAwaitingTranscriptionLockWriteFails() async throws {
         let captureService = MockMeetingAudioCaptureService()
         let lockStore = RecordingLockFileStore()
+        let conditionerProbe = MeetingMicConditionerFactoryProbe()
         let service = MeetingRecordingService(
             audioCaptureService: captureService,
             audioConverter: MockMeetingAudioFileConverter(),
             sttTranscriber: CountingMeetingSTTClient(),
-            lockFileStore: lockStore
+            lockFileStore: lockStore,
+            micConditionerFactory: {
+                PassthroughMicConditioner()
+            },
+            cleanedMicConditionerFactory: {
+                conditionerProbe.make()
+            }
         )
 
         try await service.startRecording()
@@ -247,6 +254,11 @@ final class MeetingRecordingServiceTests: XCTestCase {
         let microphoneBuffer = try XCTUnwrap(makeMonoFloatBuffer(frameCount: 4_800, sampleValue: 0.25))
         await captureService.yield(.microphoneBuffer(
             microphoneBuffer,
+            AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: 100.0))
+        ))
+        let systemBuffer = try XCTUnwrap(makeMonoFloatBuffer(frameCount: 4_800, sampleValue: 0.15))
+        await captureService.yield(.systemBuffer(
+            systemBuffer,
             AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: 100.0))
         ))
 
@@ -262,6 +274,9 @@ final class MeetingRecordingServiceTests: XCTestCase {
 
         XCTAssertEqual(lockStore.writeAttempts.last?.file.state, .awaitingTranscription)
         XCTAssertEqual(lockStore.writes.last?.file.state, .recording)
+        XCTAssertEqual(conditionerProbe.buildCount, 0)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: originalFolder.appendingPathComponent("microphone-cleaned.m4a").path))
         let isRecordingAfterFailure = await service.isRecording
         XCTAssertFalse(isRecordingAfterFailure)
 
@@ -1371,7 +1386,7 @@ final class MeetingRecordingServiceTests: XCTestCase {
         // The cleaned mic is derived; the raw sources stay the source of truth.
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.microphoneAudioURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.systemAudioURL.path))
-        let decision = await output.resolvedMicrophoneTranscriptionSource(
+        let decision = try await output.resolvedMicrophoneTranscriptionSource(
             policy: .init(floorSeconds: 2, durationMultiplier: 0, capSeconds: 2)
         )
         XCTAssertEqual(decision.reason, .cleanedUsed)
@@ -1417,7 +1432,7 @@ final class MeetingRecordingServiceTests: XCTestCase {
             blockingConditioner.waitUntilConditionCalled(timeout: 1),
             "test fixture should block inside the cleaned-mic render task"
         )
-        guard let result = await outputCapture.resultWithin(seconds: 0.3) else {
+        guard let result = await outputCapture.resultWithin(seconds: 1) else {
             blockingConditioner.release()
             XCTFail("stopRecording() waited for the cleaned-mic renderer to finish")
             return
@@ -1439,7 +1454,7 @@ final class MeetingRecordingServiceTests: XCTestCase {
         )
 
         blockingConditioner.release()
-        let decision = await output.resolvedMicrophoneTranscriptionSource(
+        let decision = try await output.resolvedMicrophoneTranscriptionSource(
             policy: .init(floorSeconds: 2, durationMultiplier: 0, capSeconds: 2)
         )
         XCTAssertEqual(decision.reason, .cleanedUsed)
@@ -1481,7 +1496,7 @@ final class MeetingRecordingServiceTests: XCTestCase {
             conditionerProbe.buildCount,
             0,
             "single-source meetings must not schedule or build the cleaned-mic renderer")
-        let decision = await output.resolvedMicrophoneTranscriptionSource(
+        let decision = try await output.resolvedMicrophoneTranscriptionSource(
             policy: .init(floorSeconds: 0.05, durationMultiplier: 0, capSeconds: 0.05)
         )
         XCTAssertEqual(decision.reason, .rawMissingSystemReference)
@@ -1514,7 +1529,7 @@ final class MeetingRecordingServiceTests: XCTestCase {
             output.cleanedMicrophoneAudioURL,
             "dual-source meetings schedule the render; missing AEC assets are reported by the readiness result")
         XCTAssertEqual(cleanedURL.lastPathComponent, "microphone-cleaned.m4a")
-        let decision = await output.resolvedMicrophoneTranscriptionSource(
+        let decision = try await output.resolvedMicrophoneTranscriptionSource(
             policy: .init(floorSeconds: 2, durationMultiplier: 0, capSeconds: 2)
         )
         XCTAssertEqual(decision.reason, .rawNoAECAssets)

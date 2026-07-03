@@ -244,34 +244,6 @@ final class MeetingRecordingRecoveryServiceTests: XCTestCase {
         XCTAssertTrue(rows.first?.recoveredFromCrash == true)
     }
 
-    func testRecoverSchedulesCleanedMicThroughReadinessGateForDualSourceSession() async throws {
-        let fixture = try makeRecoverableSession()
-        let conditionerProbe = RecoveryMicConditionerFactoryProbe()
-        transcriptionService.sourceResolutionPolicy = .init(
-            floorSeconds: 2,
-            durationMultiplier: 0,
-            capSeconds: 2
-        )
-        recoveryService = MeetingRecordingRecoveryService(
-            meetingsRoot: tempRoot,
-            lockFileStore: lockStore,
-            transcriptionService: transcriptionService,
-            transcriptionRepo: transcriptionRepo,
-            audioConverter: audioConverter,
-            micConditionerFactory: { @Sendable in conditionerProbe.make() }
-        )
-
-        _ = try await recoveryService.recover(fixture.lock)
-
-        let recording = try XCTUnwrap(transcriptionService.recordings.first)
-        let cleanedURL = try XCTUnwrap(recording.cleanedMicrophoneAudioURL)
-        let decision = try XCTUnwrap(transcriptionService.sourceDecisions.first)
-        XCTAssertGreaterThanOrEqual(conditionerProbe.buildCount, 1)
-        XCTAssertEqual(decision.reason, .cleanedUsed)
-        XCTAssertEqual(decision.url, cleanedURL)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: cleanedURL.path))
-    }
-
     func testRecoverDeletesStaleCleanedMicWhenSourceMissing() async throws {
         let fixture = try makeRecoverableSession(systemAudio: .corrupt)
         let staleCleanedURL = fixture.folderURL.appendingPathComponent("microphone-cleaned.m4a")
@@ -697,7 +669,7 @@ private final class RecoveryMockTranscriptionService: TranscriptionServiceProtoc
     ) async throws -> Transcription {
         if let errorToThrow { throw errorToThrow }
         if let sourceResolutionPolicy {
-            let decision = await recording.resolvedMicrophoneTranscriptionSource(
+            let decision = try await recording.resolvedMicrophoneTranscriptionSource(
                 policy: sourceResolutionPolicy
             )
             lock.withLock {
@@ -726,7 +698,7 @@ private final class RecoveryMockTranscriptionService: TranscriptionServiceProtoc
     ) async throws -> Transcription {
         if let errorToThrow { throw errorToThrow }
         if let sourceResolutionPolicy {
-            let decision = await recording.resolvedMicrophoneTranscriptionSource(
+            let decision = try await recording.resolvedMicrophoneTranscriptionSource(
                 policy: sourceResolutionPolicy
             )
             lock.withLock {

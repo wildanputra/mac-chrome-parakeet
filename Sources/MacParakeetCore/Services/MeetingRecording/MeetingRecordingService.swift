@@ -596,12 +596,6 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
             preservePlayableMeetingAudioFallback(inputURLs: inputURLs, outputURL: session.mixedAudioURL)
         }
 
-        let cleanedMicrophoneReadiness = scheduleCleanedMicrophoneRender(
-            session: session,
-            availableSources: availableSources,
-            sourceAlignment: sourceAlignment
-        )
-
         let finalNotes = currentNotes
         let notesFileManager = MeetingNotesFile.SendableFileManager(fileManager)
         do {
@@ -636,6 +630,12 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
             throw MeetingAudioError.storageFailed(error.localizedDescription)
         }
         currentLockFile = awaitingLock
+
+        let cleanedMicrophoneReadiness = scheduleCleanedMicrophoneRender(
+            session: session,
+            availableSources: availableSources,
+            sourceAlignment: sourceAlignment
+        )
 
         // Stop while paused: settle the in-flight pause interval into the
         // accumulated total so the persisted duration only reflects time

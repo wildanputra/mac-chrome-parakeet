@@ -23,6 +23,24 @@ private actor MockYouTubeDownloader: YouTubeDownloading {
     }
 }
 
+private actor TestAsyncSignal {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var didSignal = false
+
+    func signal() {
+        didSignal = true
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func wait() async {
+        if didSignal { return }
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+}
+
 private final class TelemetrySpy: TelemetryServiceProtocol, @unchecked Sendable {
     private let lock = NSLock()
     private var events: [TelemetryEventSpec] = []
@@ -1441,6 +1459,44 @@ final class TranscriptionServiceTests: XCTestCase {
         )
     }
 
+    func testTranscribeMeetingCancellationWhileWaitingForCleanedMicReturnsPromptly() async throws {
+        let renderStarted = TestAsyncSignal()
+        let renderRelease = TestAsyncSignal()
+        let recording = try makeDualSourceMeetingRecording(
+            displayName: "Cleaned Mic Cancelled",
+            readinessFactory: { folderURL in
+                let cleanedURL = folderURL.appendingPathComponent("microphone-cleaned.m4a")
+                let renderTask = Task<MeetingCleanedMicrophoneRenderCompletion, Never> {
+                    await renderStarted.signal()
+                    await renderRelease.wait()
+                    return .fallback(.rawRenderFailed)
+                }
+                return (cleanedURL, .scheduled(outputURL: cleanedURL, task: renderTask))
+            }
+        )
+        defer { try? FileManager.default.removeItem(at: recording.folderURL) }
+        defer { Task { await renderRelease.signal() } }
+        await mockSTT.configureSequence(results: meetingSourceSTTResults())
+        let service = makeTranscriptionService(cleanedMicTimeoutSeconds: 60)
+
+        let task = Task {
+            try await service.transcribeMeeting(recording: recording)
+        }
+        await renderStarted.wait()
+
+        let cancelledAt = Date()
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Expected meeting transcription cancellation to throw.")
+        } catch is CancellationError {
+            XCTAssertLessThan(Date().timeIntervalSince(cancelledAt), 1)
+        }
+
+        let convertCallCount = await mockAudio.convertCallCount
+        XCTAssertEqual(convertCallCount, 0)
+    }
+
     func testTranscribeMeetingFallsBackToRawMicWhenCleanedArtifactIsInvalid() async throws {
         let recording = try makeDualSourceMeetingRecording(
             displayName: "Cleaned Mic Invalid",
@@ -2724,8 +2780,15 @@ final class TranscriptionServiceTests: XCTestCase {
             contentsOf: AudioCaptureDiagnostics.diagnosticLogURL(),
             encoding: .utf8
         )) ?? ""
+        let expectedSession = "session=\(sessionID.uuidString)"
+        let expectedReason = "reason=\(reason.rawValue)"
+        let found = log.split(separator: "\n").contains { line in
+            line.contains("meeting_cleaned_mic_source")
+                && line.contains(expectedSession)
+                && line.contains(expectedReason)
+        }
         XCTAssertTrue(
-            log.contains("session=\(sessionID.uuidString)") && log.contains("reason=\(reason.rawValue)"),
+            found,
             "Expected diagnostic log to contain session \(sessionID) and reason \(reason.rawValue); log was:\n\(log)",
             file: file,
             line: line

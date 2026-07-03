@@ -301,7 +301,10 @@ private struct MeetingArtifactFiles: Codable {
         let metadataURL = MeetingRecordingMetadataStore.metadataURL(for: folderURL)
         let fileManager = FileManager.default
         microphoneAudioPath = fileManager.fileExists(atPath: microphoneURL.path) ? microphoneURL.path : nil
-        cleanedMicrophoneAudioPath = fileManager.fileExists(atPath: cleanedMicrophoneURL.path)
+        cleanedMicrophoneAudioPath = MeetingRecordingOutput.isViableCleanedMicrophoneFile(
+            at: cleanedMicrophoneURL,
+            fileManager: fileManager
+        )
             ? cleanedMicrophoneURL.path
             : nil
         systemAudioPath = fileManager.fileExists(atPath: systemURL.path) ? systemURL.path : nil
