@@ -1396,7 +1396,8 @@ final class MeetingRecordingServiceTests: XCTestCase {
 
     func testStopRecordingReturnsBeforeSlowCleanedMicRendererCompletes() async throws {
         let captureService = MockMeetingAudioCaptureService()
-        let blockingConditioner = BlockingMicConditioner()
+        let renderRelease = MeetingTestAsyncSignal()
+        defer { renderRelease.signal() }
         let outputCapture = StopOutputCapture()
         let service = MeetingRecordingService(
             audioCaptureService: captureService,
@@ -1405,8 +1406,17 @@ final class MeetingRecordingServiceTests: XCTestCase {
             micConditionerFactory: {
                 ZeroingMicConditioner()
             },
-            cleanedMicConditionerFactory: {
-                blockingConditioner
+            cleanedMicrophoneReadinessScheduler: { outputURL, microphoneURL, _, _, _, _, fileManager, _ in
+                let fileManagerBox = UncheckedSendableBox(fileManager)
+                let task = Task<MeetingCleanedMicrophoneRenderCompletion, Never> {
+                    await renderRelease.wait()
+                    if let microphoneURL {
+                        try? fileManagerBox.value.removeItem(at: outputURL)
+                        try? fileManagerBox.value.copyItem(at: microphoneURL, to: outputURL)
+                    }
+                    return .rendered(outputURL)
+                }
+                return .scheduled(outputURL: outputURL, task: task)
             }
         )
 
@@ -1428,12 +1438,7 @@ final class MeetingRecordingServiceTests: XCTestCase {
             }
         }
 
-        XCTAssertTrue(
-            blockingConditioner.waitUntilConditionCalled(timeout: 1),
-            "test fixture should block inside the cleaned-mic render task"
-        )
         guard let result = await outputCapture.resultWithin(seconds: 1) else {
-            blockingConditioner.release()
             XCTFail("stopRecording() waited for the cleaned-mic renderer to finish")
             return
         }
@@ -1453,7 +1458,7 @@ final class MeetingRecordingServiceTests: XCTestCase {
             "Stop returned while the deliberately blocked renderer had not produced an artifact yet"
         )
 
-        blockingConditioner.release()
+        renderRelease.signal()
         let decision = try await output.resolvedMicrophoneTranscriptionSource(
             policy: .init(floorSeconds: 2, durationMultiplier: 0, capSeconds: 2)
         )
@@ -2836,46 +2841,32 @@ private final class MeetingMicConditionerFactoryProbe: @unchecked Sendable {
     }
 }
 
-private final class BlockingMicConditioner: MicConditioning, @unchecked Sendable {
-    private let started = DispatchSemaphore(value: 0)
-    private let releaseSignal = DispatchSemaphore(value: 0)
+private final class MeetingTestAsyncSignal: @unchecked Sendable {
     private let lock = NSLock()
-    private var released = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var didSignal = false
 
-    var diagnostics: MeetingEchoSuppressionDiagnostics {
-        MeetingEchoSuppressionDiagnostics(
-            processorName: "blocking-test-cleaner",
-            loaded: true,
-            micFrames: 0,
-            processedFrames: 0,
-            rawFallbackFrames: 0,
-            fullReferenceFrames: 0,
-            partialReferenceFrames: 0,
-            missingReferenceFrames: 0,
-            processingFailures: 0
-        )
-    }
-
-    func condition(microphone: [Float], speaker: [Float], hasSpeakerReference: Bool) -> [Float] {
-        started.signal()
-        let shouldWait = lock.withLock { !released }
-        if shouldWait {
-            releaseSignal.wait()
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let immediateContinuation: CheckedContinuation<Void, Never>? = lock.withLock {
+                if didSignal {
+                    return continuation
+                }
+                self.continuation = continuation
+                return nil
+            }
+            immediateContinuation?.resume()
         }
-        return microphone
     }
 
-    func reset() {}
-
-    func waitUntilConditionCalled(timeout: TimeInterval) -> Bool {
-        started.wait(timeout: .now() + timeout) == .success
-    }
-
-    func release() {
-        lock.withLock {
-            released = true
+    func signal() {
+        let continuation = lock.withLock {
+            didSignal = true
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
         }
-        releaseSignal.signal()
+        continuation?.resume()
     }
 }
 

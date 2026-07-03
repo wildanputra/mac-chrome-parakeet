@@ -86,6 +86,17 @@ public extension MeetingRecordingServiceProtocol {
     }
 }
 
+typealias MeetingCleanedMicrophoneReadinessScheduling = @Sendable (
+    _ outputURL: URL,
+    _ microphoneURL: URL?,
+    _ systemURL: URL?,
+    _ sourceAlignment: MeetingSourceAlignment,
+    _ sessionID: UUID,
+    _ conditionerFactory: @escaping @Sendable () -> any MicConditioning,
+    _ fileManager: FileManager,
+    _ eventName: String
+) -> MeetingCleanedMicrophoneReadiness
+
 public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
     private struct SourceCaptureMetrics: Sendable {
         var firstHostTime: UInt64?
@@ -172,6 +183,7 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
     private let speechEngineSessionManager: (any SpeechEngineSessionManaging)?
     private let micConditionerFactory: @Sendable () -> any MicConditioning
     private let cleanedMicConditionerFactory: @Sendable () -> any MicConditioning
+    private let cleanedMicrophoneReadinessScheduler: MeetingCleanedMicrophoneReadinessScheduling
 
     private var currentSession: Session?
     /// Buffer-discard flag for pause/resume. Reset in `cleanupState`.
@@ -281,7 +293,19 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
         fileManager: FileManager = .default,
         isVadLiveChunkingEnabled: @escaping @Sendable () -> Bool = { false },
         micConditionerFactory: @escaping @Sendable () -> any MicConditioning,
-        cleanedMicConditionerFactory: (@Sendable () -> any MicConditioning)? = nil
+        cleanedMicConditionerFactory: (@Sendable () -> any MicConditioning)? = nil,
+        cleanedMicrophoneReadinessScheduler: @escaping MeetingCleanedMicrophoneReadinessScheduling = { outputURL, microphoneURL, systemURL, sourceAlignment, sessionID, conditionerFactory, fileManager, eventName in
+            MeetingCleanedMicrophoneRenderScheduler.schedule(
+                outputURL: outputURL,
+                microphoneURL: microphoneURL,
+                systemURL: systemURL,
+                sourceAlignment: sourceAlignment,
+                sessionID: sessionID,
+                conditionerFactory: conditionerFactory,
+                fileManager: fileManager,
+                eventName: eventName
+            )
+        }
     ) {
         self.requestedMicProcessingMode = micProcessingMode
         self.audioCaptureService = audioCaptureService
@@ -291,6 +315,7 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
         self.isVadLiveChunkingEnabled = isVadLiveChunkingEnabled
         self.micConditionerFactory = micConditionerFactory
         self.cleanedMicConditionerFactory = cleanedMicConditionerFactory ?? micConditionerFactory
+        self.cleanedMicrophoneReadinessScheduler = cleanedMicrophoneReadinessScheduler
         self.liveChunkTranscriber = LiveChunkTranscriber(sttTranscriber: sttTranscriber)
         self.speechEngineSessionManager = sttTranscriber as? any SpeechEngineSessionManaging
     }
@@ -1260,15 +1285,15 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
     ) -> MeetingCleanedMicrophoneReadiness {
         let outputURL = session.folderURL.appendingPathComponent(
             MeetingCleanedMicRenderer.cleanedMicrophoneFileName)
-        return MeetingCleanedMicrophoneRenderScheduler.schedule(
-            outputURL: outputURL,
-            microphoneURL: availableSources.contains(.microphone) ? session.microphoneAudioURL : nil,
-            systemURL: availableSources.contains(.system) ? session.systemAudioURL : nil,
-            sourceAlignment: sourceAlignment,
-            sessionID: session.id,
-            conditionerFactory: cleanedMicConditionerFactory,
-            fileManager: fileManager,
-            eventName: "meeting_cleaned_mic"
+        return cleanedMicrophoneReadinessScheduler(
+            outputURL,
+            availableSources.contains(.microphone) ? session.microphoneAudioURL : nil,
+            availableSources.contains(.system) ? session.systemAudioURL : nil,
+            sourceAlignment,
+            session.id,
+            cleanedMicConditionerFactory,
+            fileManager,
+            "meeting_cleaned_mic"
         )
     }
 
