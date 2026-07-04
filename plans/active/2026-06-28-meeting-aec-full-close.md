@@ -69,8 +69,9 @@ assets or hardware that cannot be produced in a sandbox.
   decision under U6.
 - **U8 — docs: UPDATED.** `spec/05-audio-pipeline.md` and
   `spec/contracts/meeting-artifacts-v1.md` describe the derived artifact + STT
-  routing. CLI artifact output intentionally omits the cleaned mic: it is an
-  internal STT input, not a user-facing export the user opens.
+  routing. Human-facing CLI artifact listings intentionally omit the cleaned mic
+  as a user-openable export; manifest/JSON consumers still see
+  `cleanedMicrophoneAudioPath` when the derived file is viable.
 - **U3/U4 are inert when shipped builds lack AEC assets** — production resolves
   to `PassthroughMicConditioner`, so the scheduled cleaned-mic render reports
   `rawNoAECAssets`, removes any stale candidate/stable cleaned file, and final
@@ -477,10 +478,13 @@ test skips when the env vars are unset, so CI stays green without the private as
   - `Tests/CLITests/MeetingsCommandTests.swift`
   - `docs/human-qa-guide.md`
   - `docs/distribution.md`
-- **Approach:** Document that raw source files remain truth, cleaned mic is a derived artifact, final meeting STT may prefer cleaned mic after the readiness/decodability gates, and retention applies to cleaned audio. Expose cleaned artifact presence in any existing meeting artifact listing without making users manage it separately.
+- **Approach:** Document that raw source files remain truth, cleaned mic is a derived artifact, final meeting STT may prefer cleaned mic after the readiness/decodability gates, and retention applies to cleaned audio. Expose cleaned artifact presence through manifest/JSON artifact surfaces without making users manage it as a separate opened export.
 - **Patterns to follow:** Existing meeting artifact folder/CLI conventions and boundary contract docs.
 - **Test scenarios:**
-  - CLI meeting artifact output includes cleaned mic when present and omits it cleanly when absent.
+  - Manifest/JSON meeting artifact output includes `cleanedMicrophoneAudioPath`
+    when the cleaned mic is viable and omits it cleanly when absent.
+  - Human-facing CLI artifact listings omit the cleaned mic as a separate
+    user-openable export.
   - Contract tests cover retention/deletion of cleaned mic alongside raw source audio.
   - Spec text no longer implies passthrough is the only production AEC state once assets are shipped.
 - **Verification:** Specs/contracts/CLI agree on artifact names, lifecycle, and final STT source preference.
