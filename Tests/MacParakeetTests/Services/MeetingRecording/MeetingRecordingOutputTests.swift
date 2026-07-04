@@ -115,6 +115,190 @@ final class MeetingRecordingOutputTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: candidateURL.path))
     }
 
+    func testResolvedSourcePersistsEchoSuppressionMetadataForCleanedRender() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try saveAlignmentMetadata(in: dir)
+        let rawURL = dir.appendingPathComponent("microphone.m4a")
+        let systemURL = dir.appendingPathComponent("system.m4a")
+        let cleanedURL = dir.appendingPathComponent("microphone-cleaned.m4a")
+        try Data([0x00]).write(to: rawURL)
+        try Data([0x00]).write(to: systemURL)
+        let renderSummary = MeetingCleanedMicrophoneRenderSummary(
+            modelVersion: "localvqe-v1.4-aec-200K-f32.gguf",
+            renderDurationMs: 123,
+            realtimeFactor: 8.5,
+            delayEstimateMs: 42,
+            probeWindowsEvaluated: 3,
+            probeBestCorrelation: 0.41
+        )
+        let renderTask = Task<MeetingCleanedMicrophoneRenderCompletion, Never> {
+            try? await MeetingCleanedMicRenderer.encodeMonoFloat(
+                [Float](repeating: 0.05, count: 1_600),
+                sampleRate: 16_000,
+                to: cleanedURL,
+                fileManager: .default
+            )
+            return .rendered(cleanedURL, summary: renderSummary)
+        }
+        let output = MeetingRecordingOutput(
+            sessionID: UUID(),
+            displayName: "Cleaned",
+            folderURL: dir,
+            mixedAudioURL: dir.appendingPathComponent("meeting.m4a"),
+            microphoneAudioURL: rawURL,
+            systemAudioURL: systemURL,
+            cleanedMicrophoneAudioURL: cleanedURL,
+            cleanedMicrophoneReadiness: .scheduled(outputURL: cleanedURL, task: renderTask),
+            durationSeconds: 1,
+            sourceAlignment: dualSourceAlignment()
+        )
+
+        let decision = try await output.resolvedMicrophoneTranscriptionSource(
+            policy: .init(floorSeconds: 1, durationMultiplier: 0, capSeconds: 1)
+        )
+
+        XCTAssertEqual(decision.reason, .cleanedUsed)
+        let metadata = try MeetingRecordingMetadataStore.load(from: dir)
+        let echo = try XCTUnwrap(metadata.echoSuppression)
+        XCTAssertEqual(echo.reasonCode, .cleanedUsed)
+        XCTAssertEqual(echo.modelVersion, "localvqe-v1.4-aec-200K-f32.gguf")
+        XCTAssertEqual(echo.renderDurationMs, 123)
+        XCTAssertEqual(echo.delayEstimateMs, 42)
+        XCTAssertEqual(try XCTUnwrap(echo.probeBestCorrelation), 0.41, accuracy: 0.0001)
+    }
+
+    func testResolvedSourcePreservesArchivedCleanedRenderMetadata() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let rawURL = dir.appendingPathComponent("microphone.m4a")
+        let cleanedURL = dir.appendingPathComponent("microphone-cleaned.m4a")
+        try Data([0x00]).write(to: rawURL)
+        try writeM4A(to: cleanedURL)
+        try MeetingRecordingMetadataStore.save(
+            MeetingRecordingMetadata(
+                sourceAlignment: dualSourceAlignment(),
+                echoSuppression: MeetingEchoSuppressionMetadata(
+                    reasonCode: .cleanedUsed,
+                    modelVersion: "localvqe-v1.4-aec-200K-f32.gguf",
+                    renderDurationMs: 234,
+                    delayEstimateMs: 18,
+                    probeBestCorrelation: 0.52
+                )
+            ),
+            folderURL: dir
+        )
+        let output = makeOutput(
+            folderURL: dir,
+            microphoneAudioURL: rawURL,
+            cleanedMicrophoneAudioURL: cleanedURL
+        )
+
+        let decision = try await output.resolvedMicrophoneTranscriptionSource()
+
+        XCTAssertEqual(decision.reason, .cleanedUsed)
+        let echo = try XCTUnwrap(MeetingRecordingMetadataStore.load(from: dir).echoSuppression)
+        XCTAssertEqual(echo.reasonCode, .cleanedUsed)
+        XCTAssertEqual(echo.modelVersion, "localvqe-v1.4-aec-200K-f32.gguf")
+        XCTAssertEqual(echo.renderDurationMs, 234)
+        XCTAssertEqual(echo.delayEstimateMs, 18)
+        XCTAssertEqual(try XCTUnwrap(echo.probeBestCorrelation), 0.52, accuracy: 0.0001)
+    }
+
+    func testResolvedSourcePreservesArchivedCleanedMetricsWhenArtifactTurnsInvalid() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let rawURL = dir.appendingPathComponent("microphone.m4a")
+        let cleanedURL = dir.appendingPathComponent("microphone-cleaned.m4a")
+        try Data([0x00]).write(to: rawURL)
+        try Data("partial m4a fragment".utf8).write(to: cleanedURL)
+        try MeetingRecordingMetadataStore.save(
+            MeetingRecordingMetadata(
+                sourceAlignment: dualSourceAlignment(),
+                echoSuppression: MeetingEchoSuppressionMetadata(
+                    reasonCode: .cleanedUsed,
+                    modelVersion: "localvqe-v1.4-aec-200K-f32.gguf",
+                    renderDurationMs: 234,
+                    delayEstimateMs: 18,
+                    probeBestCorrelation: 0.52
+                )
+            ),
+            folderURL: dir
+        )
+        let output = makeOutput(
+            folderURL: dir,
+            microphoneAudioURL: rawURL,
+            cleanedMicrophoneAudioURL: cleanedURL
+        )
+
+        let decision = try await output.resolvedMicrophoneTranscriptionSource()
+
+        XCTAssertEqual(decision.reason, .rawInvalidArtifact)
+        let echo = try XCTUnwrap(MeetingRecordingMetadataStore.load(from: dir).echoSuppression)
+        XCTAssertEqual(echo.reasonCode, .rawInvalidArtifact)
+        XCTAssertEqual(echo.modelVersion, "localvqe-v1.4-aec-200K-f32.gguf")
+        XCTAssertEqual(echo.renderDurationMs, 234)
+        XCTAssertEqual(echo.delayEstimateMs, 18)
+        XCTAssertEqual(try XCTUnwrap(echo.probeBestCorrelation), 0.52, accuracy: 0.0001)
+    }
+
+    func testResolvedSourcePersistsEchoSuppressionMetadataForNoEchoSkip() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try saveAlignmentMetadata(in: dir)
+        let rawURL = dir.appendingPathComponent("microphone.m4a")
+        let systemURL = dir.appendingPathComponent("system.m4a")
+        let cleanedURL = dir.appendingPathComponent("microphone-cleaned.m4a")
+        try Data([0x00]).write(to: rawURL)
+        try Data([0x00]).write(to: systemURL)
+        let renderSummary = MeetingCleanedMicrophoneRenderSummary(
+            modelVersion: nil,
+            renderDurationMs: nil,
+            realtimeFactor: nil,
+            delayEstimateMs: nil,
+            probeWindowsEvaluated: 5,
+            probeBestCorrelation: 0.03
+        )
+        let renderTask = Task<MeetingCleanedMicrophoneRenderCompletion, Never> {
+            .fallback(.skippedNoEchoPath, summary: renderSummary)
+        }
+        let output = MeetingRecordingOutput(
+            sessionID: UUID(),
+            displayName: "No Echo",
+            folderURL: dir,
+            mixedAudioURL: dir.appendingPathComponent("meeting.m4a"),
+            microphoneAudioURL: rawURL,
+            systemAudioURL: systemURL,
+            cleanedMicrophoneAudioURL: cleanedURL,
+            cleanedMicrophoneReadiness: .scheduled(outputURL: cleanedURL, task: renderTask),
+            durationSeconds: 1,
+            sourceAlignment: dualSourceAlignment()
+        )
+
+        let decision = try await output.resolvedMicrophoneTranscriptionSource(
+            policy: .init(floorSeconds: 1, durationMultiplier: 0, capSeconds: 1)
+        )
+
+        XCTAssertEqual(decision.reason, .skippedNoEchoPath)
+        XCTAssertEqual(decision.url, rawURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cleanedURL.path))
+        let metadata = try MeetingRecordingMetadataStore.load(from: dir)
+        let echo = try XCTUnwrap(metadata.echoSuppression)
+        XCTAssertEqual(echo.reasonCode, .skippedNoEchoPath)
+        XCTAssertNil(echo.modelVersion)
+        XCTAssertNil(echo.renderDurationMs)
+        XCTAssertNil(echo.delayEstimateMs)
+        XCTAssertEqual(try XCTUnwrap(echo.probeBestCorrelation), 0.03, accuracy: 0.0001)
+        let json =
+            try JSONSerialization.jsonObject(
+                with: Data(contentsOf: MeetingRecordingMetadataStore.metadataURL(for: dir))
+            ) as? [String: Any]
+        let echoJSON = try XCTUnwrap(json?["echoSuppression"] as? [String: Any])
+        XCTAssertFalse(echoJSON.keys.contains("modelVersion"))
+        XCTAssertFalse(echoJSON.keys.contains("renderDurationMs"))
+        XCTAssertFalse(echoJSON.keys.contains("delayEstimateMs"))
+    }
+
     func testMicrophoneTranscriptionURLFallsBackToRawWhenCleanedIsEmpty() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -204,6 +388,69 @@ final class MeetingRecordingOutputTests: XCTestCase {
         }
     }
 
+    func testUpdateEchoSuppressionPreservesLegacyMissingSpeechEngine() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeLegacyMetadataWithoutSpeechEngine(in: dir)
+
+        try MeetingRecordingMetadataStore.updateEchoSuppression(
+            MeetingEchoSuppressionMetadata(reasonCode: .skippedNoEchoPath),
+            folderURL: dir
+        )
+
+        let data = try Data(contentsOf: MeetingRecordingMetadataStore.metadataURL(for: dir))
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertNil(json?["speechEngine"])
+        let metadata = try MeetingRecordingMetadataStore.load(from: dir)
+        XCTAssertFalse(metadata.speechEngineWasCaptured)
+        XCTAssertEqual(metadata.echoSuppression?.reasonCode, .skippedNoEchoPath)
+    }
+
+    func testUpdateEchoSuppressionSavesThroughInjectedFileManager() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let virtualFileManager = RecordingMetadataFileManager(
+            data: try legacyMetadataDataWithoutSpeechEngine()
+        )
+
+        try MeetingRecordingMetadataStore.updateEchoSuppression(
+            MeetingEchoSuppressionMetadata(reasonCode: .cleanedUsed, modelVersion: "test-model.gguf"),
+            folderURL: dir,
+            fileManager: virtualFileManager
+        )
+
+        XCTAssertEqual(
+            virtualFileManager.createdPaths,
+            [MeetingRecordingMetadataStore.metadataURL(for: dir).path]
+        )
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: MeetingRecordingMetadataStore.metadataURL(for: dir).path))
+        let data = try XCTUnwrap(virtualFileManager.data)
+        let metadata = try JSONDecoder().decode(MeetingRecordingMetadata.self, from: data)
+        XCTAssertFalse(metadata.speechEngineWasCaptured)
+        XCTAssertEqual(metadata.echoSuppression?.reasonCode, .cleanedUsed)
+        XCTAssertEqual(metadata.echoSuppression?.modelVersion, "test-model.gguf")
+    }
+
+    func testUpdateEchoSuppressionPreservesInjectedFileManagerDataWhenCreateFails() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let originalData = try legacyMetadataDataWithoutSpeechEngine()
+        let virtualFileManager = RecordingMetadataFileManager(
+            data: originalData,
+            shouldCreateFileSucceed: false
+        )
+
+        XCTAssertThrowsError(try MeetingRecordingMetadataStore.updateEchoSuppression(
+            MeetingEchoSuppressionMetadata(reasonCode: .cleanedUsed),
+            folderURL: dir,
+            fileManager: virtualFileManager
+        ))
+
+        XCTAssertEqual(virtualFileManager.data, originalData)
+        XCTAssertTrue(virtualFileManager.removedPaths.isEmpty)
+    }
+
     // MARK: Helpers
 
     private func makeTempDir() throws -> URL {
@@ -224,6 +471,47 @@ final class MeetingRecordingOutputTests: XCTestCase {
                 speechEngine: SpeechEngineSelection(engine: .parakeet)
             ),
             folderURL: dir
+        )
+    }
+
+    private func legacyMetadataDataWithoutSpeechEngine() throws -> Data {
+        let scratch = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        try writeLegacyMetadataWithoutSpeechEngine(in: scratch)
+        return try Data(contentsOf: MeetingRecordingMetadataStore.metadataURL(for: scratch))
+    }
+
+    private func writeLegacyMetadataWithoutSpeechEngine(in dir: URL) throws {
+        try saveAlignmentMetadata(in: dir)
+        let url = MeetingRecordingMetadataStore.metadataURL(for: dir)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: url)
+        ) as? [String: Any])
+        json.removeValue(forKey: "speechEngine")
+        let data = try JSONSerialization.data(
+            withJSONObject: json,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func dualSourceAlignment() -> MeetingSourceAlignment {
+        MeetingSourceAlignment(
+            meetingOriginHostTime: 100,
+            microphone: .init(
+                firstHostTime: 100,
+                lastHostTime: 200,
+                startOffsetMs: 0,
+                writtenFrameCount: 16_000,
+                sampleRate: 16_000
+            ),
+            system: .init(
+                firstHostTime: 100,
+                lastHostTime: 200,
+                startOffsetMs: 0,
+                writtenFrameCount: 16_000,
+                sampleRate: 16_000
+            )
         )
     }
 
@@ -296,5 +584,42 @@ private final class ContentsProbeFailingFileManager: FileManager {
 
     override func contents(atPath path: String) -> Data? {
         nil
+    }
+}
+
+private final class RecordingMetadataFileManager: FileManager {
+    private(set) var data: Data?
+    private(set) var createdPaths: [String] = []
+    private(set) var removedPaths: [String] = []
+    private let shouldCreateFileSucceed: Bool
+
+    init(data: Data, shouldCreateFileSucceed: Bool = true) {
+        self.data = data
+        self.shouldCreateFileSucceed = shouldCreateFileSucceed
+        super.init()
+    }
+
+    override func fileExists(atPath path: String) -> Bool {
+        data != nil
+    }
+
+    override func contents(atPath path: String) -> Data? {
+        data
+    }
+
+    override func removeItem(at URL: URL) throws {
+        removedPaths.append(URL.path)
+        data = nil
+    }
+
+    override func createFile(
+        atPath path: String,
+        contents data: Data?,
+        attributes attr: [FileAttributeKey: Any]? = nil
+    ) -> Bool {
+        createdPaths.append(path)
+        guard shouldCreateFileSucceed else { return false }
+        self.data = data
+        return true
     }
 }

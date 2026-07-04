@@ -54,19 +54,35 @@ public struct MeetingRecordingMetadata: Sendable, Codable, Equatable {
     public let sourceAlignment: MeetingSourceAlignment
     public let speechEngine: SpeechEngineSelection
     public let speechEngineWasCaptured: Bool
+    public let echoSuppression: MeetingEchoSuppressionMetadata?
 
     public init(
         sourceAlignment: MeetingSourceAlignment,
-        speechEngine: SpeechEngineSelection = SpeechEngineSelection(engine: .parakeet)
+        speechEngine: SpeechEngineSelection = SpeechEngineSelection(engine: .parakeet),
+        echoSuppression: MeetingEchoSuppressionMetadata? = nil
     ) {
         self.sourceAlignment = sourceAlignment
         self.speechEngine = speechEngine
         self.speechEngineWasCaptured = true
+        self.echoSuppression = echoSuppression
+    }
+
+    private init(
+        sourceAlignment: MeetingSourceAlignment,
+        speechEngine: SpeechEngineSelection,
+        speechEngineWasCaptured: Bool,
+        echoSuppression: MeetingEchoSuppressionMetadata?
+    ) {
+        self.sourceAlignment = sourceAlignment
+        self.speechEngine = speechEngine
+        self.speechEngineWasCaptured = speechEngineWasCaptured
+        self.echoSuppression = echoSuppression
     }
 
     private enum CodingKeys: String, CodingKey {
         case sourceAlignment
         case speechEngine
+        case echoSuppression
     }
 
     public init(from decoder: Decoder) throws {
@@ -75,6 +91,52 @@ public struct MeetingRecordingMetadata: Sendable, Codable, Equatable {
         let decodedSpeechEngine = try container.decodeIfPresent(SpeechEngineSelection.self, forKey: .speechEngine)
         speechEngine = decodedSpeechEngine ?? SpeechEngineSelection(engine: .parakeet)
         speechEngineWasCaptured = decodedSpeechEngine != nil
+        echoSuppression = try container.decodeIfPresent(
+            MeetingEchoSuppressionMetadata.self,
+            forKey: .echoSuppression
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sourceAlignment, forKey: .sourceAlignment)
+        if speechEngineWasCaptured {
+            try container.encode(speechEngine, forKey: .speechEngine)
+        }
+        try container.encodeIfPresent(echoSuppression, forKey: .echoSuppression)
+    }
+
+    public func withEchoSuppression(
+        _ echoSuppression: MeetingEchoSuppressionMetadata
+    ) -> MeetingRecordingMetadata {
+        MeetingRecordingMetadata(
+            sourceAlignment: sourceAlignment,
+            speechEngine: speechEngine,
+            speechEngineWasCaptured: speechEngineWasCaptured,
+            echoSuppression: echoSuppression
+        )
+    }
+}
+
+public struct MeetingEchoSuppressionMetadata: Sendable, Codable, Equatable {
+    public let reasonCode: MeetingCleanedMicrophoneRoutingReason
+    public let modelVersion: String?
+    public let renderDurationMs: Int?
+    public let delayEstimateMs: Int?
+    public let probeBestCorrelation: Float?
+
+    public init(
+        reasonCode: MeetingCleanedMicrophoneRoutingReason,
+        modelVersion: String? = nil,
+        renderDurationMs: Int? = nil,
+        delayEstimateMs: Int? = nil,
+        probeBestCorrelation: Float? = nil
+    ) {
+        self.reasonCode = reasonCode
+        self.modelVersion = modelVersion
+        self.renderDurationMs = renderDurationMs
+        self.delayEstimateMs = delayEstimateMs
+        self.probeBestCorrelation = probeBestCorrelation
     }
 }
 
@@ -83,9 +145,21 @@ enum MeetingRecordingMetadataStore {
         folderURL.appendingPathComponent(MeetingRecordingMetadata.fileName)
     }
 
-    static func save(_ metadata: MeetingRecordingMetadata, folderURL: URL) throws {
+    static func save(
+        _ metadata: MeetingRecordingMetadata,
+        folderURL: URL,
+        fileManager: FileManager = .default
+    ) throws {
         let data = try JSONEncoder.meetingRecordingMetadata.encode(metadata)
-        try data.write(to: metadataURL(for: folderURL), options: .atomic)
+        let url = metadataURL(for: folderURL)
+        if fileManager === FileManager.default {
+            try data.write(to: url, options: .atomic)
+            return
+        }
+        guard fileManager.createFile(atPath: url.path, contents: data) else {
+            throw MeetingAudioError.storageFailed(
+                "Unable to write archived meeting metadata: \(MeetingRecordingMetadata.fileName)")
+        }
     }
 
     static func load(
@@ -102,6 +176,19 @@ enum MeetingRecordingMetadataStore {
                 "Unable to read archived meeting metadata: \(MeetingRecordingMetadata.fileName)")
         }
         return try JSONDecoder.meetingRecordingMetadata.decode(MeetingRecordingMetadata.self, from: data)
+    }
+
+    static func updateEchoSuppression(
+        _ echoSuppression: MeetingEchoSuppressionMetadata,
+        folderURL: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        let metadata = try load(from: folderURL, fileManager: fileManager)
+        try save(
+            metadata.withEchoSuppression(echoSuppression),
+            folderURL: folderURL,
+            fileManager: fileManager
+        )
     }
 }
 
