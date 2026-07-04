@@ -480,6 +480,10 @@ extension PromptsCommand {
                         userNotesSnapshot: transcript.userNotes
                     )
                     try resultRepo.save(result)
+                    await refreshMeetingArtifacts(
+                        transcription: transcript,
+                        resultRepo: resultRepo
+                    )
                     // Status messages on stderr so stdout stays grep-able as the prompt output.
                     FileHandle.standardError.write(Data("\nSaved PromptResult \(result.id.uuidString.prefix(8))\n".utf8))
                 }
@@ -489,6 +493,24 @@ extension PromptsCommand {
                 }
             }
         }
+    }
+}
+
+/// Refreshes meeting artifacts; failures are logged and never surfaced or thrown, and refresh never blocks or fails the triggering user action.
+private func refreshMeetingArtifacts(
+    transcription: Transcription,
+    resultRepo: PromptResultRepositoryProtocol
+) async {
+    guard transcription.sourceType == .meeting else { return }
+
+    do {
+        let promptResults = try resultRepo.fetchAll(transcriptionId: transcription.id)
+        _ = try await MeetingArtifactStore().materialize(
+            transcription: transcription,
+            promptResults: promptResults
+        )
+    } catch {
+        printErr("Warning: meeting artifact refresh failed: \(error.localizedDescription)")
     }
 }
 
