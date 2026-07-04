@@ -207,11 +207,16 @@ public final class TranscriptionViewModel {
     private var activeProgressNemotronVariant: NemotronModelVariant?
     private var activeDropRequestID: UUID?
     private var speakerRenameGenerations: [UUID: Int] = [:]
+    private var speakerRenameArtifactRefreshTasks: [UUID: Task<Void, Never>] = [:]
+    private var speakerRenameArtifactRefreshTokens: [UUID: UUID] = [:]
+    private var speakerRenameArtifactRefreshRequestedGenerations: [UUID: Int] = [:]
+    private var speakerRenameArtifactRefreshCompletedGenerations: [UUID: Int] = [:]
     private var dropPendingCount = 0
     private var dropCollectedURLs: [URL] = []
     private static let configurationError = "Transcription services are unavailable. Please try again."
     private let logger = Logger(subsystem: "com.macparakeet.viewmodels", category: "TranscriptionViewModel")
     private let defaults: UserDefaults
+    private let meetingArtifactStore: MeetingArtifactStoring
     private let isWhisperModelDownloaded: () -> Bool
     private let isNemotronModelDownloaded: () -> Bool
     private let isCohereModelDownloaded: () -> Bool
@@ -219,11 +224,13 @@ public final class TranscriptionViewModel {
 
     public init(
         defaults: UserDefaults = .standard,
+        meetingArtifactStore: MeetingArtifactStoring = MeetingArtifactStore(),
         isWhisperModelDownloaded: (() -> Bool)? = nil,
         isNemotronModelDownloaded: (() -> Bool)? = nil,
         isCohereModelDownloaded: (() -> Bool)? = nil
     ) {
         self.defaults = defaults
+        self.meetingArtifactStore = meetingArtifactStore
         self.isWhisperModelDownloaded = isWhisperModelDownloaded ?? {
             WhisperEngine.isModelDownloaded(
                 model: SpeechEnginePreference.whisperModelVariant(defaults: defaults)
@@ -1247,9 +1254,11 @@ public final class TranscriptionViewModel {
         guard !trimmed.isEmpty, speakers[index].label != trimmed else { return }
         let previousCurrentSpeakers = speakers
         let previousCurrentSegments = transcription.transcriptSegments
+        let previousCurrentUpdatedAt = transcription.updatedAt
         let transcriptionIndex = transcriptions.firstIndex(where: { $0.id == transcription.id })
         let previousListSpeakers = transcriptionIndex.flatMap { transcriptions[$0].speakers }
         let previousListSegments = transcriptionIndex.flatMap { transcriptions[$0].transcriptSegments }
+        let previousListUpdatedAt = transcriptionIndex.map { transcriptions[$0].updatedAt }
         let renameGeneration = (speakerRenameGenerations[transcription.id] ?? 0) + 1
         speakerRenameGenerations[transcription.id] = renameGeneration
         speakers[index].label = trimmed
@@ -1258,10 +1267,12 @@ public final class TranscriptionViewModel {
             in: transcription.transcriptSegments,
             using: speakers
         )
+        transcription.updatedAt = Date()
         currentTranscription = transcription
         if let transcriptionIndex {
             transcriptions[transcriptionIndex].speakers = speakers
             transcriptions[transcriptionIndex].transcriptSegments = transcription.transcriptSegments
+            transcriptions[transcriptionIndex].updatedAt = transcription.updatedAt
         }
         guard let transcriptionRepo else { return }
         let transcriptionID = transcription.id
@@ -1272,14 +1283,20 @@ public final class TranscriptionViewModel {
             speakers,
             previousCurrentSpeakers,
             previousCurrentSegments,
+            previousCurrentUpdatedAt,
             previousListSpeakers,
             previousListSegments,
+            previousListUpdatedAt,
             renameGeneration
         ] in
             do {
                 try await Task.detached(priority: .utility) {
                     try transcriptionRepo.updateSpeakers(id: transcriptionID, speakers: speakers)
                 }.value
+                self?.enqueueMeetingArtifactRefresh(
+                    transcriptionID: transcriptionID,
+                    generation: renameGeneration
+                )
             } catch {
                 let errorType = TelemetryErrorClassifier.classify(error)
                 self?.handleSpeakerRenamePersistenceFailure(
@@ -1287,9 +1304,15 @@ public final class TranscriptionViewModel {
                     generation: renameGeneration,
                     previousCurrentSpeakers: previousCurrentSpeakers,
                     previousCurrentSegments: previousCurrentSegments,
+                    previousCurrentUpdatedAt: previousCurrentUpdatedAt,
                     previousListSpeakers: previousListSpeakers,
                     previousListSegments: previousListSegments,
+                    previousListUpdatedAt: previousListUpdatedAt,
                     errorType: errorType
+                )
+                self?.enqueueMeetingArtifactRefresh(
+                    transcriptionID: transcriptionID,
+                    generation: renameGeneration
                 )
             }
         }
@@ -1300,22 +1323,110 @@ public final class TranscriptionViewModel {
         generation: Int,
         previousCurrentSpeakers: [SpeakerInfo],
         previousCurrentSegments: [TranscriptSegmentRecord]?,
+        previousCurrentUpdatedAt: Date,
         previousListSpeakers: [SpeakerInfo]?,
         previousListSegments: [TranscriptSegmentRecord]?,
+        previousListUpdatedAt: Date?,
         errorType: String
     ) {
         guard speakerRenameGenerations[transcriptionID] == generation else { return }
         if var currentTranscription, currentTranscription.id == transcriptionID {
             currentTranscription.speakers = previousCurrentSpeakers
             currentTranscription.transcriptSegments = previousCurrentSegments
+            currentTranscription.updatedAt = previousCurrentUpdatedAt
             self.currentTranscription = currentTranscription
         }
         if let index = transcriptions.firstIndex(where: { $0.id == transcriptionID }) {
             transcriptions[index].speakers = previousListSpeakers
             transcriptions[index].transcriptSegments = previousListSegments
+            if let previousListUpdatedAt {
+                transcriptions[index].updatedAt = previousListUpdatedAt
+            }
         }
         setError(message: "Failed to save speaker rename. The previous label was restored.")
         logger.error("Failed to persist speaker rename error_type=\(errorType, privacy: .public)")
+    }
+
+    private func enqueueMeetingArtifactRefresh(transcriptionID: UUID, generation: Int) {
+        guard speakerRenameGenerations[transcriptionID] == generation,
+              let transcriptionRepo
+        else {
+            return
+        }
+
+        let previousTask = speakerRenameArtifactRefreshTasks[transcriptionID]
+        let token = UUID()
+        speakerRenameArtifactRefreshTokens[transcriptionID] = token
+        speakerRenameArtifactRefreshRequestedGenerations[transcriptionID] = max(
+            speakerRenameArtifactRefreshRequestedGenerations[transcriptionID] ?? 0,
+            generation
+        )
+
+        let artifactStore = meetingArtifactStore
+        let promptResultRepo = promptResultRepo
+        let logger = logger
+        let task = Task.detached(priority: .utility) { [weak self, previousTask, transcriptionRepo, promptResultRepo, artifactStore, logger] in
+            await previousTask?.value
+            let shouldMaterialize = await MainActor.run { [weak self] in
+                guard let self else { return false }
+                let requestedGeneration = self.speakerRenameArtifactRefreshRequestedGenerations[transcriptionID] ?? 0
+                let completedGeneration = self.speakerRenameArtifactRefreshCompletedGenerations[transcriptionID] ?? 0
+                return requestedGeneration >= generation && completedGeneration < generation
+            }
+            guard shouldMaterialize else {
+                await MainActor.run { [weak self] in
+                    self?.finishSpeakerRenameArtifactRefresh(transcriptionID: transcriptionID, token: token)
+                }
+                return
+            }
+
+            var materializedGeneration = generation
+            while true {
+                do {
+                    guard let persisted = try transcriptionRepo.fetch(id: transcriptionID),
+                          persisted.sourceType == .meeting,
+                          MeetingArtifactStore.sessionFolderURL(for: persisted) != nil
+                    else {
+                        break
+                    }
+                    let promptResults = try promptResultRepo?.fetchAll(transcriptionId: transcriptionID) ?? []
+                    _ = try await artifactStore.materialize(
+                        transcription: persisted,
+                        promptResults: promptResults
+                    )
+                } catch {
+                    let errorType = TelemetryErrorClassifier.classify(error)
+                    logger.error("speaker_rename_artifact_refresh_failed error_type=\(errorType, privacy: .public)")
+                    break
+                }
+
+                let completedTargetGeneration = materializedGeneration
+                let nextGeneration = await MainActor.run { [weak self] () -> Int? in
+                    guard let self else { return nil }
+                    let completedGeneration = self.speakerRenameArtifactRefreshCompletedGenerations[transcriptionID] ?? 0
+                    self.speakerRenameArtifactRefreshCompletedGenerations[transcriptionID] = max(
+                        completedGeneration,
+                        completedTargetGeneration
+                    )
+                    let requestedGeneration = self.speakerRenameArtifactRefreshRequestedGenerations[transcriptionID] ?? completedTargetGeneration
+                    return requestedGeneration > completedTargetGeneration ? requestedGeneration : nil
+                }
+                guard let nextGeneration else { break }
+                materializedGeneration = nextGeneration
+            }
+            await MainActor.run { [weak self] in
+                self?.finishSpeakerRenameArtifactRefresh(transcriptionID: transcriptionID, token: token)
+            }
+        }
+        speakerRenameArtifactRefreshTasks[transcriptionID] = task
+    }
+
+    private func finishSpeakerRenameArtifactRefresh(transcriptionID: UUID, token: UUID) {
+        guard speakerRenameArtifactRefreshTokens[transcriptionID] == token else { return }
+        speakerRenameArtifactRefreshTokens[transcriptionID] = nil
+        speakerRenameArtifactRefreshTasks[transcriptionID] = nil
+        speakerRenameArtifactRefreshRequestedGenerations[transcriptionID] = nil
+        speakerRenameArtifactRefreshCompletedGenerations[transcriptionID] = nil
     }
 
     public func renameCurrentTranscription(to newFileName: String) {

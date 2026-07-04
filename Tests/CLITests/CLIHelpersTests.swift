@@ -5,6 +5,35 @@ import XCTest
 
 final class CLIHelpersTests: XCTestCase {
 
+    func testStandardOutputRedirectionRestoresStdoutPayload() throws {
+        let nullFileDescriptor = open("/dev/null", O_WRONLY)
+        XCTAssertGreaterThanOrEqual(nullFileDescriptor, 0)
+        defer { close(nullFileDescriptor) }
+
+        let output = try captureStandardOutput {
+            let redirection = try StandardOutputRedirection(to: nullFileDescriptor)
+            print("native-noise")
+            try redirection.restore()
+            print("payload")
+        }
+
+        XCTAssertEqual(output, "payload\n")
+    }
+
+    func testStandardOutputRedirectionSavedDescriptorClosesOnExec() throws {
+        let nullFileDescriptor = open("/dev/null", O_WRONLY)
+        XCTAssertGreaterThanOrEqual(nullFileDescriptor, 0)
+        defer { close(nullFileDescriptor) }
+
+        let redirection = try StandardOutputRedirection(to: nullFileDescriptor)
+        let savedStdout = try XCTUnwrap(redirection.savedStdoutFileDescriptorForTesting)
+        let flags = fcntl(savedStdout, F_GETFD)
+        XCTAssertGreaterThanOrEqual(flags, 0)
+        XCTAssertNotEqual(flags & FD_CLOEXEC, 0)
+
+        try redirection.restore()
+    }
+
     // MARK: - findTranscription
 
     func testFindTranscriptionByExactUUID() throws {

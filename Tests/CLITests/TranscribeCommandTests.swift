@@ -4,6 +4,47 @@ import XCTest
 @testable import MacParakeetCore
 
 final class TranscribeCommandTests: XCTestCase {
+    private enum OutputTeardownError: Error, Equatable {
+        case run
+        case restore
+    }
+
+    func testOutputEmissionAfterNativeTeardownSurfacesRunErrorBeforeRestoreError() {
+        var ignoredRestoreErrors: [OutputTeardownError] = []
+        XCTAssertThrowsError(
+            try TranscribeCommand.outputEmissionAfterNativeTeardown(
+                runResult: Result<String, Error>.failure(OutputTeardownError.run),
+                restoreResult: .failure(OutputTeardownError.restore),
+                warnOnIgnoredRestoreFailure: { error in
+                    if let error = error as? OutputTeardownError {
+                        ignoredRestoreErrors.append(error)
+                    }
+                }
+            )
+        ) { error in
+            XCTAssertEqual(error as? OutputTeardownError, .run)
+        }
+        XCTAssertEqual(ignoredRestoreErrors, [.restore])
+    }
+
+    func testOutputEmissionAfterNativeTeardownSurfacesRestoreErrorWhenRunSucceeds() {
+        var ignoredRestoreErrors: [OutputTeardownError] = []
+        XCTAssertThrowsError(
+            try TranscribeCommand.outputEmissionAfterNativeTeardown(
+                runResult: Result<String, Error>.success("payload"),
+                restoreResult: .failure(OutputTeardownError.restore),
+                warnOnIgnoredRestoreFailure: { error in
+                    if let error = error as? OutputTeardownError {
+                        ignoredRestoreErrors.append(error)
+                    }
+                }
+            )
+        ) { error in
+            XCTAssertEqual(error as? OutputTeardownError, .restore)
+        }
+        XCTAssertTrue(ignoredRestoreErrors.isEmpty)
+    }
+
     func testResolveProcessingModeUsesRawForAppDefaultWhenUnset() {
         let mode = TranscribeCommand.resolveProcessingMode(.appDefault, storedMode: nil)
         XCTAssertEqual(mode, .raw)
