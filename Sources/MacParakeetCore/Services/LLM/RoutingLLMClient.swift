@@ -1,17 +1,21 @@
 import Foundation
 
 /// Routes LLM requests to the appropriate client based on provider ID.
-/// HTTP-based providers go to `LLMClient`; `.localCLI` goes to `LocalCLILLMClient`.
+/// HTTP-based providers go to `LLMClient`; `.localCLI` goes to
+/// `LocalCLILLMClient`; `.inProcessLocal` goes to `InProcessLLMClient`.
 public final class RoutingLLMClient: LLMClientProtocol, Sendable {
-    private let httpClient: LLMClient
-    private let cliClient: LocalCLILLMClient
+    private let httpClient: any LLMClientProtocol
+    private let cliClient: any LLMClientProtocol
+    private let inProcessClient: any LLMClientProtocol
 
     public init(
-        httpClient: LLMClient = LLMClient(),
-        cliClient: LocalCLILLMClient = LocalCLILLMClient()
+        httpClient: any LLMClientProtocol = LLMClient(),
+        cliClient: any LLMClientProtocol = LocalCLILLMClient(),
+        inProcessClient: any LLMClientProtocol = InProcessLLMClient()
     ) {
         self.httpClient = httpClient
         self.cliClient = cliClient
+        self.inProcessClient = inProcessClient
     }
 
     public func chatCompletion(
@@ -38,7 +42,14 @@ public final class RoutingLLMClient: LLMClientProtocol, Sendable {
         try await client(for: context).listModels(context: context)
     }
 
-    private func client(for context: LLMExecutionContext) -> LLMClientProtocol {
-        context.providerConfig.id == .localCLI ? cliClient : httpClient
+    private func client(for context: LLMExecutionContext) -> any LLMClientProtocol {
+        switch context.providerConfig.id {
+        case .localCLI:
+            return cliClient
+        case .inProcessLocal:
+            return inProcessClient
+        case .anthropic, .openai, .openaiCompatible, .gemini, .openrouter, .ollama, .lmstudio:
+            return httpClient
+        }
     }
 }

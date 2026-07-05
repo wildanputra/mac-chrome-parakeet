@@ -838,7 +838,7 @@ public final class LLMClient: LLMClientProtocol, Sendable {
                     return isGeminiTextLLMModelID(entry.id)
                 case .openaiCompatible, .lmstudio, .ollama:
                     return !isClearlyNonTextModelID(entry.id)
-                case .localCLI:
+                case .localCLI, .inProcessLocal:
                     return false
                 }
             }
@@ -1029,7 +1029,7 @@ public final class LLMClient: LLMClientProtocol, Sendable {
         switch id {
         case .openai, .openrouter, .anthropic:
             return true
-        case .openaiCompatible, .gemini, .ollama, .lmstudio, .localCLI:
+        case .openaiCompatible, .gemini, .ollama, .lmstudio, .localCLI, .inProcessLocal:
             return false
         }
     }

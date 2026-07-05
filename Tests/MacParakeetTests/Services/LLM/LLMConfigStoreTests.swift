@@ -87,6 +87,19 @@ final class LLMConfigStoreTests: XCTestCase {
         XCTAssertEqual(loaded?.apiKey, "lm-token")
     }
 
+    func testInProcessLocalSentinelURLRoundTripsWithoutAPIKey() throws {
+        let config = LLMProviderConfig.inProcessLocal(model: "local-model")
+        try store.saveConfig(config)
+
+        let loaded = try store.loadConfig()
+        XCTAssertEqual(loaded?.id, .inProcessLocal)
+        XCTAssertEqual(loaded?.baseURL.absoluteString, "inprocess://local")
+        XCTAssertEqual(loaded?.modelName, "local-model")
+        XCTAssertEqual(loaded?.isLocal, true)
+        XCTAssertNil(loaded?.apiKey)
+        XCTAssertNil(try keychain.getString("llm_api_key_inProcessLocal"))
+    }
+
     func testOverwriteAPIKey() throws {
         let config1 = LLMProviderConfig.openai(apiKey: "old-key")
         try store.saveConfig(config1)

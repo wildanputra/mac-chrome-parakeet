@@ -217,7 +217,7 @@ public final class LLMSettingsViewModel {
             return "Optional API key"
         case .openai:
             return "sk-..."
-        case .ollama, .localCLI, nil:
+        case .ollama, .localCLI, .inProcessLocal, nil:
             return ""
         }
     }

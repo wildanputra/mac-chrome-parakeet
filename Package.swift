@@ -4,6 +4,7 @@ import PackageDescription
 import Foundation
 
 let skipWhisperKit = ProcessInfo.processInfo.environment["MACPARAKEET_SKIP_WHISPERKIT"] == "1"
+let enableMLXLocalLLM = ProcessInfo.processInfo.environment["MACPARAKEET_ENABLE_MLX_LOCAL_LLM"] == "1"
 
 let packageDependencies: [Package.Dependency] = [
     // GRDB for SQLite (dictation history + transcription records)
@@ -21,7 +22,14 @@ let packageDependencies: [Package.Dependency] = [
     // as a target dependency for the first-party Swift 6 syntax/concurrency
     // compile check without removing its lockfile pins.
     .package(url: "https://github.com/argmaxinc/argmax-oss-swift", exact: "0.18.0")
-]
+] + (enableMLXLocalLLM ? [
+    // Opt-in only. mlx-swift-lm currently needs Swift tools 6.1 and Xcode-built
+    // Metal shaders, so plain `swift build` / `swift test` / CI must not resolve it.
+    .package(url: "https://github.com/ml-explore/mlx-swift-lm", exact: "3.31.4"),
+    .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.31.4"),
+    .package(url: "https://github.com/huggingface/swift-huggingface", from: "0.9.0"),
+    .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
+] : [])
 
 let coreDependencies: [Target.Dependency] = [
     .product(name: "GRDB", package: "GRDB.swift"),
@@ -35,6 +43,43 @@ let coreDependencies: [Target.Dependency] = [
 let whisperKitSwiftSettings: [SwiftSetting] = skipWhisperKit ? [] : [
     .define("MACPARAKEET_HAS_WHISPERKIT")
 ]
+
+let mlxLocalLLMSwiftSettings: [SwiftSetting] = enableMLXLocalLLM ? [
+    .define("MACPARAKEET_HAS_MLX_LOCAL_LLM")
+] : []
+
+let appDependencies: [Target.Dependency] = [
+    "MacParakeetCore",
+    "MacParakeetViewModels",
+    .product(name: "Sparkle", package: "Sparkle")
+] + (enableMLXLocalLLM ? [
+    "MacParakeetLocalLLM"
+] : [])
+
+let appTestDependencies: [Target.Dependency] = [
+    "MacParakeet",
+    "MacParakeetCore",
+    "MacParakeetViewModels",
+    "MacParakeetObjCShims"
+] + (enableMLXLocalLLM ? [
+    "MacParakeetLocalLLM"
+] : [])
+
+let mlxLocalLLMTargets: [Target] = enableMLXLocalLLM ? [
+    .target(
+        name: "MacParakeetLocalLLM",
+        dependencies: [
+            "MacParakeetCore",
+            .product(name: "MLXLLM", package: "mlx-swift-lm"),
+            .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+            .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
+            .product(name: "HuggingFace", package: "swift-huggingface"),
+            .product(name: "Tokenizers", package: "swift-transformers"),
+        ],
+        path: "Sources/MacParakeetLocalLLM",
+        swiftSettings: mlxLocalLLMSwiftSettings
+    )
+] : []
 
 let package = Package(
     name: "MacParakeet",
@@ -54,11 +99,7 @@ let package = Package(
         // Main GUI app
         .executableTarget(
             name: "MacParakeet",
-            dependencies: [
-                "MacParakeetCore",
-                "MacParakeetViewModels",
-                .product(name: "Sparkle", package: "Sparkle")
-            ],
+            dependencies: appDependencies,
             path: "Sources/MacParakeet",
             resources: [.process("Resources")]
         ),
@@ -108,14 +149,14 @@ let package = Package(
         // Tests
         .testTarget(
             name: "MacParakeetTests",
-            dependencies: ["MacParakeet", "MacParakeetCore", "MacParakeetViewModels", "MacParakeetObjCShims"],
+            dependencies: appTestDependencies,
             path: "Tests/MacParakeetTests",
-            swiftSettings: whisperKitSwiftSettings
+            swiftSettings: whisperKitSwiftSettings + mlxLocalLLMSwiftSettings
         ),
         .testTarget(
             name: "CLITests",
             dependencies: ["CLI", "MacParakeetCore"],
             path: "Tests/CLITests"
         )
-    ]
+    ] + mlxLocalLLMTargets
 )

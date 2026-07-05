@@ -39,6 +39,7 @@ public enum LLMProviderID: String, Codable, Sendable, CaseIterable {
     case ollama
     case lmstudio
     case localCLI
+    case inProcessLocal
 
     public var descriptor: LLMProviderDescriptor {
         switch self {
@@ -199,7 +200,35 @@ public enum LLMProviderID: String, Codable, Sendable, CaseIterable {
                 defaultModelName: "",
                 fallbackModels: []
             )
+        case .inProcessLocal:
+            return LLMProviderDescriptor(
+                id: self,
+                displayName: "Local MLX",
+                defaultBaseURL: "inprocess://local",
+                isLocal: true,
+                supportsAPIKey: false,
+                requiresAPIKey: false,
+                requiresCustomEndpoint: false,
+                modelListEndpoint: .none,
+                defaultModelName: "mlx-community/Qwen3-4B-Instruct-2507-DDWQ",
+                fallbackModels: [
+                    "mlx-community/Qwen3-4B-Instruct-2507-DDWQ",
+                ]
+            )
         }
+    }
+
+    public static var userSelectableProviderIDs: [LLMProviderID] {
+        [
+            .lmstudio,
+            .ollama,
+            .anthropic,
+            .openai,
+            .gemini,
+            .openrouter,
+            .openaiCompatible,
+            .localCLI,
+        ] + (AppFeatures.inProcessLocalLLMEnabled ? [.inProcessLocal] : [])
     }
 
     public var displayName: String {
@@ -384,6 +413,18 @@ public struct LLMProviderConfig: Codable, Sendable, Equatable {
             apiKey: nil,
             modelName: "cli",
             isLocal: false
+        )
+    }
+
+    public static func inProcessLocal(
+        model: String = LLMProviderID.inProcessLocal.defaultModelName
+    ) -> LLMProviderConfig {
+        LLMProviderConfig(
+            id: .inProcessLocal,
+            baseURL: URL(string: LLMProviderID.inProcessLocal.defaultBaseURL)!,
+            apiKey: nil,
+            modelName: model,
+            isLocal: true
         )
     }
 

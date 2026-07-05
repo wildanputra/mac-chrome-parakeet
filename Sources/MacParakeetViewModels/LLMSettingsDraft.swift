@@ -178,6 +178,10 @@ public struct LLMSettingsDraft: Equatable, Sendable {
             return .localCLI()
         }
 
+        if providerID == .inProcessLocal {
+            return .inProcessLocal(model: effectiveModelName)
+        }
+
         let baseURL: URL
         if !trimmedBaseURLOverride.isEmpty {
             guard let override = URL(string: trimmedBaseURLOverride) else {
@@ -274,6 +278,9 @@ public struct LLMSettingsDraft: Equatable, Sendable {
         guard let scheme = url.scheme?.lowercased(),
               url.host != nil else {
             return .invalidBaseURL
+        }
+        if providerID == .inProcessLocal {
+            return scheme == "inprocess" ? nil : .invalidBaseURL
         }
         if scheme == "https" {
             return nil

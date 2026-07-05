@@ -77,25 +77,58 @@ public struct ChatCompletionOptions: Sendable, Equatable {
 
 // MARK: - Chat Completion Response
 
+public struct LLMGenerationMetrics: Sendable, Equatable, Codable {
+    public let tokensPerSecond: Double?
+    public let promptTokensPerSecond: Double?
+    public let timeToFirstTokenMs: Int?
+    public let peakRSSBytes: UInt64?
+
+    public init(
+        tokensPerSecond: Double? = nil,
+        promptTokensPerSecond: Double? = nil,
+        timeToFirstTokenMs: Int? = nil,
+        peakRSSBytes: UInt64? = nil
+    ) {
+        self.tokensPerSecond = tokensPerSecond
+        self.promptTokensPerSecond = promptTokensPerSecond
+        self.timeToFirstTokenMs = timeToFirstTokenMs
+        self.peakRSSBytes = peakRSSBytes
+    }
+
+    public func withPeakRSS(_ sample: UInt64?) -> LLMGenerationMetrics {
+        guard let sample else { return self }
+        let peak = peakRSSBytes.map { max($0, sample) } ?? sample
+        return LLMGenerationMetrics(
+            tokensPerSecond: tokensPerSecond,
+            promptTokensPerSecond: promptTokensPerSecond,
+            timeToFirstTokenMs: timeToFirstTokenMs,
+            peakRSSBytes: peak
+        )
+    }
+}
+
 public struct ChatCompletionResponse: Sendable {
     public let content: String
     public let reasoningContent: String?
     public let finishReason: String?
     public let model: String
     public let usage: TokenUsage?
+    public let generationMetrics: LLMGenerationMetrics?
 
     public init(
         content: String,
         reasoningContent: String? = nil,
         finishReason: String? = nil,
         model: String,
-        usage: TokenUsage? = nil
+        usage: TokenUsage? = nil,
+        generationMetrics: LLMGenerationMetrics? = nil
     ) {
         self.content = content
         self.reasoningContent = reasoningContent
         self.finishReason = finishReason
         self.model = model
         self.usage = usage
+        self.generationMetrics = generationMetrics
     }
 }
 

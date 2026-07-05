@@ -117,4 +117,12 @@ public enum AppFeatures {
     /// back to `true` to ship profiles in a later tag (no-data operation — the
     /// profile table/repository migrate regardless of this flag).
     public static let aiFormatterProfilesEnabled: Bool = false
+
+    /// In-process local LLM provider (MLX foundation). When `false`, the
+    /// provider descriptor, config, routing seam, and fake-runtime tests remain
+    /// compiled, but Settings and user-reachable provider lists hide the option.
+    /// The real MLX implementation is a separate opt-in build target gated by
+    /// `MACPARAKEET_ENABLE_MLX_LOCAL_LLM=1`, so normal SwiftPM builds and CI do
+    /// not resolve mlx-swift-lm.
+    public static let inProcessLocalLLMEnabled: Bool = false
 }

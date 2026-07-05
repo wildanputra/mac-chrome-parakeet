@@ -25,6 +25,7 @@ final class LLMProviderDescriptorTests: XCTestCase {
 
     func testModelListEndpointPolicy() {
         XCTAssertEqual(LLMProviderID.localCLI.modelListEndpoint, .none)
+        XCTAssertEqual(LLMProviderID.inProcessLocal.modelListEndpoint, .none)
         XCTAssertEqual(LLMProviderID.anthropic.modelListEndpoint, .anthropic)
         XCTAssertEqual(LLMProviderID.gemini.modelListEndpoint, .gemini)
         XCTAssertEqual(LLMProviderID.ollama.modelListEndpoint, .ollama)
@@ -38,6 +39,7 @@ final class LLMProviderDescriptorTests: XCTestCase {
         XCTAssertEqual(LLMProviderID.openaiCompatible.fallbackModels, [])
         XCTAssertEqual(LLMProviderID.lmstudio.fallbackModels, [])
         XCTAssertEqual(LLMProviderID.localCLI.fallbackModels, [])
+        XCTAssertEqual(LLMProviderID.inProcessLocal.fallbackModels, ["mlx-community/Qwen3-4B-Instruct-2507-DDWQ"])
         XCTAssertEqual(LLMProviderID.gemini.defaultModelName, "gemini-3.5-flash")
     }
 
@@ -62,5 +64,25 @@ final class LLMProviderDescriptorTests: XCTestCase {
         XCTAssertEqual(LLMProviderConfig.openrouter(apiKey: "key").baseURL.absoluteString, LLMProviderID.openrouter.defaultBaseURL)
         XCTAssertEqual(LLMProviderConfig.ollama().modelName, LLMProviderID.ollama.defaultModelName)
         XCTAssertEqual(LLMProviderConfig.ollama().baseURL.absoluteString, LLMProviderID.ollama.defaultBaseURL)
+        XCTAssertEqual(LLMProviderConfig.inProcessLocal().modelName, LLMProviderID.inProcessLocal.defaultModelName)
+        XCTAssertEqual(LLMProviderConfig.inProcessLocal().baseURL.absoluteString, LLMProviderID.inProcessLocal.defaultBaseURL)
+    }
+
+    func testInProcessLocalProviderIsHiddenWhileFeatureFlagIsOff() {
+        XCTAssertFalse(AppFeatures.inProcessLocalLLMEnabled)
+        XCTAssertEqual(
+            LLMProviderID.userSelectableProviderIDs,
+            [
+                .lmstudio,
+                .ollama,
+                .anthropic,
+                .openai,
+                .gemini,
+                .openrouter,
+                .openaiCompatible,
+                .localCLI,
+            ]
+        )
+        XCTAssertFalse(LLMProviderID.userSelectableProviderIDs.contains(.inProcessLocal))
     }
 }

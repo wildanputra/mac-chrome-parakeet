@@ -26,16 +26,7 @@ struct LLMSettingsView: View {
     @State private var aiFormatterAppIcons: [String: NSImage] = [:]
     @State private var aiFormatterAppIconLoadingIDs: Set<String> = []
 
-    private static let providerOrder: [LLMProviderID] = [
-        .lmstudio,
-        .ollama,
-        .anthropic,
-        .openai,
-        .gemini,
-        .openrouter,
-        .openaiCompatible,
-        .localCLI,
-    ]
+    private static let providerOrder: [LLMProviderID] = LLMProviderID.userSelectableProviderIDs
 
     private static let smartDefaultGridColumns = [
         GridItem(.adaptive(minimum: 168), spacing: DesignSystem.Spacing.sm)

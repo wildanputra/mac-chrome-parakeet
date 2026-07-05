@@ -110,6 +110,9 @@ struct LLMInlineOptions: ParsableArguments {
                 "Unknown provider '\(provider)'. Options: anthropic, openai, openaiCompatible, gemini, openrouter, ollama, lmstudio, cli"
             )
         }
+        if providerID == .inProcessLocal {
+            throw ValidationError("The in-process local provider is not exposed through inline CLI configuration yet.")
+        }
         return providerID
     }
 
@@ -205,6 +208,8 @@ struct LLMInlineOptions: ParsableArguments {
             localCLIConfig = LocalCLIConfig(
                 commandTemplate: rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
             )
+        case .inProcessLocal:
+            throw ValidationError("The in-process local provider is not exposed through inline CLI configuration yet.")
         }
 
         if local && !providerConfig.isLocal {
