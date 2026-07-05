@@ -151,19 +151,27 @@ final class DictationFlowCoordinatorLoadCaptionTests: XCTestCase {
     }
 
     func testNoSpeechDismissesCaptionWithSnakeCaseOutcome() async throws {
+        let transcribeGate = AsyncGate()
         let harness = try makeHarness(
             isReady: false,
-            transcribeDelayMs: 140,
-            transcribeError: DictationServiceError.emptyTranscript
+            transcribeDelayMs: 0,
+            transcribeError: DictationServiceError.emptyTranscript,
+            transcribeGate: transcribeGate
         )
 
         try await harness.startAndStop()
-        let shown = await harness.captionSignal.wait(for: .preparing)
+        let shown = await harness.captionSignal.wait(for: .preparing, timeout: .seconds(3))
         XCTAssertTrue(shown)
-        let cleared = await waitUntil { harness.coordinator.processingLoadCaptionForTesting == nil }
+        await transcribeGate.release()
+        let cleared = await waitUntil(timeoutMs: 3_000) {
+            harness.coordinator.processingLoadCaptionForTesting == nil
+        }
         XCTAssertTrue(cleared)
 
-        XCTAssertTrue(harness.telemetry.snapshot().containsCaptionDuration(outcome: "no_speech"))
+        let recordedNoSpeech = await waitUntil(timeoutMs: 3_000) {
+            harness.telemetry.snapshot().containsCaptionDuration(outcome: "no_speech")
+        }
+        XCTAssertTrue(recordedNoSpeech)
     }
 
     func testPasteFailureDismissesCaptionWithFailureOutcome() async throws {
@@ -319,7 +327,8 @@ final class DictationFlowCoordinatorLoadCaptionTests: XCTestCase {
         processingMode: Dictation.ProcessingMode = .raw,
         dictationInsertionStyle: DictationInsertionStyle = .sentence,
         engine: SpeechEnginePreference = .parakeet,
-        timing: DictationProcessingLoadCaptionTiming? = nil
+        timing: DictationProcessingLoadCaptionTiming? = nil,
+        transcribeGate: AsyncGate? = nil
     ) throws -> Harness {
         let telemetry = LoadCaptionTelemetrySpy()
         Telemetry.configure(telemetry)
@@ -331,7 +340,8 @@ final class DictationFlowCoordinatorLoadCaptionTests: XCTestCase {
             ready: isReady,
             transcribeDelayMs: transcribeDelayMs,
             transcribeText: transcribeText,
-            transcribeError: transcribeError
+            transcribeError: transcribeError,
+            transcribeGate: transcribeGate
         )
         let repo = DictationRepository(dbQueue: dbManager.dbQueue)
         let preferencesDefaults = UserDefaults(suiteName: "load-caption-\(UUID().uuidString)")!
@@ -478,12 +488,20 @@ private actor DelayedSTTClient: STTClientProtocol, DictationSTTReadinessChecking
     private var transcribeDelayMs: UInt64
     private var transcribeText: String
     private var transcribeError: Error?
+    private let transcribeGate: AsyncGate?
 
-    init(ready: Bool, transcribeDelayMs: UInt64, transcribeText: String, transcribeError: Error?) {
+    init(
+        ready: Bool,
+        transcribeDelayMs: UInt64,
+        transcribeText: String,
+        transcribeError: Error?,
+        transcribeGate: AsyncGate?
+    ) {
         self.ready = ready
         self.transcribeDelayMs = transcribeDelayMs
         self.transcribeText = transcribeText
         self.transcribeError = transcribeError
+        self.transcribeGate = transcribeGate
     }
 
     func setReady(_ ready: Bool) {
@@ -499,6 +517,9 @@ private actor DelayedSTTClient: STTClientProtocol, DictationSTTReadinessChecking
         job: STTJobKind,
         onProgress: (@Sendable (Int, Int) -> Void)?
     ) async throws -> STTResult {
+        if let transcribeGate {
+            try await transcribeGate.wait()
+        }
         if transcribeDelayMs > 0 {
             try await Task.sleep(for: .milliseconds(Int(transcribeDelayMs)))
         }
@@ -547,6 +568,48 @@ private actor DelayedSTTClient: STTClientProtocol, DictationSTTReadinessChecking
     }
 
     func shutdown() async {}
+}
+
+private actor AsyncGate {
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, Error>
+    }
+
+    private var isReleased = false
+    private var continuations: [Waiter] = []
+
+    func wait() async throws {
+        if isReleased { return }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                if isReleased {
+                    continuation.resume()
+                } else {
+                    continuations.append(Waiter(id: id, continuation: continuation))
+                }
+            }
+        } onCancel: {
+            Task {
+                await self.cancelWaiter(id: id)
+            }
+        }
+    }
+
+    func release() {
+        guard !isReleased else { return }
+        isReleased = true
+        let pending = continuations
+        continuations.removeAll()
+        pending.forEach { $0.continuation.resume() }
+    }
+
+    private func cancelWaiter(id: UUID) {
+        guard let index = continuations.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = continuations.remove(at: index)
+        waiter.continuation.resume(throwing: CancellationError())
+    }
 }
 
 private final class LoadCaptionTelemetrySpy: TelemetryServiceProtocol, @unchecked Sendable {
