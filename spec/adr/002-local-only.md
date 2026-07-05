@@ -84,7 +84,7 @@ Cloud LLM costs are paid directly by the user to their provider (Anthropic, Open
 - Transcription works fully offline — no degradation
 - LLM features use best-available models (Claude, GPT-4) without bundling a runtime
 - Local-only users can use Ollama
-- Zero resource impact from LLM (no GPU memory, no model downloads)
+- Zero resource impact from LLM in the default configuration (no GPU memory, no automatic model downloads; the developer-gated Local MLX path in ADR-011 is explicit opt-in)
 - Business model remains flexible: current public builds are free/GPL, while official paid distribution/support can be added without changing the local-first architecture
 - App Store compatible
 

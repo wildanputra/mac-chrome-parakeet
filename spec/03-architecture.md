@@ -1045,6 +1045,7 @@ deleted.
 | Parakeet STT models | FluidAudio-managed CoreML cache (~465 MB per build) |
 | Cohere STT model | `~/Library/Application Support/FluidAudio/Models/cohere-transcribe/q8` |
 | Whisper STT models | `~/Library/Application Support/MacParakeet/models/stt/whisper/` |
+| Local LLM models (developer-gated, opt-in download) | `~/Library/Application Support/MacParakeet/LLMModels/` |
 | yt-dlp binary | `~/Library/Application Support/MacParakeet/bin/yt-dlp` |
 | FFmpeg binary | `~/Library/Application Support/MacParakeet/bin/ffmpeg` |
 | Logs | `~/Library/Logs/MacParakeet/` |
@@ -1062,6 +1063,7 @@ deleted.
     ├── models/                     # MacParakeet-owned downloaded ML models
     │   └── stt/
     │       └── whisper/            # WhisperKit models
+    ├── LLMModels/                  # Verified opt-in local LLM model cache (developer-gated)
     └── bin/                        # Standalone binaries
         ├── yt-dlp                  # YouTube downloader (~35 MB, self-updating)
         └── ffmpeg                  # Video demuxing (~80 MB)

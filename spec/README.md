@@ -80,7 +80,7 @@ Current `main` feature gates in `Sources/MacParakeetCore/AppFeatures.swift`:
 | `meetingVadLiveChunkingEnabled` | `true` | VAD-guided meeting live-preview chunking; final post-stop transcript path unchanged |
 | `liveDictationStreamingEnabled` | `true` | Display-only live dictation preview enabled on `main`; final paste remains stop-time transcription |
 | `aiFormatterProfilesEnabled` | `false` | App-aware AI Formatter profiles are code-complete but held out of the current tagged release train |
-| `inProcessLocalLLMEnabled` | `false` | In-process local LLM (MLX) foundation seam is compiled and tested, but provider lists hide the option; the real MLX runtime links only in opt-in `MACPARAKEET_ENABLE_MLX_LOCAL_LLM=1` app builds |
+| `inProcessLocalLLMEnabled` | `false` | In-process local LLM (MLX) foundation seam, verified model downloader, and one-click Settings card are compiled and tested, but provider lists hide the option unless the developer override (`MacParakeetEnableInProcessLocalLLM` default or `--enable-local-ai`) is active; the real MLX runtime links only in opt-in `MACPARAKEET_ENABLE_MLX_LOCAL_LLM=1` app builds |
 
 ## Architecture Decision Records (ADRs)
 
