@@ -454,4 +454,3 @@ as the final gate if the follow-up branch changes shared LLM behavior.
 - Local LLM plan: `plans/active/2026-06-27-on-device-local-llm.md`
 - Phase 0 eval plan: `plans/active/2026-06-27-on-device-local-llm-phase0-eval.md`
 - Third-party notices: `THIRD_PARTY_LICENSES.md`
-
