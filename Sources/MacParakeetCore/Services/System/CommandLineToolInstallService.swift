@@ -37,7 +37,7 @@ public protocol CommandLineToolInstalling {
     func install(overwriteExisting: Bool) async throws -> CommandLineToolInstallStatus
 }
 
-public final class CommandLineToolInstallService: CommandLineToolInstalling {
+public actor CommandLineToolInstallService: CommandLineToolInstalling {
     public static let defaultLinkName = "macparakeet-cli"
 
     private let fileManager: FileManager

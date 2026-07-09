@@ -881,6 +881,35 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.commandLineToolError)
     }
 
+    func testInstallCommandLineToolCancelsStaleStatusRefresh() async throws {
+        let installer = MockCommandLineToolInstallService(status: .notInstalled, installResult: .installed)
+        installer.currentStatusResults = [.notInstalled]
+        installer.currentStatusDelayNanoseconds = 100_000_000
+
+        viewModel.configure(
+            permissionService: mockPermissions,
+            dictationRepo: mockRepo,
+            entitlementsService: entitlements,
+            commandLineToolInstallService: installer,
+            checkoutURL: nil
+        )
+
+        XCTAssertTrue(viewModel.commandLineToolStatusChecking)
+
+        viewModel.installCommandLineTool()
+
+        try await waitUntil { !viewModel.commandLineToolInstallInProgress }
+        XCTAssertEqual(viewModel.commandLineToolStatus, .installed)
+
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(
+            viewModel.commandLineToolStatus,
+            .installed,
+            "A cancelled pre-install status refresh must not overwrite the install result."
+        )
+        XCTAssertFalse(viewModel.commandLineToolStatusChecking)
+    }
+
     func testInstallCommandLineToolRequiresConfirmForStaleSymlink() async throws {
         let installer = MockCommandLineToolInstallService(
             status: .staleSymlink(currentTarget: "/Applications/Old.app/Contents/MacOS/macparakeet-cli")

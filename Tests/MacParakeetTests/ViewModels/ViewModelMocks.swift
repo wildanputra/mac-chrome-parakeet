@@ -414,6 +414,9 @@ final class MockLaunchAtLoginService: LaunchAtLoginControlling {
 
 final class MockCommandLineToolInstallService: CommandLineToolInstalling {
     var status: CommandLineToolInstallStatus
+    var currentStatusResults: [CommandLineToolInstallStatus] = []
+    var currentStatusDelayNanoseconds: UInt64 = 0
+    var currentStatusCallCount = 0
     var installResult: CommandLineToolInstallStatus
     var installError: Error?
     var installOverwriteCalls: [Bool] = []
@@ -429,7 +432,14 @@ final class MockCommandLineToolInstallService: CommandLineToolInstalling {
     }
 
     func currentStatus() async -> CommandLineToolInstallStatus {
-        status
+        currentStatusCallCount += 1
+        if currentStatusDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: currentStatusDelayNanoseconds)
+        }
+        if !currentStatusResults.isEmpty {
+            return currentStatusResults.removeFirst()
+        }
+        return status
     }
 
     func install(overwriteExisting: Bool) async throws -> CommandLineToolInstallStatus {

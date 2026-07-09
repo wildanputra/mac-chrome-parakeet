@@ -715,6 +715,7 @@ public final class SettingsViewModel {
     // model lifetime; unsafe access lets deinit cancel/unregister.
     @ObservationIgnored nonisolated(unsafe) private var permissionPollingTask: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var microphoneTestTask: Task<Void, Never>?
+    @ObservationIgnored nonisolated(unsafe) private var commandLineToolStatusTask: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var storageStatsTask: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var calendarSettingsObserver: NSObjectProtocol?
     /// Re-entrancy guard so `observeCalendarSettings()` doesn't fire `didSet`
@@ -881,6 +882,7 @@ public final class SettingsViewModel {
     deinit {
         permissionPollingTask?.cancel()
         microphoneTestTask?.cancel()
+        commandLineToolStatusTask?.cancel()
         storageStatsTask?.cancel()
         if let calendarSettingsObserver {
             NotificationCenter.default.removeObserver(calendarSettingsObserver)
@@ -1188,20 +1190,26 @@ public final class SettingsViewModel {
 
     public func refreshCommandLineToolStatus() {
         guard let service = commandLineToolInstallService else {
+            commandLineToolStatusTask?.cancel()
+            commandLineToolStatusTask = nil
             commandLineToolStatusChecking = false
             commandLineToolStatus = .unsupportedEnvironment("Command line tool installation is unavailable in this build.")
             commandLineToolError = nil
             pendingCommandLineToolOverwriteTarget = nil
             return
         }
+        guard !commandLineToolInstallInProgress else { return }
 
+        commandLineToolStatusTask?.cancel()
         commandLineToolStatusChecking = true
-        Task {
+        commandLineToolStatusTask = Task { @MainActor [weak self] in
             let status = await service.currentStatus()
-            commandLineToolStatus = status
-            commandLineToolStatusChecking = false
-            commandLineToolError = nil
-            pendingCommandLineToolOverwriteTarget = nil
+            guard !Task.isCancelled, let self else { return }
+            self.commandLineToolStatus = status
+            self.commandLineToolStatusChecking = false
+            self.commandLineToolError = nil
+            self.pendingCommandLineToolOverwriteTarget = nil
+            self.commandLineToolStatusTask = nil
         }
     }
 
@@ -1212,6 +1220,7 @@ public final class SettingsViewModel {
             commandLineToolError = "Command line tool installation is unavailable in this build."
             return
         }
+        guard !commandLineToolInstallInProgress else { return }
 
         if case .staleSymlink(let currentTarget) = commandLineToolStatus, !overwriteExisting {
             pendingCommandLineToolOverwriteTarget = currentTarget
@@ -1219,25 +1228,28 @@ public final class SettingsViewModel {
             return
         }
 
+        commandLineToolStatusTask?.cancel()
+        commandLineToolStatusTask = nil
         commandLineToolInstallInProgress = true
         commandLineToolStatusChecking = false
         commandLineToolError = nil
         pendingCommandLineToolOverwriteTarget = nil
 
-        Task {
-            defer { commandLineToolInstallInProgress = false }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.commandLineToolInstallInProgress = false }
 
             do {
-                commandLineToolStatus = try await service.install(overwriteExisting: overwriteExisting)
-                commandLineToolStatusChecking = false
+                self.commandLineToolStatus = try await service.install(overwriteExisting: overwriteExisting)
+                self.commandLineToolStatusChecking = false
             } catch CommandLineToolInstallError.staleSymlink(let currentTarget) {
-                commandLineToolStatus = .staleSymlink(currentTarget: currentTarget)
-                commandLineToolStatusChecking = false
-                pendingCommandLineToolOverwriteTarget = currentTarget
+                self.commandLineToolStatus = .staleSymlink(currentTarget: currentTarget)
+                self.commandLineToolStatusChecking = false
+                self.pendingCommandLineToolOverwriteTarget = currentTarget
             } catch {
-                commandLineToolStatus = await service.currentStatus()
-                commandLineToolStatusChecking = false
-                commandLineToolError = error.localizedDescription
+                self.commandLineToolStatus = await service.currentStatus()
+                self.commandLineToolStatusChecking = false
+                self.commandLineToolError = error.localizedDescription
             }
         }
     }
