@@ -38,7 +38,9 @@ struct MeetingsView: View {
                 .padding(.bottom, DesignSystem.Spacing.xl)
                 .frame(maxWidth: 1180, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            // Center the width-capped content column so extra window width
+            // becomes even margins instead of piling up on the right.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(DesignSystem.Colors.contentBackground)
         }
         .onAppear {
