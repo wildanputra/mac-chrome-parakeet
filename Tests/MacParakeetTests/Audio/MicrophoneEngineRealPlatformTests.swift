@@ -100,6 +100,8 @@ final class MicrophoneEngineRealPlatformTests: XCTestCase {
     /// Prepared-start case: pay device/format setup while stopped, then verify
     /// the matching start produces real input buffers through the prepared tap.
     func testPreparedStartDeliversBuffers() async throws {
+        platform.stopEngine()
+        platform = try makePreparablePlatform()
         let counter = OSAllocatedUnfairLock(initialState: 0)
         let handler: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { _, _ in
             counter.withLock { $0 += 1 }
@@ -111,10 +113,17 @@ final class MicrophoneEngineRealPlatformTests: XCTestCase {
             tapHandler: handler
         )
 
+        let configureStartedAt = ContinuousClock.now
         try platform.configureAndStart(
             vpioEnabled: false,
             bufferSize: Self.bufferSize,
             tapHandler: handler
+        )
+        let configureDuration = configureStartedAt.duration(to: .now)
+        XCTAssertLessThan(
+            configureDuration,
+            .milliseconds(500),
+            "Prepared configure should use the start-only fast path, not the full cold path."
         )
 
         let count = try await awaitCounterIncrease(
@@ -128,6 +137,8 @@ final class MicrophoneEngineRealPlatformTests: XCTestCase {
     /// Mismatch case: a prepared tap must be torn down before falling back to
     /// full configuration, otherwise AVAudioEngine rejects the second tap.
     func testPreparedStartWithDifferentBufferSizeFallsBackCleanly() async throws {
+        platform.stopEngine()
+        platform = try makePreparablePlatform()
         let counter = OSAllocatedUnfairLock(initialState: 0)
         let handler: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { _, _ in
             counter.withLock { $0 += 1 }
@@ -471,6 +482,23 @@ final class MicrophoneEngineRealPlatformTests: XCTestCase {
             from: 0,
             timeout: Self.firstBufferDeadline
         )
+    }
+
+    private func makePreparablePlatform() throws -> AVAudioEngineMicrophonePlatform {
+        let builtInDeviceID = AudioDeviceManager.builtInMicrophone()
+        let deviceID = builtInDeviceID ?? AudioDeviceManager.defaultInputDevice()
+        guard let deviceID else {
+            throw XCTSkip("Need a resolved input device for stopped-engine preparation.")
+        }
+        let transport = AudioDeviceManager.transportType(deviceID)
+        guard transport != kAudioDeviceTransportTypeBluetooth,
+            transport != kAudioDeviceTransportTypeBluetoothLE
+        else {
+            throw XCTSkip("Stopped-engine preparation is intentionally disabled for Bluetooth inputs.")
+        }
+        let source: MeetingInputDeviceAttempt.Source = builtInDeviceID == nil ? .systemDefault : .builtIn
+        let attempt = MeetingInputDeviceAttempt(source: source, deviceID: deviceID)
+        return AVAudioEngineMicrophonePlatform(deviceAttemptsBuilder: { [attempt] in [attempt] })
     }
 
     /// Poll the counter every 20 ms until it increases past `baseline` or the

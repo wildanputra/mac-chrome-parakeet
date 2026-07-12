@@ -112,6 +112,27 @@ final class SharedMicrophoneStreamTests: XCTestCase {
         XCTAssertEqual(platform.prepareCalls.first?.vpioEnabled, false)
     }
 
+    func testRouteRefreshReplacesIdlePreparation() async throws {
+        let platform = MockMicrophonePlatform()
+        let stream = SharedMicrophoneStream(
+            platform: platform,
+            bufferSize: 1024,
+            autoPrewarmWhenIdle: true,
+            prewarmRefreshDebounce: 0
+        )
+
+        stream.prewarmDictation()
+        await stream.unsubscribe(SharedMicrophoneStream.SubscriberToken())
+        XCTAssertEqual(platform.prepareCalls.count, 1)
+
+        stream.refreshIdlePrewarm()
+        try await Task.sleep(for: .milliseconds(10))
+        await stream.unsubscribe(SharedMicrophoneStream.SubscriberToken())
+
+        XCTAssertEqual(platform.stopEngineCallCount, 1)
+        XCTAssertEqual(platform.prepareCalls.count, 2)
+    }
+
     // MARK: - VPIO arbitration
 
     func testVPIOSubscriberStartsEngineWithVPIOOn() async throws {

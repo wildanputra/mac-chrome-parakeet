@@ -128,6 +128,7 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
     // (~the engine-start cost only), shaving the ~device+format cold-start.
     private var prepared = false
     private var preparedAttempt: MeetingInputDeviceAttempt?
+    private var preparedRouteSnapshot: [MeetingInputDeviceAttempt]?
     private var preparedVPIO = false
     private var preparedBufferSize: AVAudioFrameCount = 0
     private var preparedTapHandler: (@Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void)?
@@ -142,6 +143,25 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
 
     private static func elapsedMilliseconds(from start: UInt64, to end: UInt64) -> String {
         String(format: "%.3f", Double(end - start) / 1_000_000.0)
+    }
+
+    /// Return the leading route attempts that are safe to acquire while idle.
+    /// Every attempt is pinned explicitly to the resolved device so a default
+    /// route cannot change to Bluetooth between validation and preparation.
+    static func prewarmAttemptPrefix(
+        from attempts: [MeetingInputDeviceAttempt],
+        transportType: (AudioDeviceID) -> UInt32
+    ) -> [MeetingInputDeviceAttempt] {
+        var result: [MeetingInputDeviceAttempt] = []
+        for attempt in attempts {
+            guard let deviceID = attempt.deviceID else { break }
+            let transport = transportType(deviceID)
+            guard transport != kAudioDeviceTransportTypeBluetooth,
+                transport != kAudioDeviceTransportTypeBluetoothLE
+            else { break }
+            result.append(MeetingInputDeviceAttempt(source: attempt.source, deviceID: deviceID))
+        }
+        return result
     }
 
     public init(
@@ -231,30 +251,37 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
     ) {
         queue.sync {
             guard engineStarter == nil, !running, !prepared else { return }
-            // Never pre-acquire a Bluetooth input: holding it open pins the
-            // headset into low-quality HFP/SCO. Let those starts pay the full
-            // cold path on key-down instead.
-            if let firstDeviceID = deviceAttemptsBuilder?().first?.deviceID {
-                let transport = AudioDeviceManager.transportType(firstDeviceID)
-                guard
-                    transport != kAudioDeviceTransportTypeBluetooth,
-                    transport != kAudioDeviceTransportTypeBluetoothLE
-                else {
-                    AudioCaptureDiagnostics.append(
-                        "shared_mic_engine_prepare_skipped reason=bluetooth"
-                    )
-                    return
-                }
+            // Snapshot the route once and pin every eligible attempt explicitly.
+            // Stop at the first unresolved/Bluetooth route: walking past it to a
+            // later built-in fallback would change which device a real start uses.
+            guard let routeSnapshot = deviceAttemptsBuilder?(), !routeSnapshot.isEmpty else {
+                AudioCaptureDiagnostics.append(
+                    "shared_mic_engine_prepare_skipped reason=unresolved_route"
+                )
+                return
+            }
+            let prewarmAttempts = Self.prewarmAttemptPrefix(
+                from: routeSnapshot,
+                transportType: AudioDeviceManager.transportType
+            )
+            guard !prewarmAttempts.isEmpty else {
+                AudioCaptureDiagnostics.append(
+                    "shared_mic_engine_prepare_skipped reason=bluetooth_or_unresolved_route"
+                )
+                return
             }
             do {
                 try configureAndStartLocked(
                     vpioEnabled: vpioEnabled,
                     bufferSize: bufferSize,
                     tapHandler: tapHandler,
-                    startNow: false
+                    startNow: false,
+                    attemptsOverride: prewarmAttempts
                 )
+                preparedRouteSnapshot = routeSnapshot
             } catch {
                 prepared = false
+                preparedRouteSnapshot = nil
                 AudioCaptureDiagnostics.append(
                     "shared_mic_engine_prepare_failed \(AudioCaptureDiagnostics.errorFields(error))"
                 )
@@ -285,14 +312,16 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
         vpioEnabled: Bool,
         bufferSize: AVAudioFrameCount,
         tapHandler: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void,
-        startNow: Bool = true
+        startNow: Bool = true,
+        attemptsOverride: [MeetingInputDeviceAttempt]? = nil
     ) throws {
         lastStartRequestLocked = nil
+        let currentRouteSnapshot = startNow ? deviceAttemptsBuilder?() : nil
         // Fast path: a matching prepared engine (device + format + tap already
         // paid, same VPIO/buffer/device) — just start it.
         if startNow, !running, prepared, engineStarter == nil,
             preparedVPIO == vpioEnabled, preparedBufferSize == bufferSize,
-            deviceAttemptsBuilder?().first == preparedAttempt,
+            currentRouteSnapshot == preparedRouteSnapshot,
             goPreparedLocked()
         {
             lastSucceededAttemptLocked = preparedAttempt
@@ -318,7 +347,7 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
             tearDownLocked()
         }
 
-        let attempts = deviceAttemptsBuilder?() ?? []
+        let attempts = attemptsOverride ?? currentRouteSnapshot ?? []
         if attempts.isEmpty {
             // No device chain — use whatever the engine's input node picks.
             try startConfiguredEngineLocked(
@@ -633,6 +662,7 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
         preparedVPIO = vpioEnabled
         preparedBufferSize = bufferSize
         preparedTapHandler = tapHandler
+        installDefaultInputChangeObserverLocked()
     }
 
     /// Start a prepared engine (only the `audioEngine.start()` cost). Returns
@@ -650,6 +680,7 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
         }
         running = true
         prepared = false
+        preparedRouteSnapshot = nil
         installConfigurationChangeObserverLocked()
         installDefaultInputChangeObserverLocked()
         AudioCaptureDiagnostics.append(
@@ -660,6 +691,7 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
 
     private func tearDownLocked() {
         prepared = false
+        preparedRouteSnapshot = nil
         preparedTapHandler = nil
         removeConfigurationChangeObserverLocked()
         removeDefaultInputChangeObserverLocked()
@@ -691,6 +723,7 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
     /// hand back a fresh engine for the next try).
     private func resetEngineLocked() {
         prepared = false
+        preparedRouteSnapshot = nil
         preparedTapHandler = nil
         removeConfigurationChangeObserverLocked()
         removeDefaultInputChangeObserverLocked()
@@ -704,6 +737,7 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
 
     private func replaceEngineAfterFailureLocked() {
         prepared = false
+        preparedRouteSnapshot = nil
         preparedTapHandler = nil
         removeConfigurationChangeObserverLocked()
         removeDefaultInputChangeObserverLocked()

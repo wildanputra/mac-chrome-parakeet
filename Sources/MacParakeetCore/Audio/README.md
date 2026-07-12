@@ -194,10 +194,12 @@ so there is no capture and no mic indicator while idle. The next
 dictation press matches the prepared engine
 (`AVAudioEngineMicrophonePlatform.prepare`/`goPreparedLocked`) and pays
 only `audioEngine.start()` (~tens of ms) instead of the full
-device-acquisition + format negotiation. A mismatched start (VPIO on,
-different buffer size, or a changed selected device — e.g. a meeting)
-discards the prepared engine and does a full configure, so meetings are
-unaffected. Like the warm hold, prepare is **suppressed on Bluetooth
+device-acquisition + format negotiation. Raw meetings use the same
+non-VPIO stream configuration and can consume the prepared engine too;
+an explicit VPIO request or different buffer size discards it and does
+a full configure. Idle microphone-route changes trailing-debounce a
+fresh preparation before the next capture. Like the warm hold, prepare
+is **suppressed on Bluetooth
 inputs**: pre-acquiring a Bluetooth mic would pin HFP/SCO even while
 stopped, so the platform declines and that press pays the full cold
 path. This is the no-warm-window path: instant first words after

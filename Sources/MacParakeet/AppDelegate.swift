@@ -572,16 +572,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.speechPreWarmTask = nil
             }
 
-            try? await Task.sleep(for: .milliseconds(deferralMs))
-            guard !Task.isCancelled else { return }
             let onboardingDone = UserDefaults.standard.string(forKey: onboardingCompletedKey) != nil
             guard onboardingDone else { return }
-            await sttRuntime.backgroundWarmUp()
 
-            // Pre-prepare the stopped dictation engine so the first press is
-            // warm. No-op when Instant Dictation already holds the mic open or
-            // on a Bluetooth input (the platform declines those).
+            // Queue microphone preparation immediately. It runs off the main
+            // actor and independently of the slower speech-model warm-up, so an
+            // early first dictation does not wait for model initialization.
             env.sharedMicStream.prewarmDictation()
+
+            try? await Task.sleep(for: .milliseconds(deferralMs))
+            guard !Task.isCancelled else { return }
+            await sttRuntime.backgroundWarmUp()
 
             // Universal VAD model availability (Phase 4.5,
             // plans/completed/2026-05-meeting-vad-guided-live-chunking.md §6).
@@ -755,8 +756,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.instantDictationPreferenceGeneration == generation
             }
             guard shouldRefresh, !Task.isCancelled else { return }
-            if refreshWarmCapture, enabled {
-                await env.audioProcessor.refreshInstantDictationWarmCapture()
+            if refreshWarmCapture {
+                if enabled {
+                    await env.audioProcessor.refreshInstantDictationWarmCapture()
+                } else {
+                    env.sharedMicStream.refreshIdlePrewarm()
+                }
             }
         }
     }
