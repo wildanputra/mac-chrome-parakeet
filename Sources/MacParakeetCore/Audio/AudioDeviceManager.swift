@@ -287,6 +287,8 @@ public enum AudioDeviceManager {
         resolvedTransportType(deviceID) ?? 0
     }
 
+    /// Resolves a concrete Core Audio transport type. A successful HAL query
+    /// that reports `kAudioDeviceTransportTypeUnknown` remains unresolved.
     static func resolvedTransportType(_ deviceID: AudioDeviceID) -> UInt32? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyTransportType,
@@ -296,7 +298,7 @@ public enum AudioDeviceManager {
         var transport: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)
         let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &transport)
-        guard status == noErr else { return nil }
+        guard status == noErr, transport != kAudioDeviceTransportTypeUnknown else { return nil }
         return transport
     }
 
@@ -314,8 +316,10 @@ public enum AudioDeviceManager {
     /// input streams open, so any Bluetooth member pins the headset.
     ///
     /// Returns `nil` when the transport or aggregate topology cannot be
-    /// resolved. Callers that acquire a microphone while idle should treat
-    /// that state as risky and fail closed until Core Audio settles.
+    /// positively resolved, including Core Audio's explicit unknown transport
+    /// marker and an aggregate with no active sub-devices. Callers that acquire
+    /// a microphone while idle should treat that state as risky and fail
+    /// closed until Core Audio settles.
     static func bluetoothInputState(_ deviceID: AudioDeviceID) -> Bool? {
         guard let transport = resolvedTransportType(deviceID) else { return nil }
 
@@ -339,9 +343,10 @@ public enum AudioDeviceManager {
         )
     }
 
-    /// True when the device is known to capture over Bluetooth. Unresolved
-    /// routes preserve the historical `false` result for ordinary capture;
-    /// safety-sensitive idle acquisition uses `bluetoothInputState(_:)`.
+    /// True when the device is known to capture over Bluetooth. Unknown
+    /// transports and empty/unresolved aggregate topologies preserve the
+    /// historical `false` result for ordinary capture; safety-sensitive idle
+    /// acquisition uses `bluetoothInputState(_:)` and fails closed instead.
     public static func isBluetoothInput(_ deviceID: AudioDeviceID) -> Bool {
         bluetoothInputState(deviceID) == true
     }
@@ -357,14 +362,17 @@ public enum AudioDeviceManager {
         ) ?? false
     }
 
+    /// Fail-closed Bluetooth decision for safety-sensitive route acquisition.
+    /// Explicitly unknown transports and aggregates without a positively known
+    /// active sub-device are unresolved rather than known non-Bluetooth.
     static func bluetoothRouteState(
         transport: UInt32?,
         activeSubDeviceTransports: [UInt32]?
     ) -> Bool? {
-        guard let transport else { return nil }
+        guard let transport, transport != kAudioDeviceTransportTypeUnknown else { return nil }
         if isBluetoothTransportType(transport) { return true }
         guard transport == kAudioDeviceTransportTypeAggregate else { return false }
-        guard let activeSubDeviceTransports else { return nil }
+        guard let activeSubDeviceTransports, !activeSubDeviceTransports.isEmpty else { return nil }
         return activeSubDeviceTransports.contains(where: isBluetoothTransportType)
     }
 
@@ -393,6 +401,8 @@ public enum AudioDeviceManager {
         activeSubDeviceIDsIfAvailable(deviceID) ?? []
     }
 
+    /// Queries an aggregate's active sub-devices, preserving a successful empty
+    /// response so safety-sensitive route decisions can treat it as mid-churn.
     private static func activeSubDeviceIDsIfAvailable(_ deviceID: AudioDeviceID) -> [AudioDeviceID]? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioAggregateDevicePropertyActiveSubDeviceList,
