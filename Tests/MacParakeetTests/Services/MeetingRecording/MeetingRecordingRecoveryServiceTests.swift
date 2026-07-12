@@ -41,6 +41,20 @@ final class MeetingRecordingRecoveryServiceTests: XCTestCase {
         XCTAssertEqual(metadata.sourceAlignment.system?.startOffsetMs, 0)
     }
 
+    func testRecoverLegacyLockWithoutSpeechEnginePreservesUncapturedProvenance() async throws {
+        _ = try makeRecoverableSession(speechEngineWasCaptured: false)
+        let pending = try await recoveryService.discoverPendingRecoveries()
+        let legacyLock = try XCTUnwrap(pending.first)
+        XCTAssertFalse(legacyLock.speechEngineWasCaptured)
+
+        _ = try await recoveryService.recover(legacyLock)
+
+        let recording = try XCTUnwrap(transcriptionService.recordings.first)
+        XCTAssertFalse(recording.speechEngineWasCaptured)
+        let metadata = try MeetingRecordingMetadataStore.load(from: recording.folderURL)
+        XCTAssertFalse(metadata.speechEngineWasCaptured)
+    }
+
     func testRecoverDeletesLockOnSuccess() async throws {
         let fixture = try makeRecoverableSession()
 
@@ -734,7 +748,8 @@ final class MeetingRecordingRecoveryServiceTests: XCTestCase {
         systemAudio: SourceFixture = .valid,
         systemSampleRate: Double = 48_000,
         lockState: MeetingRecordingLockState = .recording,
-        notes: String? = nil
+        notes: String? = nil,
+        speechEngineWasCaptured: Bool = true
     ) throws -> (folderURL: URL, lock: MeetingRecordingLockFile) {
         let sessionID = UUID()
         let folderURL = tempRoot.appendingPathComponent(sessionID.uuidString, isDirectory: true)
@@ -765,6 +780,7 @@ final class MeetingRecordingRecoveryServiceTests: XCTestCase {
             pid: 42,
             displayName: "Recovered Team Sync",
             state: lockState,
+            speechEngineWasCaptured: speechEngineWasCaptured,
             notes: notes,
             folderURL: folderURL
         )

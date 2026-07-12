@@ -261,6 +261,20 @@ final class MeetingRecordingLockFileStoreTests: XCTestCase {
         let readLockFile = try XCTUnwrap(store.read(folderURL: folderURL))
         XCTAssertNil(readLockFile.notes)
         XCTAssertEqual(readLockFile.displayName, "Old Session")
+        XCTAssertEqual(readLockFile.speechEngine.engine, .parakeet)
+        XCTAssertFalse(readLockFile.speechEngineWasCaptured)
+    }
+
+    func testUncapturedSpeechEngineRemainsAbsentAfterRewrite() throws {
+        let folderURL = tempRoot.appendingPathComponent("legacy-session")
+        let lockFile = makeLockFile(folderURL: folderURL, speechEngineWasCaptured: false)
+
+        try store.write(lockFile, folderURL: folderURL)
+
+        let keys = try encodedJSONKeys(folderURL: folderURL)
+        XCTAssertFalse(keys.contains("speechEngine"))
+        let decoded = try XCTUnwrap(store.read(folderURL: folderURL))
+        XCTAssertFalse(decoded.withFolderURL(folderURL).speechEngineWasCaptured)
     }
 
     func testReadFromLockFileWithMalformedNotesValueStillRecoversMetadata() throws {
@@ -357,7 +371,8 @@ final class MeetingRecordingLockFileStoreTests: XCTestCase {
         pid: Int32 = 123,
         displayName: String = "Team Sync",
         state: MeetingRecordingLockState = .recording,
-        folderURL: URL? = nil
+        folderURL: URL? = nil,
+        speechEngineWasCaptured: Bool = true
     ) -> MeetingRecordingLockFile {
         MeetingRecordingLockFile(
             schemaVersion: schemaVersion,
@@ -366,6 +381,7 @@ final class MeetingRecordingLockFileStoreTests: XCTestCase {
             pid: pid,
             displayName: displayName,
             state: state,
+            speechEngineWasCaptured: speechEngineWasCaptured,
             folderURL: folderURL
         )
     }

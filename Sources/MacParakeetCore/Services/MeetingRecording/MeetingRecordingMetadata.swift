@@ -61,25 +61,10 @@ public struct MeetingRecordingMetadata: Sendable, Codable, Equatable {
     public init(
         sourceAlignment: MeetingSourceAlignment,
         speechEngine: SpeechEngineSelection = SpeechEngineSelection(engine: .parakeet),
+        speechEngineWasCaptured: Bool = true,
         startContext: MeetingStartContext? = nil,
         echoSuppression: MeetingEchoSuppressionMetadata? = nil,
         calendarEventSnapshot: MeetingCalendarSnapshot? = nil
-    ) {
-        self.sourceAlignment = sourceAlignment
-        self.speechEngine = speechEngine
-        self.speechEngineWasCaptured = true
-        self.startContext = startContext
-        self.echoSuppression = echoSuppression
-        self.calendarEventSnapshot = calendarEventSnapshot
-    }
-
-    private init(
-        sourceAlignment: MeetingSourceAlignment,
-        speechEngine: SpeechEngineSelection,
-        speechEngineWasCaptured: Bool,
-        startContext: MeetingStartContext?,
-        echoSuppression: MeetingEchoSuppressionMetadata?,
-        calendarEventSnapshot: MeetingCalendarSnapshot?
     ) {
         self.sourceAlignment = sourceAlignment
         self.speechEngine = speechEngine

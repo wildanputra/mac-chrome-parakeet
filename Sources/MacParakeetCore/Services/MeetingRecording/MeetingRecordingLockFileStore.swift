@@ -26,6 +26,10 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
     public let displayName: String
     public let state: MeetingRecordingLockState
     public let speechEngine: SpeechEngineSelection
+    /// Whether `speechEngine` was explicitly persisted by the recording build.
+    /// Legacy locks without the field retain the Parakeet decode fallback but
+    /// must use the current Meetings & Transcriptions route during recovery.
+    public let speechEngineWasCaptured: Bool
     public let startContext: MeetingStartContext?
     public let calendarEventSnapshot: MeetingCalendarSnapshot?
     /// Free-form notes the user typed during the meeting. Persisted on
@@ -57,6 +61,7 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
         displayName: String,
         state: MeetingRecordingLockState = .recording,
         speechEngine: SpeechEngineSelection = SpeechEngineSelection(engine: .parakeet),
+        speechEngineWasCaptured: Bool = true,
         startContext: MeetingStartContext? = nil,
         calendarEventSnapshot: MeetingCalendarSnapshot? = nil,
         notes: String? = nil,
@@ -69,6 +74,7 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
         self.displayName = displayName
         self.state = state
         self.speechEngine = speechEngine
+        self.speechEngineWasCaptured = speechEngineWasCaptured
         self.startContext = startContext
         self.calendarEventSnapshot = calendarEventSnapshot
         self.notes = notes
@@ -83,8 +89,9 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
         pid = try container.decode(Int32.self, forKey: .pid)
         displayName = try container.decode(String.self, forKey: .displayName)
         state = try container.decodeIfPresent(MeetingRecordingLockState.self, forKey: .state) ?? .recording
-        speechEngine = try container.decodeIfPresent(SpeechEngineSelection.self, forKey: .speechEngine)
-            ?? SpeechEngineSelection(engine: .parakeet)
+        let decodedSpeechEngine = try container.decodeIfPresent(SpeechEngineSelection.self, forKey: .speechEngine)
+        speechEngine = decodedSpeechEngine ?? SpeechEngineSelection(engine: .parakeet)
+        speechEngineWasCaptured = decodedSpeechEngine != nil
         startContext = (try? container.decodeIfPresent(MeetingStartContext.self, forKey: .startContext)) ?? nil
         // Calendar snapshots are best-effort context. A malformed optional
         // snapshot must not block lock-file recovery of the audio metadata.
@@ -107,7 +114,9 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
         try container.encode(pid, forKey: .pid)
         try container.encode(displayName, forKey: .displayName)
         try container.encode(state, forKey: .state)
-        try container.encode(speechEngine, forKey: .speechEngine)
+        if speechEngineWasCaptured {
+            try container.encode(speechEngine, forKey: .speechEngine)
+        }
         try container.encodeIfPresent(startContext, forKey: .startContext)
         try container.encodeIfPresent(calendarEventSnapshot, forKey: .calendarEventSnapshot)
         try container.encodeIfPresent(notes, forKey: .notes)
@@ -122,6 +131,7 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
             displayName: displayName,
             state: state,
             speechEngine: speechEngine,
+            speechEngineWasCaptured: speechEngineWasCaptured,
             startContext: startContext,
             calendarEventSnapshot: calendarEventSnapshot,
             notes: notes,
@@ -138,6 +148,7 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
             displayName: displayName,
             state: state,
             speechEngine: speechEngine,
+            speechEngineWasCaptured: speechEngineWasCaptured,
             startContext: startContext,
             calendarEventSnapshot: calendarEventSnapshot,
             notes: notes,
@@ -154,6 +165,7 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
             displayName: displayName,
             state: state,
             speechEngine: speechEngine,
+            speechEngineWasCaptured: speechEngineWasCaptured,
             startContext: startContext,
             calendarEventSnapshot: calendarEventSnapshot,
             notes: notes,

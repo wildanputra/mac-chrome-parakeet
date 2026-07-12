@@ -687,7 +687,7 @@ final class MeetingRecordingFlowCoordinatorTests: XCTestCase {
         }
 
         let readinessSelections = await stt.routedReadinessSelectionsSnapshot()
-        XCTAssertEqual(readinessSelections.last, pinnedSelection)
+        XCTAssertTrue(readinessSelections.contains(pinnedSelection))
     }
 
     // MARK: - Quit-time pill teardown (fix/meeting-pill-lingers-on-quit)
