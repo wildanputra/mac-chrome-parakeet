@@ -97,6 +97,62 @@ final class MicrophoneEngineRealPlatformTests: XCTestCase {
         )
     }
 
+    /// Prepared-start case: pay device/format setup while stopped, then verify
+    /// the matching start produces real input buffers through the prepared tap.
+    func testPreparedStartDeliversBuffers() async throws {
+        let counter = OSAllocatedUnfairLock(initialState: 0)
+        let handler: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { _, _ in
+            counter.withLock { $0 += 1 }
+        }
+
+        platform.prepare(
+            vpioEnabled: false,
+            bufferSize: Self.bufferSize,
+            tapHandler: handler
+        )
+
+        try platform.configureAndStart(
+            vpioEnabled: false,
+            bufferSize: Self.bufferSize,
+            tapHandler: handler
+        )
+
+        let count = try await awaitCounterIncrease(
+            counter: counter,
+            from: 0,
+            timeout: Self.firstBufferDeadline
+        )
+        XCTAssertGreaterThan(count, 0, "A matching prepared start should deliver microphone buffers.")
+    }
+
+    /// Mismatch case: a prepared tap must be torn down before falling back to
+    /// full configuration, otherwise AVAudioEngine rejects the second tap.
+    func testPreparedStartWithDifferentBufferSizeFallsBackCleanly() async throws {
+        let counter = OSAllocatedUnfairLock(initialState: 0)
+        let handler: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { _, _ in
+            counter.withLock { $0 += 1 }
+        }
+
+        platform.prepare(
+            vpioEnabled: false,
+            bufferSize: Self.bufferSize,
+            tapHandler: handler
+        )
+
+        try platform.configureAndStart(
+            vpioEnabled: false,
+            bufferSize: Self.bufferSize / 2,
+            tapHandler: handler
+        )
+
+        let count = try await awaitCounterIncrease(
+            counter: counter,
+            from: 0,
+            timeout: Self.firstBufferDeadline
+        )
+        XCTAssertGreaterThan(count, 0, "A mismatched prepared start should fall back and deliver buffers.")
+    }
+
     /// VPIO transition case: subscribe with VPIO enabled (simulates meeting
     /// recording starting), then with VPIO disabled (simulates dictation).
     /// This is the path the journal originally suspected before the

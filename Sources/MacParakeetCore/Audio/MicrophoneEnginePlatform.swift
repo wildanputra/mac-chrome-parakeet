@@ -236,8 +236,10 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
             // cold path on key-down instead.
             if let firstDeviceID = deviceAttemptsBuilder?().first?.deviceID {
                 let transport = AudioDeviceManager.transportType(firstDeviceID)
-                guard transport != kAudioDeviceTransportTypeBluetooth,
-                      transport != kAudioDeviceTransportTypeBluetoothLE else {
+                guard
+                    transport != kAudioDeviceTransportTypeBluetooth,
+                    transport != kAudioDeviceTransportTypeBluetoothLE
+                else {
                     AudioCaptureDiagnostics.append(
                         "shared_mic_engine_prepare_skipped reason=bluetooth"
                     )
@@ -266,7 +268,7 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
             // closure is never retained past an explicit stop, even when the
             // platform is already stopped.
             lastStartRequestLocked = nil
-            guard running else { return }
+            guard running || prepared else { return }
             tearDownLocked()
             logger.info("shared_mic_engine_stopped")
             AudioCaptureDiagnostics.append("shared_mic_engine_stopped")
@@ -289,9 +291,10 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
         // Fast path: a matching prepared engine (device + format + tap already
         // paid, same VPIO/buffer/device) — just start it.
         if startNow, !running, prepared, engineStarter == nil,
-           preparedVPIO == vpioEnabled, preparedBufferSize == bufferSize,
-           deviceAttemptsBuilder?().first == preparedAttempt,
-           goPreparedLocked() {
+            preparedVPIO == vpioEnabled, preparedBufferSize == bufferSize,
+            deviceAttemptsBuilder?().first == preparedAttempt,
+            goPreparedLocked()
+        {
             lastSucceededAttemptLocked = preparedAttempt
             lastStartRequestLocked = StartRequest(
                 vpioEnabled: vpioEnabled,
@@ -300,8 +303,15 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
             )
             return
         }
-        // Anything else is a full (re)configure; drop any stale prepared engine.
-        prepared = false
+        // Anything else is a full (re)configure. A prepared engine already has
+        // a tap installed, so replace it rather than merely clearing the flag;
+        // otherwise the full path would try to install a second tap.
+        if prepared {
+            AudioCaptureDiagnostics.append(
+                "shared_mic_engine_prepared_discarded reason=request_mismatch"
+            )
+            tearDownLocked()
+        }
         // VPIO toggle requires a stop → setVoiceProcessingEnabled → start
         // sequence; the engine cannot be reconfigured while running.
         if running {
@@ -325,7 +335,12 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
                     tapHandler: tapHandler
                 )
             } else {
-                markPreparedLocked(attempt: nil, vpioEnabled: vpioEnabled, bufferSize: bufferSize, tapHandler: tapHandler)
+                markPreparedLocked(
+                    attempt: nil,
+                    vpioEnabled: vpioEnabled,
+                    bufferSize: bufferSize,
+                    tapHandler: tapHandler
+                )
             }
             return
         }
@@ -379,7 +394,12 @@ public final class AVAudioEngineMicrophonePlatform: MicrophoneEnginePlatform, @u
                         tapHandler: tapHandler
                     )
                 } else {
-                    markPreparedLocked(attempt: attempt, vpioEnabled: vpioEnabled, bufferSize: bufferSize, tapHandler: tapHandler)
+                    markPreparedLocked(
+                        attempt: attempt,
+                        vpioEnabled: vpioEnabled,
+                        bufferSize: bufferSize,
+                        tapHandler: tapHandler
+                    )
                 }
                 logger.info(
                     "shared_mic_engine_input_device_\(startNow ? "started" : "prepared") source=\(attempt.source.logValue, privacy: .public) transport=\(transport, privacy: .public) vpio=\(vpioEnabled, privacy: .public)"
