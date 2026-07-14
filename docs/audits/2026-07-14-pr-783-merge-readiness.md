@@ -58,6 +58,18 @@ the service's single pinned selection after startup succeeds. The mutable
 preference is retained only as a compatibility fallback for service
 implementations that expose no active selection.
 
+### Hosted P1 follow-up — schema v1 locks can mimic captured routing
+
+The earlier lock-file shape always encoded `speechEngine` under schema v1,
+before Meetings & Transcriptions had an independent route. Treating field
+presence as captured provenance would therefore reuse a stale former-shared
+selection during crash recovery.
+
+The compatibility fix makes new lock files schema v2. The decoder still reads
+v1, but only a v2 `speechEngine` is treated as a captured meeting route; v1
+recovery follows the current Meetings & Transcriptions selection. This is a
+schema clarification, not a new migration layer or preference.
+
 ## Spec Coverage
 
 | Workflow | Route contract |
@@ -110,6 +122,9 @@ Completed locally:
 - hosted review then exposed the meeting-startup pinning race; its regression
   test failed against the reviewed behavior, passed after the fix, and all 21
   `MeetingRecordingFlowCoordinatorTests` passed;
+- hosted re-review exposed ambiguous schema v1 engine provenance; its focused
+  regression test failed against the reviewed decoder and passed after the
+  v2 boundary was introduced;
 - `git diff --check` passed;
 - the preferred `no-mistakes` executable was unavailable, so the documented
   focused/full-test and committed-review fallback is being used.

@@ -7,16 +7,16 @@ public enum MeetingRecordingLockState: String, Codable, Sendable, Equatable, Cas
 }
 
 public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
-    /// Schema version is intentionally left at 1 because `notes`,
-    /// `speechEngine`, `startContext`, and `calendarEventSnapshot` are
-    /// backward-compatible additive fields.
+    /// Schema 2 distinguishes an independently captured meeting speech-engine
+    /// route from schema 1 locks, which always encoded the former shared route.
+    /// Other optional fields remain backward-compatible additions.
     /// See ADR-020 §9. The version guard in `MeetingRecordingLockFileStore.read()`
     /// uses `<=` so a lock file written by an OLDER app version is still
     /// readable; a future bump only needs to keep this property + bump the
     /// constant, not add a migration path. Lock files written by a NEWER app
     /// version are intentionally treated as opaque and skipped (we cannot
     /// know which fields they require).
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
     public static let fileName = "recording.lock"
 
     public let schemaVersion: Int
@@ -91,7 +91,7 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
         state = try container.decodeIfPresent(MeetingRecordingLockState.self, forKey: .state) ?? .recording
         let decodedSpeechEngine = try container.decodeIfPresent(SpeechEngineSelection.self, forKey: .speechEngine)
         speechEngine = decodedSpeechEngine ?? SpeechEngineSelection(engine: .parakeet)
-        speechEngineWasCaptured = decodedSpeechEngine != nil
+        speechEngineWasCaptured = schemaVersion >= 2 && decodedSpeechEngine != nil
         startContext = (try? container.decodeIfPresent(MeetingStartContext.self, forKey: .startContext)) ?? nil
         // Calendar snapshots are best-effort context. A malformed optional
         // snapshot must not block lock-file recovery of the audio metadata.

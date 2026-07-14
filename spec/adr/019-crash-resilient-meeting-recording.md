@@ -157,8 +157,9 @@ post-stop pipeline:
 2. Synthesize `meeting-recording-metadata.json` from the audio file durations
    (`startOffsetMs = 0` for both since we don't have the original
    alignment; acceptable degradation — user knows recording was recovered).
-   Use the speech engine captured in `recording.lock`, defaulting to Parakeet
-   for legacy lock files that predate ADR-021.
+   Use the independent meeting speech-engine route captured by schema v2. For
+   schema v1 locks, whose `speechEngine` belonged to the former shared route,
+   use the current Meetings & Transcriptions selection.
 3. Run `MeetingTranscriptFinalizer.finalize` via `STTScheduler` as a
    normal background job (recovery transcription is just another
    meeting-finalize task per ADR-016's slot model), updating an existing
@@ -179,11 +180,12 @@ recovery: 1 partial recording").
 
 ### 3. Schema version on the lock file
 
-The lock file embeds `schemaVersion: 1` and a small state enum
-(`recording` or `awaitingTranscription`) so future format changes
-(new fields, different paths) can be migrated without breaking
-existing in-flight recordings on a user's machine across an app
-update.
+The original lock file embedded `schemaVersion: 1`; schema v2 distinguishes an
+independently captured meeting speech-engine route from the former shared route
+written by v1. Readers continue to accept supported older versions so an
+in-flight recording remains recoverable across an app update, while newer
+unknown versions are skipped rather than misinterpreted. Both versions use the
+same small state enum (`recording` or `awaitingTranscription`).
 
 The current lock-file, recovery-discovery, active-session refusal, and
 retention-sweep safety contract is maintained in

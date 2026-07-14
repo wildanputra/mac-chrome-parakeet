@@ -277,6 +277,17 @@ final class MeetingRecordingLockFileStoreTests: XCTestCase {
         XCTAssertFalse(decoded.withFolderURL(folderURL).speechEngineWasCaptured)
     }
 
+    func testReadTreatsSchemaOneSpeechEngineAsLegacyProvenance() throws {
+        let folderURL = tempRoot.appendingPathComponent("schema-one-session")
+        let legacyLockFile = makeLockFile(schemaVersion: 1, speechEngineWasCaptured: true)
+        try writeRawLockFile(legacyLockFile, folderURL: folderURL)
+
+        let decoded = try XCTUnwrap(store.read(folderURL: folderURL))
+
+        XCTAssertEqual(decoded.schemaVersion, 1)
+        XCTAssertFalse(decoded.speechEngineWasCaptured)
+    }
+
     func testReadFromLockFileWithMalformedNotesValueStillRecoversMetadata() throws {
         // ADR-020 §9: notes are decoded as a separate `try?` step so a
         // type-mismatch on the notes field cannot block recovery of the

@@ -238,7 +238,10 @@ The `recording.lock` JSON schema gains a `notes: String?` field. `MeetingRecordi
 
 **Schema versioning.** The addition is backward-compatible at the existing schema version. The `notes` field is decoded with `decodeIfPresent`: lock files written by previous app versions (no `notes` key) decode with `notes = nil` and recover normally. New lock files include the key. **The schema version is not bumped.**
 
-The current `MeetingRecordingLockFileStore.read()` guards on `schemaVersion == currentSchemaVersion`. Because we are not bumping the version, that guard continues to behave correctly. Any *future* hard schema bump must relax the guard to `>=` first (separately) — otherwise a Sparkle-update window where the new app version reads lock files written by the previous version would silently discard recoverable sessions. This is called out for the implementer of any future bump and tracked as a follow-up.
+The notes addition itself does not require a schema bump. The later independent
+speech-route change introduces schema v2; the reader now accepts versions less
+than or equal to its current version, so v1 locks remain recoverable across a
+Sparkle update while newer unknown versions are skipped.
 
 **Notes decoded independently.** The `notes` field is decoded as a separate `try?` step *after* the structural fields decode successfully. A malformed `notes` string (or any future encoder bug specific to that field) causes the recovery scanner to fall back to `notes = nil` for that session, but the audio metadata and recoverability of the recording itself are preserved. The user loses the typed notes for one specific recovery, but the meeting itself is still recoverable. Without this split, a single corrupted notes byte would tank the entire recovery.
 
