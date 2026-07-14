@@ -89,6 +89,13 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** removed the `prefer-built-in-mic-bluetooth-output` configuration
+  key because capture no longer rewrites microphone routing based on the audio
+  output device. Existing stored values are ignored. Per the CLI compatibility
+  policy, this change must ship in the next major CLI release.
+
 ### Fixed
 
 - Cohere Transcribe CLI paths now enforce the same 16 GB memory floor recorded

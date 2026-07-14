@@ -394,7 +394,7 @@ private extension CLISpecCommand {
                 .argument(
                     "key",
                     summary:
-                        "Configuration key, such as speech-engine, parakeet-model, nemotron-model, nemotron-language, whisper-language, cohere-language, voice-return-enabled, voice-return-triggers, prefer-built-in-mic-bluetooth-output, meeting-artifacts-folder, or meeting-hook-timeout."
+                        "Configuration key, such as speech-engine, parakeet-model, nemotron-model, nemotron-language, whisper-language, cohere-language, voice-return-enabled, voice-return-triggers, meeting-artifacts-folder, or meeting-hook-timeout."
                 )
             ],
             output: "Configuration value."
