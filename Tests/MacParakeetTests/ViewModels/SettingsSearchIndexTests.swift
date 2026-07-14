@@ -68,6 +68,11 @@ final class SettingsSearchIndexTests: XCTestCase {
         XCTAssertTrue(results.contains(where: { $0.id == "engine.selector" }))
     }
 
+    func testSeparateEngineQueryFindsMeetingsAndTranscriptionsSelector() {
+        let results = SettingsSearchIndex.matches("separate engine")
+        XCTAssertTrue(results.contains(where: { $0.id == "engine.transcriptionSelector" }))
+    }
+
     func testSubtitleMatches() {
         let results = SettingsSearchIndex.matches("meeting audio")
         XCTAssertTrue(results.contains(where: { $0.id == "meeting" }))

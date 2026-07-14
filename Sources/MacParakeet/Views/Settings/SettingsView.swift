@@ -394,19 +394,21 @@ struct SettingsView: View {
     /// surface owns one decision the user makes:
     ///
     /// 1. `engineSelectorCard` — which engine?
-    /// 2. `engineParakeetModelCard` — which Parakeet build? (Parakeet only —
+    /// 2. `transcriptionEngineCard` — independent file/meeting route
+    /// 3. `engineParakeetModelCard` — which Parakeet build? (Parakeet only —
     ///    multilingual `v3`, English-only `v2`, or Unified)
-    /// 3. `engineNemotronModelCard` — which Nemotron build? (Nemotron only —
+    /// 4. `engineNemotronModelCard` — which Nemotron build? (Nemotron only —
     ///    multilingual vs English-only)
-    /// 4. `engineCohereModelCard` — GPU vs Neural Engine? (Cohere only)
-    /// 5. `engineLanguageCard` — which language? (Whisper only in Settings)
-    /// 6. `enginesModelsCard` — what's the local model state?
+    /// 5. `engineCohereModelCard` — GPU vs Neural Engine? (Cohere only)
+    /// 6. `engineLanguageCard` — which language? (Whisper only in Settings)
+    /// 7. `enginesModelsCard` — what's the local model state?
     ///
-    /// Cards 2–5 are mutually exclusive (one per engine), so exactly one
-    /// contextual config card sits between the selector and the models card.
+    /// Cards 3–6 appear for engines used by either workflow route, so multiple
+    /// contextual cards can coexist when dictation and transcription differ.
     private var engineTabContent: some View {
         scrollableTabBody {
             engineSelectorCard.id("engine.selector")
+            transcriptionEngineCard.id("engine.transcriptionSelector")
             engineParakeetModelCard.id("engine.parakeetModel")
             engineNemotronModelCard.id("engine.nemotronModel")
             engineCohereModelCard.id("engine.cohereModel")
@@ -1975,7 +1977,7 @@ struct SettingsView: View {
     private var engineSelectorCard: some View {
         SettingsCard(
             title: "Speech Recognition",
-            subtitle: "Choose the local engine for dictation, files, and meetings. Clean meeting audio often matters as much as model choice.",
+            subtitle: "Choose the local engine for dictation. Meetings and file transcription have their own route below.",
             icon: "cpu",
             status: engineSelectorCardStatus
         ) {
@@ -1990,11 +1992,11 @@ struct SettingsView: View {
                         name: "Parakeet",
                         tagline: "Everyday local default",
                         strengths: [
-                            "Fast dictation and meetings",
-                            "Timestamps for exports",
+                            "Fast everyday dictation",
+                            "Timestamps for saved dictations",
                             "English + supported European languages"
                         ],
-                        helpText: "Choose Parakeet for fast dictation, meetings, and exports in supported languages. Use Whisper when the audio is outside Parakeet's language coverage.",
+                        helpText: "Choose Parakeet for fast everyday dictation in supported languages. Use Whisper when your dictation language is outside Parakeet's coverage.",
                         modelStatus: displayedParakeetModelStatus,
                         isSelected: viewModel.engine.speechEnginePreference == .parakeet,
                         isBusy: viewModel.engine.speechEngineSwitching,
@@ -2022,13 +2024,13 @@ struct SettingsView: View {
                     EngineOptionTile(
                         icon: "globe",
                         name: "Whisper",
-                        tagline: "Files + broad languages",
+                        tagline: "Broad-language dictation",
                         strengths: [
-                            "Files, media, retranscription",
-                            "Word timestamps for subtitles",
+                            "Recorded dictation in many languages",
+                            "Word timestamps for saved dictations",
                             "Slower cold starts; no live preview"
                         ],
-                        helpText: "Choose Whisper for files, media, and saved-audio retranscription outside Parakeet or Nemotron coverage. It runs locally and has word timestamps, but first use can be slow and live dictation preview stays off.",
+                        helpText: "Choose Whisper for recorded dictation outside Parakeet or Nemotron language coverage. It runs locally and has word timestamps, but first use can be slow and live dictation preview stays off.",
                         modelStatus: displayedWhisperModelStatus,
                         isSelected: viewModel.engine.speechEnginePreference == .whisper,
                         isBusy: viewModel.engine.speechEngineSwitching,
@@ -2096,6 +2098,48 @@ struct SettingsView: View {
         }
     }
 
+    private var transcriptionEngineCard: some View {
+        SettingsCard(
+            title: "Meetings & Transcriptions",
+            subtitle:
+                "Choose an engine without changing dictation. New meetings capture this choice at start; files, media, and URLs use it per job.",
+            icon: "waveform.and.mic"
+        ) {
+            VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+                Picker(
+                    "Speech engine",
+                    selection: Binding(
+                        get: { viewModel.engine.transcriptionSpeechEnginePreference },
+                        set: { _ = viewModel.engine.selectTranscriptionSpeechEngine($0) }
+                    )
+                ) {
+                    ForEach(transcriptionEngineOptions, id: \.self) { engine in
+                        Text(engine.displayName).tag(engine)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text("Model variants and language choices remain shared per engine; only workflow routing is separate.")
+                    .font(DesignSystem.Typography.caption)
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+
+                if let error = viewModel.engine.transcriptionSpeechEngineError {
+                    Text(error)
+                        .font(DesignSystem.Typography.caption)
+                        .foregroundStyle(DesignSystem.Colors.errorRed)
+                }
+            }
+        }
+    }
+
+    private var transcriptionEngineOptions: [SpeechEnginePreference] {
+        SpeechEnginePreference.allCases.filter { engine in
+            engine != .cohere
+                || AppFeatures.cohereEngineEnabled
+                || viewModel.engine.transcriptionSpeechEnginePreference == .cohere
+        }
+    }
+
     private var engineOptionColumns: [GridItem] {
         [GridItem(.adaptive(minimum: 260), spacing: DesignSystem.Spacing.md, alignment: .top)]
     }
@@ -2107,7 +2151,7 @@ struct SettingsView: View {
     /// #398); Unified is the punctuated English streaming build (issue #520).
     @ViewBuilder
     private var engineParakeetModelCard: some View {
-        if viewModel.engine.speechEnginePreference == .parakeet {
+        if viewModel.engine.usesSpeechEngine(.parakeet) {
             SettingsCard(
                 title: "Parakeet Model",
                 subtitle: "Pick what Parakeet optimizes for: supported-language coverage, English timestamps, or readable English live preview.",
@@ -2232,7 +2276,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var engineNemotronModelCard: some View {
-        if viewModel.engine.speechEnginePreference == .nemotron {
+        if viewModel.engine.usesSpeechEngine(.nemotron) {
             SettingsCard(
                 title: "Nemotron Model",
                 subtitle: "Pick the Beta streaming build: multilingual for broader live preview, English for a smaller English-only path.",
@@ -2334,7 +2378,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var engineCohereModelCard: some View {
         @Bindable var engine = viewModel.engine
-        if engine.speechEnginePreference == .cohere {
+        if engine.usesSpeechEngine(.cohere) {
             SettingsCard(
                 title: "Cohere Performance",
                 subtitle: "GPU can finish Cohere batches faster after Core ML setup. Neural Engine avoids that setup wait. Changes apply next time Cohere loads.",
@@ -2422,7 +2466,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var engineLanguageCard: some View {
         @Bindable var engine = viewModel.engine
-        if engine.speechEnginePreference == .whisper {
+        if engine.usesSpeechEngine(.whisper) {
             SettingsCard(
                 title: "Whisper Language",
                 subtitle: "Auto-detect works for most files. Pin a language for faster startup or mixed-language audio.",
@@ -2559,7 +2603,7 @@ struct SettingsView: View {
     }
 
     private var shouldShowCohereModelRow: Bool {
-        AppFeatures.cohereEngineEnabled || viewModel.engine.speechEnginePreference == .cohere
+        AppFeatures.cohereEngineEnabled || viewModel.engine.usesSpeechEngine(.cohere)
     }
 
     private var currentSpeechEngineSwitchTarget: SpeechEnginePreference {
@@ -2944,7 +2988,7 @@ struct SettingsView: View {
             ) {
                 viewModel.engine.downloadNemotronModel()
             }]
-            if viewModel.engine.speechEnginePreference != .nemotron {
+            if !viewModel.engine.usesSpeechEngine(.nemotron) {
                 actions.append(ModelRowAction(
                     label: "Delete download…",
                     isProminent: false,
@@ -2977,7 +3021,7 @@ struct SettingsView: View {
             }]
             // Offer delete only when Whisper isn't the active engine — deleting
             // the in-use model would force a silent re-download next time.
-            if viewModel.engine.speechEnginePreference != .whisper {
+            if !viewModel.engine.usesSpeechEngine(.whisper) {
                 actions.append(ModelRowAction(
                     label: "Delete download…",
                     isProminent: false,
@@ -3010,7 +3054,7 @@ struct SettingsView: View {
             return []
         }
         if viewModel.engine.canDeleteCohereModel,
-           viewModel.engine.speechEnginePreference != .cohere {
+           !viewModel.engine.usesSpeechEngine(.cohere) {
             actions.append(ModelRowAction(
                 label: "Delete download…",
                 isProminent: false,

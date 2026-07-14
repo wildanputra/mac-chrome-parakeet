@@ -7,16 +7,16 @@ public enum MeetingRecordingLockState: String, Codable, Sendable, Equatable, Cas
 }
 
 public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
-    /// Schema version is intentionally left at 1 because `notes`,
-    /// `speechEngine`, `startContext`, and `calendarEventSnapshot` are
-    /// backward-compatible additive fields.
+    /// Schema 2 distinguishes an independently captured meeting speech-engine
+    /// route from schema 1 locks, which always encoded the former shared route.
+    /// Other optional fields remain backward-compatible additions.
     /// See ADR-020 §9. The version guard in `MeetingRecordingLockFileStore.read()`
     /// uses `<=` so a lock file written by an OLDER app version is still
     /// readable; a future bump only needs to keep this property + bump the
     /// constant, not add a migration path. Lock files written by a NEWER app
     /// version are intentionally treated as opaque and skipped (we cannot
     /// know which fields they require).
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
     public static let fileName = "recording.lock"
 
     public let schemaVersion: Int
@@ -26,6 +26,10 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
     public let displayName: String
     public let state: MeetingRecordingLockState
     public let speechEngine: SpeechEngineSelection
+    /// Whether `speechEngine` was explicitly persisted by the recording build.
+    /// Legacy locks without the field retain the Parakeet decode fallback but
+    /// must use the current Meetings & Transcriptions route during recovery.
+    public let speechEngineWasCaptured: Bool
     public let startContext: MeetingStartContext?
     public let calendarEventSnapshot: MeetingCalendarSnapshot?
     /// Free-form notes the user typed during the meeting. Persisted on
@@ -57,6 +61,7 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
         displayName: String,
         state: MeetingRecordingLockState = .recording,
         speechEngine: SpeechEngineSelection = SpeechEngineSelection(engine: .parakeet),
+        speechEngineWasCaptured: Bool = true,
         startContext: MeetingStartContext? = nil,
         calendarEventSnapshot: MeetingCalendarSnapshot? = nil,
         notes: String? = nil,
@@ -69,6 +74,7 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
         self.displayName = displayName
         self.state = state
         self.speechEngine = speechEngine
+        self.speechEngineWasCaptured = speechEngineWasCaptured
         self.startContext = startContext
         self.calendarEventSnapshot = calendarEventSnapshot
         self.notes = notes
@@ -83,8 +89,9 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
         pid = try container.decode(Int32.self, forKey: .pid)
         displayName = try container.decode(String.self, forKey: .displayName)
         state = try container.decodeIfPresent(MeetingRecordingLockState.self, forKey: .state) ?? .recording
-        speechEngine = try container.decodeIfPresent(SpeechEngineSelection.self, forKey: .speechEngine)
-            ?? SpeechEngineSelection(engine: .parakeet)
+        let decodedSpeechEngine = try container.decodeIfPresent(SpeechEngineSelection.self, forKey: .speechEngine)
+        speechEngine = decodedSpeechEngine ?? SpeechEngineSelection(engine: .parakeet)
+        speechEngineWasCaptured = schemaVersion >= 2 && decodedSpeechEngine != nil
         startContext = (try? container.decodeIfPresent(MeetingStartContext.self, forKey: .startContext)) ?? nil
         // Calendar snapshots are best-effort context. A malformed optional
         // snapshot must not block lock-file recovery of the audio metadata.
@@ -107,7 +114,9 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
         try container.encode(pid, forKey: .pid)
         try container.encode(displayName, forKey: .displayName)
         try container.encode(state, forKey: .state)
-        try container.encode(speechEngine, forKey: .speechEngine)
+        if speechEngineWasCaptured {
+            try container.encode(speechEngine, forKey: .speechEngine)
+        }
         try container.encodeIfPresent(startContext, forKey: .startContext)
         try container.encodeIfPresent(calendarEventSnapshot, forKey: .calendarEventSnapshot)
         try container.encodeIfPresent(notes, forKey: .notes)
@@ -122,6 +131,7 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
             displayName: displayName,
             state: state,
             speechEngine: speechEngine,
+            speechEngineWasCaptured: speechEngineWasCaptured,
             startContext: startContext,
             calendarEventSnapshot: calendarEventSnapshot,
             notes: notes,
@@ -138,6 +148,7 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
             displayName: displayName,
             state: state,
             speechEngine: speechEngine,
+            speechEngineWasCaptured: speechEngineWasCaptured,
             startContext: startContext,
             calendarEventSnapshot: calendarEventSnapshot,
             notes: notes,
@@ -154,6 +165,7 @@ public struct MeetingRecordingLockFile: Codable, Sendable, Equatable {
             displayName: displayName,
             state: state,
             speechEngine: speechEngine,
+            speechEngineWasCaptured: speechEngineWasCaptured,
             startContext: startContext,
             calendarEventSnapshot: calendarEventSnapshot,
             notes: notes,

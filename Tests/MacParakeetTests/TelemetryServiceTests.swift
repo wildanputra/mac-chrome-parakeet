@@ -779,6 +779,26 @@ final class TelemetryServiceTests: XCTestCase {
         XCTAssertNil(props["value"])
     }
 
+    func testSettingChangedSerializesTranscriptionSpeechEngine() throws {
+        let event = TelemetryEvent(
+            spec: .settingChanged(setting: .transcriptionSpeechEngine, value: "cohere"),
+            appVer: "0.4.2",
+            osVer: "15.3",
+            locale: "en-US",
+            chip: "Apple M1",
+            session: "test-session"
+        )
+
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(event)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let props = try XCTUnwrap(json["props"] as? [String: String])
+
+        XCTAssertEqual(props["setting"], "transcription_speech_engine")
+        XCTAssertEqual(props["value"], "cohere")
+    }
+
     func testSettingChangedSerializesSafeValueWhenProvided() throws {
         let event = TelemetryEvent(
             spec: .settingChanged(setting: .meetingRecordingPill, value: "true"),

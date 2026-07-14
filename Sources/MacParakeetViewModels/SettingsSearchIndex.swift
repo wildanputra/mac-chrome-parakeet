@@ -284,6 +284,17 @@ public enum SettingsSearchIndex {
             cardAnchor: "engine.selector"
         ),
         SettingsSearchEntry(
+            id: "engine.transcriptionSelector",
+            tab: .engine,
+            title: "Meetings & Transcriptions Engine",
+            subtitle: "Choose an engine independently from dictation.",
+            keywords: [
+                "meeting engine", "transcription engine", "file engine", "separate engine",
+                "dictation", "parakeet", "nemotron", "whisper", "cohere",
+            ],
+            cardAnchor: "engine.transcriptionSelector"
+        ),
+        SettingsSearchEntry(
             id: "engine.language",
             tab: .engine,
             title: "Whisper Language",

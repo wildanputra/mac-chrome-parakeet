@@ -324,12 +324,12 @@ ADR-016 defines MacParakeet's STT architecture as:
 
 The app does not treat "one service = one STT runtime" as a valid long-term architecture.
 `STTClient` remains only as a standalone compatibility facade for the CLI and tests; app code uses the shared `STTRuntime` + `STTScheduler` from `AppEnvironment`.
-The GUI uses the persisted `speechRecognitionEngine` preference; the CLI can override per invocation.
-
-Future per-capture engine defaults (for example, Parakeet for dictation and
-Nemotron Beta for meetings) should stay a routing-policy layer on top of this
-shared control plane, not a separate runtime per feature. See
-`docs/planning/2026-06-per-capture-speech-engine-routing.md`.
+The GUI uses `speechRecognitionEngine` for dictation and
+`transcriptionSpeechRecognitionEngine` for files, media, URLs, and newly started
+meetings. When the latter key is absent it inherits the dictation preference,
+preserving upgrade behavior. This is a routing-policy layer on top of the shared
+control plane, not a separate runtime per feature. The CLI can still override
+per invocation.
 
 ### Lifecycle
 
@@ -339,7 +339,7 @@ shared control plane, not a separate runtime per feature. See
 - **Graceful shutdown**: The shared runtime is released when the app quits
 - **Single owner**: Warm-up, readiness, shutdown, and cache clear happen once at the runtime layer
 - **Cancellation-safe init**: Shutdown/cache clear cancel in-flight initialization and wait for loaded managers to clean themselves up before returning
-- **Meeting engine lease**: Meeting recording captures the current `SpeechEngineSelection` at start and holds a scheduler lease until stop/cancel; engine changes are rejected while the lease is active
+- **Meeting engine lease**: Meeting recording captures the dedicated Meetings & Transcriptions `SpeechEngineSelection` at start and holds a scheduler lease until stop/cancel; engine/model changes are rejected while the lease is active
 
 ### Scheduling Policy
 

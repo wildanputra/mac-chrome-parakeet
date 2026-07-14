@@ -971,6 +971,7 @@ The Transforms sidebar item is visible when `AppFeatures.transformsEnabled` is t
 └───────────────────────────────────────────────────────────┘
 ```
 
+- The primary engine picker controls dictation. A separate segmented Meetings & Transcriptions picker routes new meetings plus file/media/URL jobs without reloading or replacing the dictation choice.
 - Engine picker options: Parakeet (default), Nemotron Beta, Whisper, and Cohere.
 - Whisper language picker is shown for the Whisper path. `Auto-detect` stores no explicit language; specific languages are normalized before saving.
 - Cohere language picker is shown for the Cohere path. Cohere has no auto-detect; `nil` falls back to English and explicit choices store supported primary subtags such as `en`, `ja`, or `zh`.

@@ -36,7 +36,7 @@ The lock filename is stable:
 
 - `recording.lock`
 
-Stable v1 fields:
+Stable lock fields:
 
 - `schemaVersion`
 - `sessionId`
@@ -53,9 +53,17 @@ Stable states:
 - `awaitingTranscription`: source/mixed audio has been finalized, but final
   transcription or recovery cleanup has not completed.
 
-`notes` and `speechEngine` are backward-compatible additive fields. Missing
-values decode to safe defaults. Malformed `notes` does not block recovery of
-the structural lock metadata.
+`notes` is a backward-compatible additive field. Missing values decode to safe
+defaults, and malformed `notes` does not block recovery of the structural lock
+metadata.
+
+Speech-engine provenance is versioned because schema v1 writers always encoded
+the former shared engine route. A v1 `speechEngine` therefore does not prove
+that an independent meeting route was captured. Schema v2 introduces that
+meaning: when its `speechEngine` is present, recovery uses the captured meeting
+selection; v1 locks and v2 locks without the field use the current Meetings &
+Transcriptions route. Readers accept supported older versions and reject newer,
+unknown versions.
 
 ## Safety Predicates
 

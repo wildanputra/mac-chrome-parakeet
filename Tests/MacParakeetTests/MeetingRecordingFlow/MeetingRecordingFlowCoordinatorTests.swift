@@ -614,6 +614,127 @@ final class MeetingRecordingFlowCoordinatorTests: XCTestCase {
         )
     }
 
+    func testMeetingWarmUpUsesMeetingEngineSelection() async throws {
+        let stt = MockSTTClient()
+        await stt.setReady(false)
+        let meetingSelection = SpeechEngineSelection(engine: .parakeet)
+        let coordinator = MeetingRecordingFlowCoordinator(
+            meetingRecordingService: MeetingRecordingServiceSpy(output: makeRecordingOutput()),
+            transcriptionService: MockTranscriptionService(),
+            permissionService: MockPermissionService(),
+            transcriptionRepo: MockTranscriptionRepository(),
+            conversationRepo: MockChatConversationRepository(),
+            quickPromptRepo: NoOpQuickPromptRepository(),
+            configStore: NoOpLLMConfigStore(),
+            sttManager: stt,
+            speechEngineSelectionProvider: { meetingSelection },
+            llmService: nil,
+            pillViewModel: MeetingRecordingPillViewModel(),
+            meetingRecordingSettlement: makeSettlement(),
+            onMenuBarIconUpdate: { _ in },
+            onTranscriptionReady: { _ in }
+        )
+
+        XCTAssertNotNil(coordinator.startRecording(trigger: .manual))
+        await coordinator.testHook_waitForActionTask()
+
+        let startedAt = ContinuousClock.now
+        while startedAt.duration(to: .now) <= .seconds(1) {
+            if await stt.routedWarmUpSelectionsSnapshot() == [meetingSelection] {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let routedWarmUps = await stt.routedWarmUpSelectionsSnapshot()
+        let backgroundWarmUps = await stt.backgroundWarmUpCallCountSnapshot()
+        XCTAssertEqual(routedWarmUps, [meetingSelection])
+        XCTAssertEqual(backgroundWarmUps, 0)
+    }
+
+    func testMeetingStartupUsesEnginePinnedByStartedSession() async throws {
+        let stt = MockSTTClient()
+        await stt.setReady(false)
+        let pinnedSelection = SpeechEngineSelection(engine: .cohere, language: "fr")
+        let changedPreference = SpeechEngineSelection(engine: .parakeet)
+        let recordingService = MeetingRecordingServiceSpy(
+            output: makeRecordingOutput(),
+            activeSpeechEngineSelection: pinnedSelection
+        )
+        let coordinator = MeetingRecordingFlowCoordinator(
+            meetingRecordingService: recordingService,
+            transcriptionService: MockTranscriptionService(),
+            permissionService: MockPermissionService(),
+            transcriptionRepo: MockTranscriptionRepository(),
+            conversationRepo: MockChatConversationRepository(),
+            quickPromptRepo: NoOpQuickPromptRepository(),
+            configStore: NoOpLLMConfigStore(),
+            sttManager: stt,
+            speechEngineSelectionProvider: { changedPreference },
+            llmService: nil,
+            pillViewModel: MeetingRecordingPillViewModel(),
+            meetingRecordingSettlement: makeSettlement(),
+            onMenuBarIconUpdate: { _ in },
+            onTranscriptionReady: { _ in }
+        )
+
+        XCTAssertNotNil(coordinator.startRecording(trigger: .manual))
+        await coordinator.testHook_waitForActionTask()
+
+        let startedAt = ContinuousClock.now
+        while startedAt.duration(to: .now) <= .seconds(1) {
+            if !(await stt.routedWarmUpSelectionsSnapshot()).isEmpty {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let routedWarmUps = await stt.routedWarmUpSelectionsSnapshot()
+        XCTAssertEqual(routedWarmUps, [pinnedSelection])
+        XCTAssertEqual(
+            coordinator.testHook_panelViewModel?.liveTranscriptStatus,
+            .previewUnsupported(engine: .cohere)
+        )
+    }
+
+    func testMeetingReadinessUsesEnginePinnedByStartedSession() async throws {
+        let stt = MockSTTClient()
+        let pinnedSelection = SpeechEngineSelection(engine: .cohere, language: "fr")
+        let changedPreference = SpeechEngineSelection(engine: .parakeet)
+        let recordingService = MeetingRecordingServiceSpy(
+            output: makeRecordingOutput(),
+            activeSpeechEngineSelection: pinnedSelection
+        )
+        let coordinator = MeetingRecordingFlowCoordinator(
+            meetingRecordingService: recordingService,
+            transcriptionService: MockTranscriptionService(),
+            permissionService: MockPermissionService(),
+            transcriptionRepo: MockTranscriptionRepository(),
+            conversationRepo: MockChatConversationRepository(),
+            quickPromptRepo: NoOpQuickPromptRepository(),
+            configStore: NoOpLLMConfigStore(),
+            sttManager: stt,
+            speechEngineSelectionProvider: { changedPreference },
+            llmService: nil,
+            pillViewModel: MeetingRecordingPillViewModel(),
+            meetingRecordingSettlement: makeSettlement(),
+            onMenuBarIconUpdate: { _ in },
+            onTranscriptionReady: { _ in }
+        )
+
+        XCTAssertNotNil(coordinator.startRecording(trigger: .manual))
+        let startedAt = ContinuousClock.now
+        while startedAt.duration(to: .now) <= .seconds(1) {
+            if await stt.routedReadinessSelectionsSnapshot().contains(pinnedSelection) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let readinessSelections = await stt.routedReadinessSelectionsSnapshot()
+        XCTAssertTrue(readinessSelections.contains(pinnedSelection))
+    }
+
     // MARK: - Quit-time pill teardown (fix/meeting-pill-lingers-on-quit)
 
     /// Hiding the floating pill for a quit decision must be flow-neutral: it
@@ -950,6 +1071,7 @@ private actor MeetingRecordingServiceSpy: MeetingRecordingServiceProtocol {
     }
 
     private let output: MeetingRecordingOutput
+    let activeSpeechEngineSelection: SpeechEngineSelection?
     var startCallCount = 0
     var startCalls: [StartCall] = []
     var stopCallCount = 0
@@ -960,8 +1082,12 @@ private actor MeetingRecordingServiceSpy: MeetingRecordingServiceProtocol {
     private var captureFailureSignaled = false
     private var captureFailureContinuations: [UUID: AsyncStream<MeetingCaptureFailureSignal>.Continuation] = [:]
 
-    init(output: MeetingRecordingOutput) {
+    init(
+        output: MeetingRecordingOutput,
+        activeSpeechEngineSelection: SpeechEngineSelection? = nil
+    ) {
         self.output = output
+        self.activeSpeechEngineSelection = activeSpeechEngineSelection
     }
 
     func startRecording(

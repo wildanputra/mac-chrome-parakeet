@@ -81,7 +81,7 @@ During active meeting recording, MacParakeet writes fragmented source audio and 
 2. If a lock exists, the previous meeting session was interrupted.
 3. Validate surviving source audio and load lock metadata, including title, notes, and captured speech engine/language.
 4. Recover the meeting into the transcription library when audio exists; otherwise clean up empty sessions according to the recovery service rules.
-5. Final transcription uses the same captured speech engine/language that was active when the meeting started.
+5. Final transcription uses the same Meetings & Transcriptions engine/language captured when the meeting started.
 6. Remove the lock after successful recovery/finalization.
 
 Dictation does not use this lock-file recovery path. Short dictation audio is written as a temp WAV and rejected before STT if it contains too little audio.

@@ -316,6 +316,30 @@ final class MeetingRecordingServiceTests: XCTestCase {
         XCTAssertEqual(activeLeaseCountAfterStop, 0)
     }
 
+    func testRecordingPinsDedicatedMeetingEngineWithoutUsingDictationSelection() async throws {
+        let captureService = MockMeetingAudioCaptureService()
+        let lockStore = RecordingLockFileStore()
+        let sttClient = LeasingMeetingSTTClient(
+            selection: SpeechEngineSelection(engine: .parakeet)
+        )
+        let meetingSelection = SpeechEngineSelection(engine: .cohere, language: "fr")
+        let service = MeetingRecordingService(
+            audioCaptureService: captureService,
+            audioConverter: MockMeetingAudioFileConverter(),
+            sttTranscriber: sttClient,
+            lockFileStore: lockStore,
+            meetingSpeechEngineSelection: { meetingSelection }
+        )
+
+        try await service.startRecording()
+
+        XCTAssertEqual(lockStore.writes.first?.file.speechEngine, meetingSelection)
+        let requestedSelections = await sttClient.requestedSessionSelections
+        XCTAssertEqual(requestedSelections, [meetingSelection])
+
+        await service.cancelRecording()
+    }
+
     func testStoppedRecordingKeepsAwaitingTranscriptionLockWithoutSettlement() async throws {
         let captureService = MockMeetingAudioCaptureService()
         let lockStore = RecordingLockFileStore()
@@ -3529,11 +3553,14 @@ private actor StopOutputCapture {
     }
 }
 
-private actor LeasingMeetingSTTClient: STTClientProtocol, SpeechEngineRoutedTranscribing, SpeechEngineSessionManaging {
+private actor LeasingMeetingSTTClient: STTClientProtocol, SpeechEngineRoutedTranscribing,
+    SpeechEngineRoutedSessionManaging
+{
     private let selection: SpeechEngineSelection
     private let capabilities: SpeechEngineCapabilities?
     private var activeLeases: Set<UUID> = []
     private(set) var routedSelections: [SpeechEngineSelection] = []
+    private(set) var requestedSessionSelections: [SpeechEngineSelection] = []
 
     init(
         selection: SpeechEngineSelection,
@@ -3549,6 +3576,16 @@ private actor LeasingMeetingSTTClient: STTClientProtocol, SpeechEngineRoutedTran
 
     func beginSpeechEngineSession() async -> SpeechEngineLease {
         let lease = SpeechEngineLease(selection: selection, capabilities: capabilities)
+        activeLeases.insert(lease.id)
+        return lease
+    }
+
+    func beginSpeechEngineSession(speechEngine: SpeechEngineSelection) async -> SpeechEngineLease {
+        requestedSessionSelections.append(speechEngine)
+        let lease = SpeechEngineLease(
+            selection: speechEngine,
+            capabilities: SpeechEngineCapabilityRegistry.capabilities(for: speechEngine.engine)
+        )
         activeLeases.insert(lease.id)
         return lease
     }

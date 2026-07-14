@@ -1,7 +1,7 @@
 import Foundation
 @testable import MacParakeetCore
 
-public actor MockSTTClient: STTClientProtocol, STTDictationPreviewTranscribing, SpeechEngineRoutedTranscribing, STTLiveDictationTranscribing, SpeechEngineSwitching, SpeechEngineTelemetryAttributing {
+public actor MockSTTClient: STTClientProtocol, STTDictationPreviewTranscribing, SpeechEngineRoutedTranscribing, STTLiveDictationTranscribing, SpeechEngineSwitching, SpeechEngineTelemetryAttributing, SpeechEngineRoutedWarmUpManaging {
     public var transcribeResult: STTResult?
     public var transcribeError: Error?
     public var transcribeCallCount = 0
@@ -12,6 +12,8 @@ public actor MockSTTClient: STTClientProtocol, STTDictationPreviewTranscribing, 
     public var speechEngineSelections: [SpeechEngineSelection] = []
     public var warmUpCalled = false
     public var warmUpCallCount = 0
+    public var routedWarmUpSelections: [SpeechEngineSelection] = []
+    public var routedReadinessSelections: [SpeechEngineSelection] = []
     /// Counts calls to `backgroundWarmUp()` itself (before its internal dedup),
     /// so a test can assert the *ViewModel* didn't re-enter — `warmUpCallCount`
     /// alone is masked by this mock's own `backgroundWarmUpTask != nil` guard.
@@ -320,6 +322,14 @@ public actor MockSTTClient: STTClientProtocol, STTDictationPreviewTranscribing, 
         ready = true
     }
 
+    public func warmUp(
+        speechEngine: SpeechEngineSelection,
+        onProgress: (@Sendable (String) -> Void)?
+    ) async throws {
+        routedWarmUpSelections.append(speechEngine)
+        try await warmUp(onProgress: onProgress)
+    }
+
     public func backgroundWarmUp() async {
         backgroundWarmUpCallCount += 1
         if case .ready = warmUpState { return }
@@ -384,6 +394,11 @@ public actor MockSTTClient: STTClientProtocol, STTDictationPreviewTranscribing, 
         ready
     }
 
+    public func isReady(speechEngine: SpeechEngineSelection) async -> Bool {
+        routedReadinessSelections.append(speechEngine)
+        return ready
+    }
+
     public func configureSpeechEngineSwitch(error: Error?) {
         speechEngineSwitchError = error
     }
@@ -394,6 +409,14 @@ public actor MockSTTClient: STTClientProtocol, STTDictationPreviewTranscribing, 
 
     public func warmUpCallCountSnapshot() -> Int {
         warmUpCallCount
+    }
+
+    public func routedWarmUpSelectionsSnapshot() -> [SpeechEngineSelection] {
+        routedWarmUpSelections
+    }
+
+    public func routedReadinessSelectionsSnapshot() -> [SpeechEngineSelection] {
+        routedReadinessSelections
     }
 
     public func backgroundWarmUpCallCountSnapshot() -> Int {

@@ -516,7 +516,9 @@ final class MenuBarCoordinator: NSObject, NSMenuDelegate {
     /// the user picks among its 14 languages without opening the app.
     private func updateCohereLanguageMenu() {
         guard let item = cohereLanguageMenuItem else { return }
-        let isCohere = SpeechEnginePreference.current() == .cohere
+        let isCohere =
+            SpeechEnginePreference.current() == .cohere
+            || SpeechEnginePreference.transcription() == .cohere
         item.isHidden = !isCohere
         guard isCohere, let submenu = item.submenu else { return }
         let selected = SpeechEnginePreference.cohereDefaultLanguage() ?? "en"

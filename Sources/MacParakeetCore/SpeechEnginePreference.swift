@@ -10,6 +10,12 @@ public enum SpeechEnginePreference: String, CaseIterable, Codable, Sendable {
     case cohere
 
     public static let defaultsKey = "speechRecognitionEngine"
+    /// Engine used for file/media transcription and newly started meetings.
+    ///
+    /// This is intentionally separate from ``defaultsKey``, which remains the
+    /// live dictation engine. When this key has never been written we inherit
+    /// the dictation choice so upgrades preserve the pre-split behavior.
+    public static let transcriptionDefaultsKey = "transcriptionSpeechRecognitionEngine"
     public static let parakeetModelVariantKey = "parakeetModelVariant"
     public static let nemotronModelVariantKey = "nemotronModelVariant"
     public static let nemotronDefaultLanguageKey = "nemotronDefaultLanguage"
@@ -71,6 +77,19 @@ public enum SpeechEnginePreference: String, CaseIterable, Codable, Sendable {
 
     public func save(to defaults: UserDefaults = .standard) {
         defaults.set(rawValue, forKey: Self.defaultsKey)
+    }
+
+    public static func transcription(defaults: UserDefaults = .standard) -> SpeechEnginePreference {
+        guard let rawValue = defaults.string(forKey: transcriptionDefaultsKey),
+            let preference = SpeechEnginePreference(rawValue: rawValue)
+        else {
+            return current(defaults: defaults)
+        }
+        return preference
+    }
+
+    public func saveForTranscriptions(to defaults: UserDefaults = .standard) {
+        defaults.set(rawValue, forKey: Self.transcriptionDefaultsKey)
     }
 
     public static func whisperDefaultLanguage(defaults: UserDefaults = .standard) -> String? {
@@ -548,6 +567,19 @@ public struct SpeechEngineSelection: Codable, Equatable, Sendable {
 
     public static func current(defaults: UserDefaults = .standard) -> SpeechEngineSelection {
         let engine = SpeechEnginePreference.current(defaults: defaults)
+        return selection(for: engine, defaults: defaults)
+    }
+
+    /// Selection for file/media transcription and meetings. Missing persisted
+    /// state inherits the dictation selection for a backward-compatible upgrade.
+    public static func transcription(defaults: UserDefaults = .standard) -> SpeechEngineSelection {
+        selection(for: SpeechEnginePreference.transcription(defaults: defaults), defaults: defaults)
+    }
+
+    private static func selection(
+        for engine: SpeechEnginePreference,
+        defaults: UserDefaults
+    ) -> SpeechEngineSelection {
         let language: String? = switch engine {
         case .parakeet:
             nil

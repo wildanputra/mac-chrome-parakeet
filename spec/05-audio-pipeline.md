@@ -75,7 +75,7 @@ Input File → FFmpeg → 16kHz mono WAV → selected local STT engine → Trans
 - **Max file size**: 4 hours of audio (configurable)
 - **Temp file management**: intermediate WAV files are automatically cleaned up after transcription completes (success or failure)
 - FFmpeg runs as a subprocess; phase updates are reported to the UI (download/transcribe progress where available)
-- The selected speech engine is Parakeet by default. Within Parakeet, v3 is the multilingual default, v2 is an English-only TDT opt-in, and Unified is an English-only punctuation/capitalization opt-in with native live preview and token-derived word timestamps; Nemotron Beta, WhisperKit, and Cohere Transcribe can be selected globally in Settings or per CLI invocation where their engine constraints fit. Cohere is batch-only and produces plain text without word timestamps or live preview.
+- Dictation and meetings/transcriptions each have a persisted speech-engine route; both default to Parakeet, and upgrades initially inherit the existing dictation choice for the second route. File, media, and URL jobs snapshot the meetings/transcriptions route when they start. Within Parakeet, v3 is the multilingual default, v2 is an English-only TDT opt-in, and Unified is an English-only punctuation/capitalization opt-in with native live preview and token-derived word timestamps; Nemotron Beta, WhisperKit, and Cohere Transcribe can be selected in Settings or per CLI invocation where their engine constraints fit. Cohere is batch-only and produces plain text without word timestamps or live preview.
 
 ### Conversion Flow
 
@@ -278,7 +278,7 @@ User clicks "Start Meeting Recording"
     → Check microphone permission only when the mode includes mic audio
     → Check Screen & System Audio Recording permission only when the mode includes system audio
     → If a required permission is denied: show error + "Open System Settings" button, block recording
-    → Acquire speech-engine lease from STTScheduler and capture current engine/language
+    → Acquire speech-engine lease from STTScheduler and capture the Meetings & Transcriptions engine/language
     → Start MeetingAudioCaptureService with the selected source mode
     → Show recording pill (red dot + elapsed timer + stop button)
     → Consume AsyncStream<MeetingAudioCaptureEvent>, write buffers to M4A files

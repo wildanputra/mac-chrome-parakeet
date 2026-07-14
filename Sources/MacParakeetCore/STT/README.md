@@ -202,15 +202,23 @@ gate close over inline. A new call site that invokes `AsrManager.transcribe`
 directly **must** wrap it the same way — calling the manager bare reopens the
 crash for whichever lane runs unguarded.
 
-**Engine routing is per-job.** Parakeet stays default. The selected Parakeet
-build is `v3` unless the user opts into `v2` through Settings or the CLI
+**Engine routing is per-job.** Parakeet stays default. Settings persists an
+independent dictation engine and a Meetings & Transcriptions engine. Missing
+workflow-specific state inherits the dictation engine, so upgrades preserve the
+old single-choice behavior. New meetings capture the Meetings & Transcriptions
+selection in their lease/recovery metadata; transcription jobs snapshot that
+selection and pass it directly to the scheduler. Both routes still use this one
+shared runtime and scheduler. The selected Parakeet build is `v3` unless the
+user opts into `v2` through Settings or the CLI
 (`config set parakeet-model`, `models select parakeet-v2`, or
 `transcribe --parakeet-model v2`). A subscriber can request Nemotron or
-WhisperKit or Cohere globally (Settings / `models select`) or per call (CLI
+WhisperKit or Cohere for dictation (Settings / `models select`) or per call (CLI
 `--engine nemotron --language ko`, `--engine cohere --language ja`,
-`--engine whisper --language ko`). When set globally, dictation also routes
-there; when set per-job, only that job uses the requested engine. Cohere
-dictation remains record-then-transcribe and does not enter live-preview paths.
+`--engine whisper --language ko`). When set as the dictation preference,
+dictation routes there without changing the independent Meetings &
+Transcriptions preference; when set per-job, only that job uses the requested
+engine. Cohere dictation remains record-then-transcribe and does not enter
+live-preview paths.
 
 **Active meetings hold an engine lease.** Once a meeting recording
 starts, its engine selection is captured for the session's duration.

@@ -47,6 +47,36 @@ final class SpeechEnginePreferenceTests: XCTestCase {
         XCTAssertEqual(whisperSelection, SpeechEngineSelection(engine: .whisper, language: "ko"))
     }
 
+    func testTranscriptionEngineInheritsDictationEngineUntilExplicitlySeparated() {
+        let (defaults, suite) = makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        SpeechEnginePreference.whisper.save(to: defaults)
+        SpeechEnginePreference.saveWhisperDefaultLanguage("KO_kr", defaults: defaults)
+
+        XCTAssertEqual(SpeechEnginePreference.transcription(defaults: defaults), .whisper)
+        XCTAssertEqual(
+            SpeechEngineSelection.transcription(defaults: defaults),
+            SpeechEngineSelection(engine: .whisper, language: "ko")
+        )
+    }
+
+    func testTranscriptionEnginePersistsWithoutChangingDictationEngine() {
+        let (defaults, suite) = makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        SpeechEnginePreference.parakeet.save(to: defaults)
+        SpeechEnginePreference.cohere.saveForTranscriptions(to: defaults)
+        SpeechEnginePreference.saveCohereDefaultLanguage("fr", defaults: defaults)
+
+        XCTAssertEqual(SpeechEnginePreference.current(defaults: defaults), .parakeet)
+        XCTAssertEqual(SpeechEnginePreference.transcription(defaults: defaults), .cohere)
+        XCTAssertEqual(
+            SpeechEngineSelection.transcription(defaults: defaults),
+            SpeechEngineSelection(engine: .cohere, language: "fr")
+        )
+    }
+
     // MARK: - Whisper optimized-variant tracking
 
     private func makeIsolatedDefaults() -> (UserDefaults, String) {

@@ -2,6 +2,20 @@ import XCTest
 @testable import MacParakeetCore
 
 final class STTSchedulerTests: XCTestCase {
+    func testRoutedWarmUpAndReadinessPreserveExplicitSelection() async throws {
+        let runtime = MockSTTRuntime()
+        let scheduler = STTScheduler(runtimeProvider: runtime)
+        let selection = SpeechEngineSelection(engine: .cohere, language: "ja")
+
+        try await scheduler.warmUp(speechEngine: selection, onProgress: nil)
+        _ = await scheduler.isReady(speechEngine: selection)
+
+        let routedWarmUps = await runtime.routedWarmUpSelectionSnapshots()
+        let routedReadinessChecks = await runtime.routedReadinessSelectionSnapshots()
+        XCTAssertEqual(routedWarmUps, [selection])
+        XCTAssertEqual(routedReadinessChecks, [selection])
+    }
+
     func testDictationRunsWhileBackgroundSlotIsBusy() async throws {
         let runtime = MockSTTRuntime()
         await runtime.block(path: "meeting-live")
@@ -140,6 +154,27 @@ final class STTSchedulerTests: XCTestCase {
 
         XCTAssertEqual(lease.selection, SpeechEngineSelection(engine: .whisper, language: "ko"))
         XCTAssertEqual(lease.capabilities?.key, .whisper(.largeV3Turbo632MB))
+        await scheduler.endSpeechEngineSession(lease)
+    }
+
+    func testRoutedSessionLeasePinsRequestedEngineWithoutChangingRuntimeSelection() async {
+        let runtime = MockSTTRuntime()
+        await runtime.setCurrentSelection(SpeechEngineSelection(engine: .parakeet))
+        let scheduler = STTScheduler(runtimeProvider: runtime, meetingLiveChunkBacklogLimit: 8)
+
+        let lease = await scheduler.beginSpeechEngineSession(
+            speechEngine: SpeechEngineSelection(engine: .cohere, language: "fr")
+        )
+
+        XCTAssertEqual(lease.selection, SpeechEngineSelection(engine: .cohere, language: "fr"))
+        XCTAssertEqual(lease.capabilities?.key, .cohere)
+        let capabilitySelections = await runtime.routedCapabilitySelectionSnapshots()
+        XCTAssertEqual(
+            capabilitySelections,
+            [SpeechEngineSelection(engine: .cohere, language: "fr")]
+        )
+        let runtimeSelection = await runtime.currentSpeechEngineSelection()
+        XCTAssertEqual(runtimeSelection, SpeechEngineSelection(engine: .parakeet))
         await scheduler.endSpeechEngineSession(lease)
     }
 
@@ -1404,6 +1439,9 @@ private actor MockSTTRuntime: STTRuntimeProtocol {
     private var progressScripts: [String: [Int]] = [:]
     private var started: [String] = []
     private var routedSelections: [String: SpeechEngineSelection] = [:]
+    private var routedWarmUpSelections: [SpeechEngineSelection] = []
+    private var routedReadinessSelections: [SpeechEngineSelection] = []
+    private var routedCapabilitySelections: [SpeechEngineSelection] = []
 
     private(set) var warmUpCallCount = 0
     private(set) var isReadyCallCount = 0
@@ -1613,6 +1651,15 @@ private actor MockSTTRuntime: STTRuntimeProtocol {
         onProgress?("Ready")
     }
 
+    func warmUp(
+        speechEngine: SpeechEngineSelection,
+        onProgress: (@Sendable (String) -> Void)?
+    ) async throws {
+        routedWarmUpSelections.append(speechEngine)
+        ready = true
+        onProgress?("Ready")
+    }
+
     func backgroundWarmUp() async {}
 
     func observeWarmUpProgress() async -> (id: UUID, stream: AsyncStream<STTWarmUpState>) {
@@ -1628,6 +1675,19 @@ private actor MockSTTRuntime: STTRuntimeProtocol {
     func isReady() async -> Bool {
         isReadyCallCount += 1
         return ready
+    }
+
+    func isReady(speechEngine: SpeechEngineSelection) async -> Bool {
+        routedReadinessSelections.append(speechEngine)
+        return ready
+    }
+
+    func routedWarmUpSelectionSnapshots() -> [SpeechEngineSelection] {
+        routedWarmUpSelections
+    }
+
+    func routedReadinessSelectionSnapshots() -> [SpeechEngineSelection] {
+        routedReadinessSelections
     }
 
     func shutdown() async {
@@ -1734,6 +1794,17 @@ private actor MockSTTRuntime: STTRuntimeProtocol {
     func currentSpeechEngineCapabilities() async -> SpeechEngineCapabilities {
         capabilitiesReadCount += 1
         return capabilities
+    }
+
+    func speechEngineCapabilities(
+        for selection: SpeechEngineSelection
+    ) async -> SpeechEngineCapabilities {
+        routedCapabilitySelections.append(selection)
+        return Self.defaultCapabilities(for: selection.engine)
+    }
+
+    func routedCapabilitySelectionSnapshots() -> [SpeechEngineSelection] {
+        routedCapabilitySelections
     }
 
     func currentSpeechEngineTelemetryAttribution() async -> SpeechEngineTelemetryAttribution {

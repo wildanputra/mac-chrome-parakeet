@@ -549,6 +549,7 @@ public enum TelemetrySettingName: String, Sendable, Equatable {
     case meetingSpeakerDiarization = "meeting_speaker_diarization"
     case parakeetModelVariant = "parakeet_model_variant"
     case nemotronModelVariant = "nemotron_model_variant"
+    case transcriptionSpeechEngine = "transcription_speech_engine"
     case whisperDefaultLanguage = "whisper_default_language"
     case cohereLanguage = "cohere_language"
     case cohereComputePolicy = "cohere_compute_policy"

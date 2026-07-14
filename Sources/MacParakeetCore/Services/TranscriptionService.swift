@@ -232,6 +232,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
     private let shouldKeepDownloadedAudio: @Sendable () -> Bool
     private let shouldDiarize: @Sendable () -> Bool
     private let shouldDiarizeMeetings: @Sendable () -> Bool
+    private let fileSpeechEngineSelection: @Sendable () -> SpeechEngineSelection?
     private let youtubeDownloader: YouTubeDownloading?
     private let podcastResolver: PodcastResolving?
     private let podcastSearchResolver: PodcastSearchResolving?
@@ -265,6 +266,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         shouldKeepDownloadedAudio: (@Sendable () -> Bool)? = nil,
         shouldDiarize: (@Sendable () -> Bool)? = nil,
         shouldDiarizeMeetings: (@Sendable () -> Bool)? = nil,
+        fileSpeechEngineSelection: (@Sendable () -> SpeechEngineSelection?)? = nil,
         youtubeDownloader: YouTubeDownloading? = nil,
         podcastResolver: PodcastResolving? = nil,
         podcastSearchResolver: PodcastSearchResolving? = nil,
@@ -296,6 +298,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
             shouldKeepDownloadedAudio: shouldKeepDownloadedAudio,
             shouldDiarize: shouldDiarize,
             shouldDiarizeMeetings: shouldDiarizeMeetings,
+            fileSpeechEngineSelection: fileSpeechEngineSelection,
             youtubeDownloader: youtubeDownloader,
             podcastResolver: podcastResolver,
             podcastSearchResolver: podcastSearchResolver,
@@ -330,6 +333,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         shouldKeepDownloadedAudio: (@Sendable () -> Bool)? = nil,
         shouldDiarize: (@Sendable () -> Bool)? = nil,
         shouldDiarizeMeetings: (@Sendable () -> Bool)? = nil,
+        fileSpeechEngineSelection: (@Sendable () -> SpeechEngineSelection?)? = nil,
         youtubeDownloader: YouTubeDownloading? = nil,
         podcastResolver: PodcastResolving? = nil,
         podcastSearchResolver: PodcastSearchResolving? = nil,
@@ -362,6 +366,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         let resolvedShouldDiarize = shouldDiarize ?? { true }
         self.shouldDiarize = resolvedShouldDiarize
         self.shouldDiarizeMeetings = shouldDiarizeMeetings ?? resolvedShouldDiarize
+        self.fileSpeechEngineSelection = fileSpeechEngineSelection ?? { nil }
         self.youtubeDownloader = youtubeDownloader
         self.podcastResolver = podcastResolver
         self.podcastSearchResolver = podcastSearchResolver
@@ -436,6 +441,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         onProgress: (@Sendable (TranscriptionProgress) -> Void)? = nil
     ) async throws -> Transcription {
         let operation = meetingOperationContext(for: recording)
+        let speechEngine = resolvedMeetingSpeechEngineSelection(for: recording)
 
         return try await Observability.withOperationContext(operation.operationContext) {
             try await assertCanTranscribeOrEmitPreflight(
@@ -465,6 +471,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 recording: recording,
                 transcription: &transcription,
                 operation: operation,
+                speechEngineOverride: speechEngine,
                 onProgress: onProgress
             )
         }
@@ -484,6 +491,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         onProgress: (@Sendable (TranscriptionProgress) -> Void)? = nil
     ) async throws -> Transcription {
         let operation = meetingOperationContext(for: recording)
+        let speechEngine = resolvedMeetingSpeechEngineSelection(for: recording)
 
         return try await Observability.withOperationContext(operation.operationContext) {
             try await assertCanTranscribeOrEmitPreflight(
@@ -519,6 +527,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 recording: recording,
                 transcription: &transcription,
                 operation: operation,
+                speechEngineOverride: speechEngine,
                 onProgress: onProgress
             )
         }
@@ -546,6 +555,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         speechEngineOverride: SpeechEngineSelection? = nil,
         onProgress: (@Sendable (TranscriptionProgress) -> Void)? = nil
     ) async throws -> Transcription {
+        let speechEngine = speechEngineOverride ?? fileSpeechEngineSelection()
         var transcription = makeRetranscriptionRecord(from: original)
         transcription.fileSizeBytes = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int)
             .flatMap { $0 } ?? original.fileSizeBytes
@@ -569,7 +579,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 operation: operation,
                 tempFiles: [],
                 persistFailureStatus: false,
-                speechEngine: speechEngineOverride,
+                speechEngine: speechEngine,
                 onProgress: onProgress
             )
         }
@@ -594,6 +604,10 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         speechEngineOverride: SpeechEngineSelection? = nil,
         onProgress: (@Sendable (TranscriptionProgress) -> Void)? = nil
     ) async throws -> Transcription {
+        let speechEngine = resolvedMeetingSpeechEngineSelection(
+            for: recording,
+            explicitSelection: speechEngineOverride
+        )
         var transcription = makeRetranscriptionRecord(from: original)
         transcription.fileSizeBytes = (try? FileManager.default.attributesOfItem(atPath: recording.mixedAudioURL.path)[.size] as? Int)
             .flatMap { $0 } ?? original.fileSizeBytes
@@ -622,7 +636,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 transcription: &transcription,
                 operation: operation,
                 persistFailureStatus: false,
-                speechEngineOverride: speechEngineOverride,
+                speechEngineOverride: speechEngine,
                 onProgress: onProgress
             )
         }
@@ -638,6 +652,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         persistResult: Bool = true,
         onProgress: (@Sendable (TranscriptionProgress) -> Void)? = nil
     ) async throws -> Transcription {
+        let speechEngine = fileSpeechEngineSelection()
         let embeddedMetadata = sourceType == .file
             ? await mediaMetadataExtractor.metadata(for: fileURL)
             : .empty
@@ -710,6 +725,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 operation: operation,
                 tempFiles: [],
                 persistResult: persistResult,
+                speechEngine: speechEngine,
                 onProgress: onProgress
             )
         }
@@ -736,6 +752,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         persistResult: Bool,
         onProgress: (@Sendable (TranscriptionProgress) -> Void)? = nil
     ) async throws -> Transcription {
+        let speechEngine = fileSpeechEngineSelection()
         let inputURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Apple Podcasts links are their own lane: resolve via the iTunes
@@ -746,6 +763,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
             return try await transcribePodcastURL(
                 inputURL,
                 persistResult: persistResult,
+                speechEngine: speechEngine,
                 onProgress: onProgress
             )
         }
@@ -777,6 +795,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 isPodcast: false,
                 operation: operation,
                 persistResult: persistResult,
+                speechEngine: speechEngine,
                 onProgress: onProgress
             )
         }
@@ -787,6 +806,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
     private func transcribePodcastURL(
         _ inputURL: String,
         persistResult: Bool,
+        speechEngine: SpeechEngineSelection?,
         onProgress: (@Sendable (TranscriptionProgress) -> Void)? = nil
     ) async throws -> Transcription {
         let operation = Self.podcastOperationContext()
@@ -819,6 +839,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 isPodcast: true,
                 operation: operation,
                 persistResult: persistResult,
+                speechEngine: speechEngine,
                 onProgress: onProgress
             )
         }
@@ -845,6 +866,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         persistResult: Bool,
         onProgress: (@Sendable (TranscriptionProgress) -> Void)? = nil
     ) async throws -> Transcription {
+        let speechEngine = fileSpeechEngineSelection()
         let operation = Self.podcastOperationContext()
         return try await Observability.withOperationContext(operation.operationContext) {
             guard let searchResolver = podcastSearchResolver else {
@@ -875,6 +897,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 isPodcast: true,
                 operation: operation,
                 persistResult: persistResult,
+                speechEngine: speechEngine,
                 onProgress: onProgress
             )
         }
@@ -921,6 +944,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
         isPodcast: Bool,
         operation: TranscriptionOperationContext,
         persistResult: Bool,
+        speechEngine: SpeechEngineSelection?,
         onProgress: (@Sendable (TranscriptionProgress) -> Void)? = nil
     ) async throws -> Transcription {
         var unownedDownloadedAudioURL: URL?
@@ -1064,6 +1088,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
             tempFiles: [downloadResult.audioFileURL],
             cleanUpDownloadedFiles: !keepDownloadedAudio,
             persistResult: persistResult,
+            speechEngine: speechEngine,
             onProgress: onProgress
         )
 
@@ -1134,6 +1159,19 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
             mediaExtension: Observability.mediaExtension(for: recording.mixedAudioURL),
             fileSizeBucket: Observability.fileSizeBucket(bytes: fileSize)
         )
+    }
+
+    private func resolvedMeetingSpeechEngineSelection(
+        for recording: MeetingRecordingOutput,
+        explicitSelection: SpeechEngineSelection? = nil
+    ) -> SpeechEngineSelection? {
+        if let explicitSelection {
+            return explicitSelection
+        }
+        if recording.speechEngineWasCaptured {
+            return recording.speechEngine
+        }
+        return fileSpeechEngineSelection()
     }
 
     private func makeMeetingTranscriptionStub(recording: MeetingRecordingOutput) -> Transcription {
@@ -1333,7 +1371,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
     ) async throws -> [MeetingTranscriptFinalizer.SourceTranscript] {
         var outputs: [MeetingTranscriptFinalizer.SourceTranscript] = []
         let activeSources = [AudioSource.microphone, .system].filter { recording.sourceAlignment.track(for: $0) != nil }
-        let speechEngine = speechEngineOverride ?? (recording.speechEngineWasCaptured ? recording.speechEngine : nil)
+        let speechEngine = speechEngineOverride
         let microphoneDecision = activeSources.contains(.microphone)
             ? try await resolveMeetingMicrophoneSource(for: recording)
             : nil

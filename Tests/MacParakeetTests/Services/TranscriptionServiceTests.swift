@@ -23,6 +23,33 @@ private actor MockYouTubeDownloader: YouTubeDownloading {
     }
 }
 
+private actor BlockingYouTubeDownloader: YouTubeDownloading {
+    private let result: YouTubeDownloader.DownloadResult
+    private let started = TestAsyncSignal()
+    private let release = TestAsyncSignal()
+
+    init(result: YouTubeDownloader.DownloadResult) {
+        self.result = result
+    }
+
+    func download(
+        url: String,
+        onProgress: (@Sendable (Int) -> Void)?
+    ) async throws -> YouTubeDownloader.DownloadResult {
+        await started.signal()
+        await release.wait()
+        return result
+    }
+
+    func waitUntilStarted() async {
+        await started.wait()
+    }
+
+    func resume() async {
+        await release.signal()
+    }
+}
+
 private actor TestAsyncSignal {
     private var continuation: CheckedContinuation<Void, Never>?
     private var didSignal = false
@@ -354,6 +381,61 @@ final class TranscriptionServiceTests: XCTestCase {
         XCTAssertEqual(fetched?.transcriptSegments?.map(\.text), ["This is a transcription"])
         let indexedText: [String] = try segmentRepo.fetch(transcriptionId: result.id).map(\.text)
         XCTAssertEqual(indexedText, ["This is a transcription"])
+    }
+
+    func testTranscribeFileUsesDedicatedTranscriptionEngineRoute() async throws {
+        let selection = SpeechEngineSelection(engine: .cohere, language: "fr")
+        service = TranscriptionService(
+            audioProcessor: mockAudio,
+            sttTranscriber: mockSTT,
+            transcriptionRepo: transcriptionRepo,
+            segmentRepo: segmentRepo,
+            fileSpeechEngineSelection: { selection }
+        )
+        await mockSTT.configure(result: STTResult(text: "bonjour", words: [], engine: .cohere))
+
+        _ = try await service.transcribe(fileURL: URL(fileURLWithPath: "/tmp/meeting.m4a"))
+
+        let selections = await mockSTT.speechEngineSelections
+        XCTAssertEqual(selections, [selection])
+    }
+
+    func testTranscribeURLSnapshotsEngineBeforeDownload() async throws {
+        let defaultsSuite = "test.transcription-route.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsSuite))
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        SpeechEnginePreference.cohere.saveForTranscriptions(to: defaults)
+
+        let downloadedAudio = try makeTempDownloadedAudio()
+        let downloader = BlockingYouTubeDownloader(
+            result: YouTubeDownloader.DownloadResult(
+                audioFileURL: downloadedAudio,
+                title: "Route snapshot",
+                durationSeconds: 1,
+                channelName: nil,
+                thumbnailURL: nil,
+                videoDescription: nil
+            )
+        )
+        service = TranscriptionService(
+            audioProcessor: mockAudio,
+            sttTranscriber: mockSTT,
+            transcriptionRepo: transcriptionRepo,
+            fileSpeechEngineSelection: { SpeechEngineSelection.transcription(defaults: defaults) },
+            youtubeDownloader: downloader
+        )
+        await mockSTT.configure(result: STTResult(text: "snapshot", engine: .cohere))
+
+        let task = Task {
+            try await service.transcribeURL(urlString: "https://youtu.be/route-snapshot")
+        }
+        await downloader.waitUntilStarted()
+        SpeechEnginePreference.parakeet.saveForTranscriptions(to: defaults)
+        await downloader.resume()
+        _ = try await task.value
+
+        let selections = await mockSTT.speechEngineSelections
+        XCTAssertEqual(selections.map(\.engine), [.cohere])
     }
 
     func testTranscribeFilePersistsDetectedLanguage() async throws {
@@ -1945,6 +2027,14 @@ final class TranscriptionServiceTests: XCTestCase {
     }
 
     func testRetranscribeMeetingWithoutCapturedSpeechEngineUsesCurrentRouting() async throws {
+        let selection = SpeechEngineSelection(engine: .cohere, language: "fr")
+        service = TranscriptionService(
+            audioProcessor: mockAudio,
+            sttTranscriber: mockSTT,
+            transcriptionRepo: transcriptionRepo,
+            segmentRepo: segmentRepo,
+            fileSpeechEngineSelection: { selection }
+        )
         let recordingFolder = URL(fileURLWithPath: AppPaths.tempDir)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: recordingFolder, withIntermediateDirectories: true)
@@ -1988,7 +2078,7 @@ final class TranscriptionServiceTests: XCTestCase {
         _ = try await service.retranscribeMeeting(existing: original, recording: recording)
 
         let selections = await mockSTT.speechEngineSelections
-        XCTAssertEqual(selections, [])
+        XCTAssertEqual(selections, [selection])
     }
 
     func testRetranscribeMeetingMaterializesExistingPromptResults() async throws {

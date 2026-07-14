@@ -81,12 +81,69 @@ final class EngineSettingsViewModelTests: XCTestCase {
         let vm = makeViewModel()
 
         XCTAssertEqual(vm.speechEnginePreference, SpeechEnginePreference.current(defaults: defaults))
+        XCTAssertEqual(
+            vm.transcriptionSpeechEnginePreference,
+            SpeechEnginePreference.transcription(defaults: defaults)
+        )
         XCTAssertEqual(vm.parakeetModelVariant, SpeechEnginePreference.parakeetModelVariant(defaults: defaults))
         XCTAssertEqual(vm.nemotronModelVariant, SpeechEnginePreference.nemotronModelVariant(defaults: defaults))
         XCTAssertEqual(vm.whisperDefaultLanguage, SpeechEnginePreference.whisperDefaultLanguage(defaults: defaults) ?? "auto")
         XCTAssertEqual(vm.whisperDefaultLanguage, "auto")
         XCTAssertEqual(vm.cohereComputePolicy, CohereTranscribeEngine.ComputePolicy.current(defaults: defaults))
         XCTAssertEqual(vm.cohereComputePolicy, .ane)
+    }
+
+    func testTranscriptionEngineSelectionPersistsWithoutChangingDictationEngine() {
+        SpeechEnginePreference.whisper.save(to: defaults)
+        let vm = makeViewModel()
+
+        XCTAssertEqual(vm.transcriptionSpeechEnginePreference, .whisper)
+        XCTAssertTrue(vm.selectTranscriptionSpeechEngine(.parakeet))
+
+        let reloaded = makeViewModel()
+        XCTAssertEqual(reloaded.speechEnginePreference, .whisper)
+        XCTAssertEqual(reloaded.transcriptionSpeechEnginePreference, .parakeet)
+        XCTAssertEqual(SpeechEnginePreference.current(defaults: defaults), .whisper)
+        XCTAssertEqual(SpeechEnginePreference.transcription(defaults: defaults), .parakeet)
+    }
+
+    func testChangingDictationAfterSettingsInitializationDoesNotMoveTranscriptionRoute() {
+        let vm = makeViewModel()
+        vm.whisperModelStatus = .notLoaded
+
+        vm.speechEnginePreference = .whisper
+
+        XCTAssertEqual(SpeechEnginePreference.current(defaults: defaults), .whisper)
+        XCTAssertEqual(SpeechEnginePreference.transcription(defaults: defaults), .parakeet)
+        XCTAssertEqual(vm.transcriptionSpeechEnginePreference, .parakeet)
+    }
+
+    func testTranscriptionSelectionCountsAsEngineUsage() {
+        SpeechEnginePreference.cohere.saveForTranscriptions(to: defaults)
+        let vm = makeViewModel()
+
+        XCTAssertTrue(vm.usesSpeechEngine(.cohere))
+        XCTAssertTrue(vm.usesSpeechEngine(.parakeet))
+        XCTAssertFalse(vm.usesSpeechEngine(.whisper))
+    }
+
+    func testDeleteCohereModelIsBlockedWhenUsedForTranscriptions() async {
+        SpeechEnginePreference.cohere.saveForTranscriptions(to: defaults)
+        let recorder = CohereDeleteRecorder()
+        let vm = makeViewModel(
+            cohereCached: { recorder.isCached },
+            deleteCohere: {
+                recorder.delete()
+                return true
+            }
+        )
+        vm.cohereModelStatus = .notLoaded
+
+        vm.deleteCohereModel()
+        await Task.yield()
+
+        XCTAssertEqual(recorder.deleteCount, 0)
+        XCTAssertEqual(vm.cohereModelStatus, .notLoaded)
     }
 
     func testSetSpeechEnginePreferencePersistsWhenTargetModelIsMarkedDownloaded() {

@@ -23,7 +23,7 @@ public enum STTSchedulerError: Error, LocalizedError, Equatable {
 /// meeting and file work share an explicitly prioritized background path.
 public actor STTScheduler: STTManaging, STTDictationPreviewTranscribing, SpeechEngineRoutedTranscribing,
     STTLiveDictationTranscribing, SpeechEngineSwitching, SpeechEngineSwitchAvailabilityProviding,
-    SpeechEngineSessionManaging, SpeechEngineTelemetryAttributing
+    SpeechEngineRoutedSessionManaging, SpeechEngineTelemetryAttributing, SpeechEngineRoutedWarmUpManaging
 {
     private struct ScheduledJob: Sendable {
         let id: UUID
@@ -322,6 +322,13 @@ public actor STTScheduler: STTManaging, STTDictationPreviewTranscribing, SpeechE
         try await runtime.warmUp(onProgress: onProgress)
     }
 
+    public func warmUp(
+        speechEngine: SpeechEngineSelection,
+        onProgress: (@Sendable (String) -> Void)?
+    ) async throws {
+        try await runtime.warmUp(speechEngine: speechEngine, onProgress: onProgress)
+    }
+
     public func backgroundWarmUp() async {
         await runtime.backgroundWarmUp()
     }
@@ -336,6 +343,10 @@ public actor STTScheduler: STTManaging, STTDictationPreviewTranscribing, SpeechE
 
     public func isReady() async -> Bool {
         await runtime.isReady()
+    }
+
+    public func isReady(speechEngine: SpeechEngineSelection) async -> Bool {
+        await runtime.isReady(speechEngine: speechEngine)
     }
 
     public func clearModelCache() async {
@@ -477,6 +488,16 @@ public actor STTScheduler: STTManaging, STTDictationPreviewTranscribing, SpeechE
     }
 
     public func beginSpeechEngineSession() async -> SpeechEngineLease {
+        await beginSpeechEngineSession(requestedSpeechEngine: nil)
+    }
+
+    public func beginSpeechEngineSession(speechEngine: SpeechEngineSelection) async -> SpeechEngineLease {
+        await beginSpeechEngineSession(requestedSpeechEngine: speechEngine)
+    }
+
+    private func beginSpeechEngineSession(
+        requestedSpeechEngine: SpeechEngineSelection?
+    ) async -> SpeechEngineLease {
         // Reserve the session slot before the first suspension point. From
         // here on, the `activeSpeechEngineSessionIDs.isEmpty` guard in
         // setSpeechEngine / setParakeetModelVariant fails, so no engine
@@ -497,8 +518,15 @@ public actor STTScheduler: STTManaging, STTDictationPreviewTranscribing, SpeechE
                 )
             }
         }
-        let selection = await runtime.currentSpeechEngineSelection()
-        let capabilities = await runtime.currentSpeechEngineCapabilities()
+        let selection: SpeechEngineSelection
+        let capabilities: SpeechEngineCapabilities?
+        if let requestedSpeechEngine {
+            selection = requestedSpeechEngine
+            capabilities = await runtime.speechEngineCapabilities(for: requestedSpeechEngine)
+        } else {
+            selection = await runtime.currentSpeechEngineSelection()
+            capabilities = await runtime.currentSpeechEngineCapabilities()
+        }
         return SpeechEngineLease(id: sessionID, selection: selection, capabilities: capabilities)
     }
 

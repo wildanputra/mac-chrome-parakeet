@@ -221,6 +221,7 @@ public final class MeetingRecordingRecoveryService: MeetingRecordingRecoveryServ
             MeetingRecordingMetadata(
                 sourceAlignment: sourceAlignment,
                 speechEngine: lock.speechEngine,
+                speechEngineWasCaptured: lock.speechEngineWasCaptured,
                 startContext: lock.startContext,
                 calendarEventSnapshot: lock.calendarEventSnapshot
             ),
@@ -266,6 +267,7 @@ public final class MeetingRecordingRecoveryService: MeetingRecordingRecoveryServ
             durationSeconds: duration,
             sourceAlignment: sourceAlignment,
             speechEngine: lock.speechEngine,
+            speechEngineWasCaptured: lock.speechEngineWasCaptured,
             startContext: lock.startContext,
             userNotes: lock.notes,
             calendarEventSnapshot: lock.calendarEventSnapshot

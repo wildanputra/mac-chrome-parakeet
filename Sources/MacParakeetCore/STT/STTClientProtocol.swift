@@ -99,6 +99,17 @@ public protocol STTRuntimeManaging: Sendable {
     func shutdown() async
 }
 
+/// Prepares and queries a specific routed engine without changing the live
+/// dictation selection. Meeting capture uses this after the dictation and
+/// meetings/transcriptions routes diverge.
+public protocol SpeechEngineRoutedWarmUpManaging: Sendable {
+    func warmUp(
+        speechEngine: SpeechEngineSelection,
+        onProgress: (@Sendable (String) -> Void)?
+    ) async throws
+    func isReady(speechEngine: SpeechEngineSelection) async -> Bool
+}
+
 public typealias STTManaging = STTTranscribing & STTRuntimeManaging
 public typealias STTClientProtocol = STTManaging
 
@@ -151,6 +162,13 @@ extension SpeechEngineSwitching {
 public protocol SpeechEngineSessionManaging: Sendable {
     func beginSpeechEngineSession() async -> SpeechEngineLease
     func endSpeechEngineSession(_ lease: SpeechEngineLease) async
+}
+
+/// A meeting session that pins an explicit routed engine instead of inheriting
+/// the live dictation engine. The lease still blocks model/variant switches so
+/// a recording cannot change behavior halfway through.
+public protocol SpeechEngineRoutedSessionManaging: SpeechEngineSessionManaging {
+    func beginSpeechEngineSession(speechEngine: SpeechEngineSelection) async -> SpeechEngineLease
 }
 
 extension STTTranscribing {

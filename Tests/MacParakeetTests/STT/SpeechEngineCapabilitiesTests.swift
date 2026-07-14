@@ -166,6 +166,38 @@ final class SpeechEngineCapabilitiesTests: XCTestCase {
         XCTAssertEqual(capabilities.key, .parakeet(.v3))
     }
 
+    func testRuntimeRoutedCapabilitiesUseInjectedDefaults() async throws {
+        let suiteName = "test.routed-capabilities.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        SpeechEnginePreference.saveParakeetModelVariant(.unified, defaults: defaults)
+        let runtime = STTRuntime(
+            parakeetModelVariant: SpeechEnginePreference.parakeetModelVariant(defaults: defaults),
+            defaults: defaults
+        )
+
+        let capabilities = await runtime.speechEngineCapabilities(
+            for: SpeechEngineSelection(engine: .parakeet)
+        )
+
+        XCTAssertEqual(capabilities.key, .parakeet(.unified))
+    }
+
+    func testNemotronReadinessLanguageMatchesNormalizedLoadedLanguage() {
+        XCTAssertTrue(
+            STTRuntime.nemotronLanguageMatchesLoadedEngine(
+                requested: "en_US",
+                loaded: "en-US"
+            )
+        )
+        XCTAssertFalse(
+            STTRuntime.nemotronLanguageMatchesLoadedEngine(
+                requested: "fr",
+                loaded: "en-US"
+            )
+        )
+    }
+
     func testRuntimeRejectsExplicitCohereSwitchWhenMemoryIsBelowFloor() async {
         let runtime = STTRuntime(physicalMemoryBytes: { 8 * 1024 * 1024 * 1024 })
 

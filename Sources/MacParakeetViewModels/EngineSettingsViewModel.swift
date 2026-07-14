@@ -21,6 +21,9 @@ public final class EngineSettingsViewModel {
             applySpeechEngineChange(speechEnginePreference)
         }
     }
+    /// Engine routed to file/media jobs and captured by newly started meetings.
+    /// Changing it does not reload or replace the live dictation engine.
+    public private(set) var transcriptionSpeechEnginePreference: SpeechEnginePreference
     /// Which Parakeet build (multilingual `v3`, English-only `v2`, or Unified)
     /// is active. Changing it live-reloads the model when Parakeet is the selected
     /// engine (downloading the target on first use); see
@@ -87,6 +90,7 @@ public final class EngineSettingsViewModel {
     public var isNemotronVariantSwitch = false
     public var speechEngineSwitchAvailability: SpeechEngineSwitchAvailability = .available
     public var speechEngineError: String?
+    public var transcriptionSpeechEngineError: String?
     public var whisperModelStatus: LocalModelStatus = .unknown
     public var whisperModelStatusDetail: String = "Not checked yet."
     public var whisperDownloading = false
@@ -141,6 +145,11 @@ public final class EngineSettingsViewModel {
     }
     public var canDeleteCohereModel: Bool {
         isCohereModelDownloaded || cohereModelStatus == .failed || cohereCacheDirectoryExists
+    }
+    /// Whether an engine is assigned to either user-facing workflow route.
+    /// Shared model controls and destructive actions must account for both.
+    public func usesSpeechEngine(_ preference: SpeechEnginePreference) -> Bool {
+        speechEnginePreference == preference || transcriptionSpeechEnginePreference == preference
     }
     /// True once the active Whisper variant has paid its one-time on-device
     /// optimize, so the next load is fast. Drives cold ("Setup needed",
@@ -234,6 +243,16 @@ public final class EngineSettingsViewModel {
         self.deleteCohereModelOnDisk = deleteCohereModelOnDisk
         self.physicalMemoryBytes = physicalMemoryBytes
         speechEnginePreference = SpeechEnginePreference.current(defaults: defaults)
+        let initialTranscriptionEngine = SpeechEnginePreference.transcription(defaults: defaults)
+        transcriptionSpeechEnginePreference = initialTranscriptionEngine
+        // Materialize the inherited upgrade value when Settings first owns the
+        // controls. From this point on, changing dictation must not silently
+        // move the Meetings & Transcriptions route behind the visible picker.
+        if defaults.string(forKey: SpeechEnginePreference.transcriptionDefaultsKey)
+            .flatMap(SpeechEnginePreference.init(rawValue:)) == nil
+        {
+            initialTranscriptionEngine.saveForTranscriptions(to: defaults)
+        }
         parakeetModelVariant = SpeechEnginePreference.parakeetModelVariant(defaults: defaults)
         nemotronModelVariant = SpeechEnginePreference.nemotronModelVariant(defaults: defaults)
         whisperDefaultLanguage = SpeechEnginePreference.whisperDefaultLanguage(defaults: defaults) ?? "auto"
@@ -252,6 +271,42 @@ public final class EngineSettingsViewModel {
         self.speechEngineSwitchAvailabilityProvider = speechEngineSwitchAvailabilityProvider
             ?? (speechEngineSwitcher as? SpeechEngineSwitchAvailabilityProviding)
             ?? (sttClient as? SpeechEngineSwitchAvailabilityProviding)
+    }
+
+    /// Persists the background/meeting route independently from dictation.
+    /// Model readiness is checked here so the next recording cannot silently
+    /// pin an engine that has not been installed yet.
+    @discardableResult
+    public func selectTranscriptionSpeechEngine(_ preference: SpeechEnginePreference) -> Bool {
+        transcriptionSpeechEngineError = nil
+        guard preference != transcriptionSpeechEnginePreference else { return true }
+
+        if preference == .nemotron && !isNemotronModelAvailable {
+            transcriptionSpeechEngineError =
+                "Download the Nemotron model before using it for meetings and transcriptions."
+            return false
+        }
+        if preference == .whisper && !isWhisperModelDownloaded {
+            transcriptionSpeechEngineError =
+                "Download the Whisper model before using it for meetings and transcriptions."
+            return false
+        }
+        if preference == .cohere && !cohereMeetsMemoryRequirement {
+            transcriptionSpeechEngineError = Self.cohereInsufficientMemoryMessage
+            return false
+        }
+        if preference == .cohere && shouldBlockCohereSwitchForModelStatus {
+            transcriptionSpeechEngineError =
+                cohereDeleting
+                ? "Finish deleting the Cohere model before selecting it."
+                : "Download the Cohere model before using it for meetings and transcriptions."
+            return false
+        }
+
+        transcriptionSpeechEnginePreference = preference
+        preference.saveForTranscriptions(to: defaults)
+        Telemetry.send(.settingChanged(setting: .transcriptionSpeechEngine, value: preference.rawValue))
+        return true
     }
 
     public func refreshSpeechEngineSwitchAvailability() {
@@ -528,6 +583,7 @@ public final class EngineSettingsViewModel {
         guard !speechEngineSwitching else { return }
         guard !nemotronDownloading else { return }
         speechEngineError = nil
+        transcriptionSpeechEngineError = nil
         nemotronDownloading = true
         nemotronModelStatus = .repairing
         let modelVariant = nemotronModelVariant
@@ -626,6 +682,7 @@ public final class EngineSettingsViewModel {
         // preference setter — the only other place that clears it —
         // never fires for the same-state assignment).
         speechEngineError = nil
+        transcriptionSpeechEngineError = nil
         whisperDownloading = true
         whisperModelStatus = .repairing
         let modelVariant = SpeechEnginePreference.whisperModelVariant(defaults: defaults)
@@ -723,6 +780,7 @@ public final class EngineSettingsViewModel {
             return
         }
         speechEngineError = nil
+        transcriptionSpeechEngineError = nil
         cohereDownloading = true
         cohereModelStatus = .repairing
         cohereModelStatusDetail = "Downloading Cohere Transcribe..."
@@ -1228,13 +1286,13 @@ public final class EngineSettingsViewModel {
 
     /// Removes a downloaded Nemotron build. The non-selected build is
     /// deletable any time (Nemotron Model card). The selected build is
-    /// protected while Nemotron is the active engine; when Nemotron is
-    /// inactive it keeps its existing delete affordance (Local Models
-    /// overflow) so the next active use has an explicit download moment
-    /// instead of a surprise re-fetch.
+    /// protected while either workflow route uses Nemotron. When neither route
+    /// uses it, the Local Models overflow keeps its delete affordance so the
+    /// next active use has an explicit download moment instead of a surprise
+    /// re-fetch.
     public func deleteNemotronVariant(_ variant: NemotronModelVariant) {
         guard !speechEngineSwitching, !nemotronDownloading else { return }
-        if speechEnginePreference == .nemotron, nemotronModelVariant == variant { return }
+        if usesSpeechEngine(.nemotron), nemotronModelVariant == variant { return }
         guard downloadedNemotronVariants.contains(variant) else { return }
 
         let deleter = deleteNemotronModelOnDisk
@@ -1258,13 +1316,13 @@ public final class EngineSettingsViewModel {
     }
 
     /// Removes the downloaded Whisper variant, freeing ~632 MB. Only callable
-    /// while Parakeet is the active engine — deleting the model behind the
-    /// active engine would force a silent re-download. State flips to
-    /// "Not Downloaded" immediately; a disk refresh then confirms.
+    /// while neither workflow route uses Whisper — deleting an assigned model
+    /// would force a silent re-download. State flips to "Not Downloaded"
+    /// immediately; a disk refresh then confirms.
     public func deleteWhisperModel() {
         guard !speechEngineSwitching, !whisperDownloading else { return }
         // Protect the in-use engine's model.
-        guard speechEnginePreference != .whisper else { return }
+        guard !usesSpeechEngine(.whisper) else { return }
         guard isWhisperModelDownloaded else { return }
 
         let variant = SpeechEnginePreference.whisperModelVariant(defaults: defaults)
@@ -1289,7 +1347,7 @@ public final class EngineSettingsViewModel {
         guard !speechEngineSwitching, !cohereDownloading, !cohereDeleting else { return }
         // Protect the in-use engine's model; deleting it would force a silent
         // re-download the next time the active runtime prepares.
-        guard speechEnginePreference != .cohere else { return }
+        guard !usesSpeechEngine(.cohere) else { return }
         guard canDeleteCohereModel else { return }
 
         cohereDeleting = true
