@@ -89,6 +89,10 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
 
 ## [Unreleased]
 
+### Changed
+
+- Inline Anthropic and OpenRouter LLM commands now default to Claude Sonnet 5.
+
 ### Removed
 
 - **Breaking:** removed the `prefer-built-in-mic-bluetooth-output` configuration
@@ -98,6 +102,9 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
 
 ### Fixed
 
+- Native Anthropic LLM calls no longer send the deprecated `temperature`
+  parameter, preventing HTTP 400 responses from newer Claude models. The
+  `--model` help example now references Claude Sonnet 5.
 - Cohere Transcribe CLI paths now enforce the same 16 GB memory floor recorded
   in the speech-engine capability registry. `config set speech-engine cohere`,
   `models download cohere-transcribe`, `models select cohere-transcribe`, and

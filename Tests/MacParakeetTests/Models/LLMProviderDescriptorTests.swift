@@ -48,9 +48,22 @@ final class LLMProviderDescriptorTests: XCTestCase {
         XCTAssertTrue(LLMProviderID.openai.fallbackModels.contains("gpt-5.4-mini"))
         XCTAssertFalse(LLMProviderID.openai.fallbackModels.contains("gpt-5.5-pro"))
         XCTAssertFalse(LLMProviderID.openai.fallbackModels.contains("gpt-5.4-pro"))
-        XCTAssertTrue(LLMProviderID.anthropic.fallbackModels.contains("claude-opus-4-7"))
+        XCTAssertEqual(LLMProviderID.anthropic.defaultModelName, "claude-sonnet-5")
+        XCTAssertEqual(
+            LLMProviderID.anthropic.fallbackModels,
+            ["claude-sonnet-5", "claude-fable-5", "claude-opus-4-8", "claude-haiku-4-5"]
+        )
         XCTAssertTrue(LLMProviderID.gemini.fallbackModels.contains("gemini-3.1-flash-lite"))
-        XCTAssertTrue(LLMProviderID.openrouter.fallbackModels.contains("anthropic/claude-opus-4.7"))
+        XCTAssertEqual(LLMProviderID.openrouter.defaultModelName, "anthropic/claude-sonnet-5")
+        XCTAssertEqual(
+            Array(LLMProviderID.openrouter.fallbackModels.prefix(4)),
+            [
+                "anthropic/claude-sonnet-5",
+                "anthropic/claude-fable-5",
+                "anthropic/claude-opus-4.8",
+                "anthropic/claude-haiku-4.5",
+            ]
+        )
         XCTAssertTrue(LLMProviderID.openrouter.fallbackModels.contains("openai/gpt-5.5"))
         XCTAssertTrue(LLMProviderID.openrouter.fallbackModels.contains("google/gemini-3.5-flash"))
     }

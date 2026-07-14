@@ -53,10 +53,11 @@ public enum LLMProviderID: String, Codable, Sendable, CaseIterable {
                 requiresAPIKey: true,
                 requiresCustomEndpoint: false,
                 modelListEndpoint: .anthropic,
-                defaultModelName: "claude-sonnet-4-6",
+                defaultModelName: "claude-sonnet-5",
                 fallbackModels: [
-                    "claude-sonnet-4-6",
-                    "claude-opus-4-7",
+                    "claude-sonnet-5",
+                    "claude-fable-5",
+                    "claude-opus-4-8",
                     "claude-haiku-4-5",
                 ]
             )
@@ -125,11 +126,12 @@ public enum LLMProviderID: String, Codable, Sendable, CaseIterable {
                 requiresAPIKey: true,
                 requiresCustomEndpoint: false,
                 modelListEndpoint: .openAICompatible,
-                defaultModelName: "anthropic/claude-sonnet-4.6",
+                defaultModelName: "anthropic/claude-sonnet-5",
                 fallbackModels: [
-                    "anthropic/claude-sonnet-4.6",
-                    "anthropic/claude-opus-4.7",
-                    "anthropic/claude-haiku-4-5",
+                    "anthropic/claude-sonnet-5",
+                    "anthropic/claude-fable-5",
+                    "anthropic/claude-opus-4.8",
+                    "anthropic/claude-haiku-4.5",
                     "openai/gpt-5.5",
                     "openai/gpt-5.5-pro",
                     "openai/gpt-5.4",

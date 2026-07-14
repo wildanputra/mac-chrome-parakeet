@@ -178,6 +178,60 @@ final class LLMClientTests: XCTestCase {
         XCTAssertEqual(capturedBody?["max_tokens"] as? Int, 1000)
     }
 
+    func testAnthropicOmitsTemperature() async throws {
+        var capturedBody: [String: Any]?
+
+        MockURLProtocol.handler = { request in
+            if let body = self.extractBody(from: request) {
+                capturedBody = body
+            }
+            return (self.okResponse(for: request), self.validAnthropicResponseData())
+        }
+
+        let config = LLMProviderConfig.anthropic(apiKey: "sk-ant-test-key")
+        _ = try await llmClient.chatCompletion(
+            messages: [ChatMessage(role: .user, content: "Hi")],
+            config: config,
+            options: ChatCompletionOptions(temperature: 0.25, maxTokens: 1000)
+        )
+
+        XCTAssertNil(capturedBody?["temperature"])
+    }
+
+    func testAnthropicSendsTemperatureToLegacyModels() async throws {
+        var capturedBody: [String: Any]?
+
+        MockURLProtocol.handler = { request in
+            if let body = self.extractBody(from: request) {
+                capturedBody = body
+            }
+            return (self.okResponse(for: request), self.validAnthropicResponseData())
+        }
+
+        let config = LLMProviderConfig.anthropic(apiKey: "sk-ant-test-key", model: "claude-sonnet-4-6")
+        _ = try await llmClient.chatCompletion(
+            messages: [ChatMessage(role: .user, content: "Hi")],
+            config: config,
+            options: ChatCompletionOptions(temperature: 0.25, maxTokens: 1000)
+        )
+
+        XCTAssertEqual(capturedBody?["temperature"] as? Double, 0.25)
+    }
+
+    func testAnthropicTemperatureModelAllowList() {
+        XCTAssertTrue(AnthropicLLMHTTPAdapter.modelAcceptsTemperature("claude-sonnet-4-6"))
+        XCTAssertTrue(AnthropicLLMHTTPAdapter.modelAcceptsTemperature("claude-haiku-4-5"))
+        XCTAssertTrue(AnthropicLLMHTTPAdapter.modelAcceptsTemperature("claude-sonnet-4-20250514"))
+        XCTAssertTrue(AnthropicLLMHTTPAdapter.modelAcceptsTemperature("claude-3-5-haiku-20241022"))
+        XCTAssertFalse(AnthropicLLMHTTPAdapter.modelAcceptsTemperature("claude-sonnet-5"))
+        XCTAssertFalse(AnthropicLLMHTTPAdapter.modelAcceptsTemperature("claude-opus-4-7"))
+        XCTAssertFalse(AnthropicLLMHTTPAdapter.modelAcceptsTemperature("claude-opus-4-8"))
+        XCTAssertFalse(AnthropicLLMHTTPAdapter.modelAcceptsTemperature("claude-fable-5"))
+        XCTAssertFalse(AnthropicLLMHTTPAdapter.modelAcceptsTemperature("claude-sonnet-6"))
+        XCTAssertFalse(AnthropicLLMHTTPAdapter.modelAcceptsTemperature("claude-sonnet-4-01"))
+        XCTAssertFalse(AnthropicLLMHTTPAdapter.modelAcceptsTemperature("claude-opus-4-07"))
+    }
+
     func testOllamaUsesNativeAPI() async throws {
         var capturedRequest: URLRequest?
 

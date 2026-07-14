@@ -123,6 +123,22 @@ final class LLMConfigCommandTests: XCTestCase {
         XCTAssertEqual(config.apiKey, "sk-env")
     }
 
+    func testInlineOptionsUseCurrentAnthropicAndOpenRouterDefaultModels() throws {
+        let anthropicOptions = try LLMInlineOptions.parse([
+            "--provider", "anthropic",
+        ])
+        let openRouterOptions = try LLMInlineOptions.parse([
+            "--provider", "openrouter",
+        ])
+
+        let anthropicConfig = try anthropicOptions.buildConfig(
+            environment: ["ANTHROPIC_API_KEY": "sk-env"])
+        let openRouterConfig = try openRouterOptions.buildConfig(
+            environment: ["OPENROUTER_API_KEY": "sk-env"])
+        XCTAssertEqual(anthropicConfig.modelName, "claude-sonnet-5")
+        XCTAssertEqual(openRouterConfig.modelName, "anthropic/claude-sonnet-5")
+    }
+
     func testInlineOptionsReadExplicitAPIKeyEnvironment() throws {
         let options = try LLMInlineOptions.parse([
             "--provider", "openai-compatible",
