@@ -339,9 +339,6 @@ final class MeetingRecordingServiceTests: XCTestCase {
         let activeLiveSelection = await service.activeSpeechEngineSelection
         XCTAssertEqual(activeLiveSelection, liveSelection)
         XCTAssertEqual(lockStore.writes.first?.file.speechEngine, finalSelection)
-        let requestedSelections = await sttClient.requestedSessionSelections
-        XCTAssertEqual(requestedSelections, [])
-
         let microphoneBuffer = try XCTUnwrap(makeMonoFloatBuffer(frameCount: 80_000, sampleValue: 0.25))
         await captureService.yield(
             .microphoneBuffer(
@@ -3656,13 +3653,12 @@ private actor StopOutputCapture {
 }
 
 private actor LeasingMeetingSTTClient: STTClientProtocol, SpeechEngineRoutedTranscribing,
-    SpeechEngineRoutedSessionManaging
+    SpeechEngineSessionManaging
 {
     private let selection: SpeechEngineSelection
     private let capabilities: SpeechEngineCapabilities?
     private var activeLeases: Set<UUID> = []
     private(set) var routedSelections: [SpeechEngineSelection] = []
-    private(set) var requestedSessionSelections: [SpeechEngineSelection] = []
 
     init(
         selection: SpeechEngineSelection,
@@ -3678,16 +3674,6 @@ private actor LeasingMeetingSTTClient: STTClientProtocol, SpeechEngineRoutedTran
 
     func beginSpeechEngineSession() async -> SpeechEngineLease {
         let lease = SpeechEngineLease(selection: selection, capabilities: capabilities)
-        activeLeases.insert(lease.id)
-        return lease
-    }
-
-    func beginSpeechEngineSession(speechEngine: SpeechEngineSelection) async -> SpeechEngineLease {
-        requestedSessionSelections.append(speechEngine)
-        let lease = SpeechEngineLease(
-            selection: speechEngine,
-            capabilities: SpeechEngineCapabilityRegistry.capabilities(for: speechEngine.engine)
-        )
         activeLeases.insert(lease.id)
         return lease
     }

@@ -219,3 +219,44 @@ fallback framework, or persistence version.
 The governing ADRs, STT/audio/UI specs, error handling, and recovery/artifact
 contracts were amended in the same change. ADR-020 and the lock schema were not
 changed.
+
+## Committed-Diff Review
+
+Fable performed a second read-only review of the committed implementation
+against current `origin/main`. Its verdict was **changes required** for one
+migration issue; it also identified one cheap dead API and two contained
+lower-priority risks.
+
+### Findings and disposition
+
+1. **Required — repair equal keys materialized by PR #783.** Accepted. That
+   contribution wrote the inherited transcription value merely by opening
+   Settings, but this design makes key presence intentional. Startup now runs a
+   one-shot, flag-guarded migration that removes only an equal-valued legacy
+   key, preserves a different route, and never removes a deliberate
+   equal-valued override created after migration. Focused tests cover all three
+   outcomes.
+2. **Dead routed-session lease API.** Accepted. Meeting capture now always
+   leases Live Speech, leaving `SpeechEngineRoutedSessionManaging` and the
+   scheduler overload without a production caller. They were removed rather
+   than retained as speculative surface; the standard session-lease tests keep
+   the switch-race invariant covered.
+3. **Model deletion can race meeting start after the availability await.**
+   Accepted as a contained residual risk. Closing it atomically would require a
+   scheduler-owned destructive model-operation admission API. The current
+   change is safer than `main`, UI deletion rechecks availability, and the
+   remaining race fails finalization durably without fallback or artifact loss.
+   Adding a new scheduler transaction solely for this edge case would exceed
+   the requested essential scope.
+4. **Optional protocol default could hide a missing meeting plan.** Accepted.
+   The default implementation was removed, so every conformer must make plan
+   availability explicit. The real service still returns `nil` only outside an
+   active recording.
+5. **Minor UI error placement and unreachable nil-provider state.** Deferred.
+   A deletion refusal currently uses the existing speech-engine error surface,
+   and production always wires the live-selection provider. Neither justifies
+   another state channel or fallback framework in this change.
+
+After these dispositions, the required migration, lease lifecycle, immutable
+plan, schema-v2 downgrade safety, durable no-fallback failure behavior, and
+live/final UI attribution are all covered by focused tests.

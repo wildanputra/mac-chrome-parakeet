@@ -129,10 +129,6 @@ public extension MeetingRecordingServiceProtocol {
         get async { nil }
     }
 
-    var activeMeetingSpeechPlan: MeetingSpeechPlan? {
-        get async { nil }
-    }
-
     func captureFailureSignalForCurrentSession() async -> AsyncStream<MeetingCaptureFailureSignal> {
         AsyncStream { continuation in
             continuation.finish()

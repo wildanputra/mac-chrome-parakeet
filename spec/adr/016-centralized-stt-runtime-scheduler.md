@@ -204,7 +204,7 @@ The control plane supports both unrouted and routed transcription calls:
 - Routed jobs pass a `SpeechEngineSelection` (`parakeet`, `nemotron`, `cohere`, or `whisper`, with optional language where the selected engine/build supports it).
 - Cohere jobs are admitted as a scheduler-level single-flight resource across the interactive and background slots. Parakeet/Nemotron/Whisper keep the normal slot split; Cohere trades that low-latency isolation for its larger batch accuracy path.
 - `setSpeechEngine(_:)` is rejected while jobs are queued/running.
-- `beginSpeechEngineSession()` returns a lease containing the current live selection and capabilities; the routed overload remains available for explicit callers; `endSpeechEngineSession(_:)` releases either lease.
+- `beginSpeechEngineSession()` returns a lease containing the current live selection and capabilities; `endSpeechEngineSession(_:)` releases it.
 - Engine switching is rejected while any lease is active.
 
 Meeting recording always acquires the current Live Speech lease at start—even

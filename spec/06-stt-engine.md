@@ -333,6 +333,12 @@ than materializing a duplicate value. This is a routing-policy layer on top of
 the shared control plane, not a separate runtime per feature. The CLI can still
 override per invocation.
 
+The first live/final build runs a one-shot preference repair for development
+profiles that opened Settings during the brief feature-grouped split: an
+equal-valued transcription key is removed because that build materialized it
+without user intent. A different value is preserved. After the repair flag is
+set, an explicitly enabled equal-valued override remains durable as intended.
+
 ### Lifecycle
 
 - **Lazy init**: The shared runtime owner is not loaded at app launch; loaded on first STT request or warm-up

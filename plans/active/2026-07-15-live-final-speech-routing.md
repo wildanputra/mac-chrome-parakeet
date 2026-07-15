@@ -101,6 +101,13 @@ users with a different persisted transcription engine retain it as an enabled
 Advanced override. Clearing the Advanced toggle removes the second key so later
 live-engine changes continue to flow through automatically.
 
+PR #783 briefly materialized an inherited equal value when Settings opened.
+Before key presence gains its new explicit meaning, app startup performs one
+flag-guarded repair: remove an equal-valued second key, preserve a different
+value, then mark the migration complete. This is the only point where equality
+can safely identify the old materialization behavior; later equal-valued keys
+are deliberate overrides and must survive.
+
 ## 6. Proposed Core Interface
 
 ```swift

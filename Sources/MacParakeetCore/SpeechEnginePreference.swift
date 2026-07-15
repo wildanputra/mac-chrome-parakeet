@@ -10,12 +10,15 @@ public enum SpeechEnginePreference: String, CaseIterable, Codable, Sendable {
     case cohere
 
     public static let defaultsKey = "speechRecognitionEngine"
-    /// Engine used for file/media transcription and newly started meetings.
+    /// Optional final engine for file/media transcription and newly started
+    /// meetings after recording stops.
     ///
     /// This is intentionally separate from ``defaultsKey``, which remains the
-    /// live dictation engine. When this key has never been written we inherit
-    /// the dictation choice so upgrades preserve the pre-split behavior.
+    /// live-speech engine. When this key has never been written we inherit the
+    /// live choice so upgrades preserve the pre-split behavior.
     public static let transcriptionDefaultsKey = "transcriptionSpeechRecognitionEngine"
+    private static let materializedFinalOverrideMigrationKey =
+        "didMigrateMaterializedFinalTranscriptionOverride"
     public static let parakeetModelVariantKey = "parakeetModelVariant"
     public static let nemotronModelVariantKey = "nemotronModelVariant"
     public static let nemotronDefaultLanguageKey = "nemotronDefaultLanguage"
@@ -126,6 +129,26 @@ public enum SpeechEnginePreference: String, CaseIterable, Codable, Sendable {
             return
         }
         preference.saveForTranscriptions(to: defaults)
+    }
+
+    /// Repairs the brief pre-live/final Settings behavior that wrote an
+    /// inherited value into the second key merely by opening Settings. Before
+    /// this migration, an equal-valued key could not express independent user
+    /// intent, so removing it preserves the old behavior. The completion flag
+    /// ensures a deliberate equal-valued override created afterward survives.
+    public static func migrateMaterializedFinalTranscriptionOverrideIfNeeded(
+        defaults: UserDefaults = .standard
+    ) {
+        guard !defaults.bool(forKey: materializedFinalOverrideMigrationKey) else { return }
+        defer { defaults.set(true, forKey: materializedFinalOverrideMigrationKey) }
+
+        guard let rawValue = defaults.string(forKey: transcriptionDefaultsKey),
+            let persistedFinal = SpeechEnginePreference(rawValue: rawValue),
+            persistedFinal == liveSpeech(defaults: defaults)
+        else {
+            return
+        }
+        defaults.removeObject(forKey: transcriptionDefaultsKey)
     }
 
     public func saveForTranscriptions(to defaults: UserDefaults = .standard) {
