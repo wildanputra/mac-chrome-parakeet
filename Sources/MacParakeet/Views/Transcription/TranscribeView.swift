@@ -505,6 +505,8 @@ struct TranscribeView: View {
             return "arrow.down.circle"
         case .converting:
             return "waveform.path.ecg"
+        case .preparingSpeechModel:
+            return "cpu"
         case .transcribing:
             return "waveform"
         case .identifyingSpeakers:
@@ -531,7 +533,7 @@ struct TranscribeView: View {
             return .download
         case .converting:
             return .convert
-        case .transcribing, .identifyingSpeakers, .finalizing:
+        case .preparingSpeechModel, .transcribing, .identifyingSpeakers, .finalizing:
             return .transcribe
         }
     }

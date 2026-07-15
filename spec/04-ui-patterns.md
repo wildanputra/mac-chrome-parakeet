@@ -647,8 +647,8 @@ Uses `SpinnerRingView` plus phase-aware progress feedback.
 │                                                          │
 │                    [merkaba spinner]                     │
 │                                                          │
-│               "Downloading audio... 42%"                │
-│                     [linear 42% bar]                     │
+│                "Preparing speech model..."              │
+│                  [indeterminate bar]                     │
 │                                                          │
 │                    [error if any]                        │
 │                                                          │
@@ -656,11 +656,13 @@ Uses `SpinnerRingView` plus phase-aware progress feedback.
 
 - SpinnerRingView(size: 48, tintColor: .accentColor)
 - Phase icon behind spinner:
-  - Download phase (`"download"` in phase text): `arrow.down.circle`
+  - Download phase: `arrow.down.circle`
+  - Speech-model preparation phase: `cpu`
   - Transcription phase: `waveform`
 - Progress text: body font, secondary color (`viewModel.progress`)
-- Determinate progress bar shown when phase text ends with `%` (parsed from phase string)
-- During download phases without parsable percent, show indeterminate linear bar + helper text
+- Determinate progress bar shown only when the structured phase carries a fraction
+- Speech-model preparation is indeterminate; Whisper explains that first-use
+  Core ML optimization can take several minutes
 - Error text: caption, red (if present)
 ```
 

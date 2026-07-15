@@ -1075,7 +1075,6 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
             }
         }
 
-        onProgress?(.transcribing(percent: 0))
         if !keepDownloadedAudio {
             unownedDownloadedAudioURL = nil
         }
@@ -1392,7 +1391,7 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 sourceWavURLs[source] = wavURL
 
                 lifecycleStage = .stt
-                onProgress?(.transcribing(percent: Int((Double(index) / Double(max(activeSources.count, 1))) * 100)))
+                onProgress?(.preparingSpeechModel)
                 let result: STTResult
                 meetingFinalizationBenchmarkObserver?.stageDidStart(benchmarkStage)
                 do {
@@ -1588,8 +1587,8 @@ public actor TranscriptionService: SpeechEngineOverrideTranscriptionService {
                 throw AudioProcessorError.conversionFailed("Failed to produce WAV output")
             }
 
-            onProgress?(.transcribing(percent: 0))
             lifecycleStage = .stt
+            onProgress?(.preparingSpeechModel)
             let sttProgress: (@Sendable (Int, Int) -> Void)? = onProgress.map { callback in
                 { @Sendable current, total in
                     let pct = total > 0 ? Int(Double(current) / Double(total) * 100) : 0

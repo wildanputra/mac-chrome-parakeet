@@ -53,6 +53,7 @@ public actor MockSTTClient: STTClientProtocol, STTDictationPreviewTranscribing, 
     private var backgroundWarmUpTask: Task<Void, Never>?
     private var queuedTranscribeResults: [STTResult] = []
     private var queuedTranscribeErrors: [Error] = []
+    private var transcribeProgressUpdates: [(current: Int, total: Int)] = []
     private var liveSessionID: UUID?
     private var livePartialHandler: (@Sendable (String) -> Void)?
     private var liveAppendsHeld = false
@@ -99,6 +100,10 @@ public actor MockSTTClient: STTClientProtocol, STTDictationPreviewTranscribing, 
         self.transcribeResult = nil
     }
 
+    public func configureTranscribeProgress(_ updates: [(current: Int, total: Int)]) {
+        transcribeProgressUpdates = updates
+    }
+
     public func configureWarmUp(error: Error? = nil, progressPhases: [String]? = nil) {
         self.warmUpError = error
         self.warmUpProgressPhases = progressPhases
@@ -124,6 +129,10 @@ public actor MockSTTClient: STTClientProtocol, STTDictationPreviewTranscribing, 
         lastJob = job
         audioPaths.append(audioPath)
         jobs.append(job)
+
+        for update in transcribeProgressUpdates {
+            onProgress?(update.current, update.total)
+        }
 
         if !queuedTranscribeErrors.isEmpty {
             throw queuedTranscribeErrors.removeFirst()

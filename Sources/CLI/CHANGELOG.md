@@ -89,6 +89,12 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
 
 ## [Unreleased]
 
+### Fixed
+
+- Transcription and retranscription progress now reports
+  `Preparing speech model...` while the local engine loads instead of printing
+  a synthetic 0% update before measurable work begins. JSON stdout is unchanged.
+
 ## [3.0.0] — 2026-07-14
 
 ### Changed

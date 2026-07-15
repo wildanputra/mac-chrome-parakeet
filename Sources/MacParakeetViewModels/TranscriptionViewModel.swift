@@ -65,6 +65,7 @@ public final class TranscriptionViewModel {
         case preparing
         case downloading
         case converting
+        case preparingSpeechModel
         case transcribing
         case identifyingSpeakers
         case finalizing
@@ -1106,6 +1107,7 @@ public final class TranscriptionViewModel {
         switch progress {
         case .converting: return .converting
         case .downloading: return .downloading
+        case .preparingSpeechModel: return .preparingSpeechModel
         case .transcribing: return .transcribing
         case .identifyingSpeakers: return .identifyingSpeakers
         case .finalizing: return .finalizing
@@ -1118,6 +1120,8 @@ public final class TranscriptionViewModel {
             return "Converting audio..."
         case .downloading(let percent):
             return "Downloading audio... \(percent)%"
+        case .preparingSpeechModel:
+            return "Preparing speech model..."
         case .transcribing(let percent):
             return "Transcribing... \(percent)%"
         case .identifyingSpeakers:
@@ -1135,6 +1139,8 @@ public final class TranscriptionViewModel {
             return "Fetching source audio"
         case .converting:
             return "Normalizing audio stream"
+        case .preparingSpeechModel:
+            return "Preparing speech model"
         case .transcribing:
             return "Running speech recognition"
         case .identifyingSpeakers:
@@ -1161,6 +1167,10 @@ public final class TranscriptionViewModel {
             case .localFile:
                 return nil
             }
+        case .preparingSpeechModel:
+            return engine == .whisper
+                ? "First use may take several minutes while Core ML optimizes Whisper."
+                : nil
         case .transcribing:
             switch engine {
             case .parakeet:

@@ -476,6 +476,8 @@ reuses the shared `.alert`-only notification authorization.
 - Local STT input is normalized to 16kHz mono WAV
 - Max file duration: configurable, default 4 hours
 - Large files show progress bar with estimated time remaining
+- Local speech-model preparation is shown as indeterminate; percentage progress
+  begins only when the engine reports measurable transcription work
 - Word-level timestamps preserved for subtitle export (v0.3)
 - Folder expansion + supported-extension filtering + the 200-file cap live in
   `AudioFileEnumerator` (Core); the sequential drain is owned by

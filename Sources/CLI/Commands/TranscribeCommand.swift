@@ -792,6 +792,7 @@ struct TranscribeCommand: AsyncParsableCommand, CLITelemetryMetadataProviding {
             switch progress {
             case .converting: printProgressLine("Converting audio...")
             case .downloading(let pct): printProgressLine("Downloading audio... \(pct)%")
+            case .preparingSpeechModel: printProgressLine("Preparing speech model...")
             case .transcribing(let pct): printProgressLine("Transcribing... \(pct)%")
             case .identifyingSpeakers: printProgressLine("Identifying speakers...")
             case .finalizing: printProgressLine("Finalizing...")
@@ -832,6 +833,7 @@ struct TranscribeCommand: AsyncParsableCommand, CLITelemetryMetadataProviding {
             switch progress {
             case .converting: line = "Converting audio..."
             case .downloading(let pct): line = "Fetching episode... \(pct)%"
+            case .preparingSpeechModel: line = "Preparing speech model..."
             case .transcribing(let pct): line = "Transcribing... \(pct)%"
             case .identifyingSpeakers: line = "Identifying speakers..."
             case .finalizing: line = "Finalizing..."

@@ -333,6 +333,21 @@ final class TranscriptionServiceTests: XCTestCase {
     var promptResultRepo: PromptResultRepository!
     var llmRunRepo: LLMRunRepository!
 
+    private func isConverting(_ progress: TranscriptionProgress) -> Bool {
+        if case .converting = progress { return true }
+        return false
+    }
+
+    private func isPreparingSpeechModel(_ progress: TranscriptionProgress) -> Bool {
+        if case .preparingSpeechModel = progress { return true }
+        return false
+    }
+
+    private func isTranscribing(_ progress: TranscriptionProgress, percent: Int) -> Bool {
+        if case .transcribing(let actual) = progress { return actual == percent }
+        return false
+    }
+
     override func setUp() async throws {
         dbManager = try DatabaseManager()
         mockAudio = MockAudioProcessor()
@@ -381,6 +396,24 @@ final class TranscriptionServiceTests: XCTestCase {
         XCTAssertEqual(fetched?.transcriptSegments?.map(\.text), ["This is a transcription"])
         let indexedText: [String] = try segmentRepo.fetch(transcriptionId: result.id).map(\.text)
         XCTAssertEqual(indexedText, ["This is a transcription"])
+    }
+
+    func testTranscribeFileReportsModelPreparationBeforeEngineProgress() async throws {
+        await mockSTT.configure(result: STTResult(text: "Prepared transcription"))
+        await mockSTT.configureTranscribeProgress([(current: 0, total: 10), (current: 1, total: 10)])
+        let phasesLock = OSAllocatedUnfairLock(initialState: [TranscriptionProgress]())
+
+        _ = try await service.transcribe(fileURL: URL(fileURLWithPath: "/tmp/preparation.wav")) { progress in
+            phasesLock.withLock { $0.append(progress) }
+        }
+
+        let phases = phasesLock.withLock { $0 }
+        XCTAssertGreaterThanOrEqual(phases.count, 4)
+        guard phases.count >= 4 else { return }
+        XCTAssertTrue(isConverting(phases[0]))
+        XCTAssertTrue(isPreparingSpeechModel(phases[1]))
+        XCTAssertTrue(isTranscribing(phases[2], percent: 0))
+        XCTAssertTrue(isTranscribing(phases[3], percent: 10))
     }
 
     func testTranscribeFileUsesDedicatedTranscriptionEngineRoute() async throws {
@@ -1152,7 +1185,11 @@ final class TranscriptionServiceTests: XCTestCase {
         XCTAssertTrue(phases.contains { if case .downloading(7) = $0 { true } else { false } })
         XCTAssertTrue(phases.contains { if case .downloading(42) = $0 { true } else { false } })
         XCTAssertTrue(phases.contains { if case .downloading(100) = $0 { true } else { false } })
-        XCTAssertTrue(phases.contains { if case .transcribing = $0 { true } else { false } })
+        XCTAssertTrue(phases.contains { if case .preparingSpeechModel = $0 { true } else { false } })
+        XCTAssertFalse(
+            phases.contains { if case .transcribing = $0 { true } else { false } },
+            "TranscriptionService should not invent a 0% event before the engine reports measurable progress"
+        )
     }
 
     func testTranscribeURLPassesYouTubeMetadataToPlaybackConversion() async throws {
@@ -1402,7 +1439,10 @@ final class TranscriptionServiceTests: XCTestCase {
             )
         )
 
-        let result = try await service.transcribeMeeting(recording: recording)
+        let phasesLock = OSAllocatedUnfairLock(initialState: [TranscriptionProgress]())
+        let result = try await service.transcribeMeeting(recording: recording) { progress in
+            phasesLock.withLock { $0.append(progress) }
+        }
         let sttCallCount = await mockSTT.transcribeCallCount
         let jobs = await mockSTT.jobs
         let convertCallCount = await mockAudio.convertCallCount
@@ -1429,6 +1469,13 @@ final class TranscriptionServiceTests: XCTestCase {
         XCTAssertEqual(jobs, [.meetingFinalize, .meetingFinalize])
         XCTAssertEqual(convertCallCount, 2)
         XCTAssertEqual(convertURLs, [microphoneURL, systemURL])
+        XCTAssertEqual(
+            phasesLock.withLock { phases in
+                phases.filter { if case .preparingSpeechModel = $0 { true } else { false } }.count
+            },
+            2,
+            "Each separately scheduled meeting source should report indeterminate model preparation"
+        )
 
         let events = telemetry.snapshot()
         let completedEvent = events.reversed().first {

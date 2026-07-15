@@ -341,6 +341,31 @@ final class TranscriptionViewModelTests: XCTestCase {
         try await waitUntil { !self.viewModel.isTranscribing }
     }
 
+    func testTranscribeFileShowsIndeterminateWhisperModelPreparation() async throws {
+        let suiteName = "TranscriptionViewModelTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        SpeechEnginePreference.whisper.save(to: defaults)
+        viewModel = TranscriptionViewModel(defaults: defaults)
+        await mockService.configureProgress(phases: [.preparingSpeechModel])
+        await mockService.configureDelay(milliseconds: 250)
+        viewModel.configure(transcriptionService: mockService, transcriptionRepo: mockRepo)
+
+        viewModel.transcribeFile(url: URL(fileURLWithPath: "/tmp/myfile.wav"))
+
+        try await waitUntil { self.viewModel.progressPhase == .preparingSpeechModel }
+        XCTAssertEqual(viewModel.progress, "Preparing speech model...")
+        XCTAssertEqual(viewModel.progressHeadline, "Preparing speech model")
+        XCTAssertEqual(
+            viewModel.progressSubline,
+            "First use may take several minutes while Core ML optimizes Whisper."
+        )
+        XCTAssertNil(viewModel.transcriptionProgress)
+
+        viewModel.cancelTranscription()
+        try await waitUntil { !self.viewModel.isTranscribing }
+    }
+
     func testTranscribeFileProgressSublineUsesNemotronVariantSnapshot() async throws {
         let suiteName = "TranscriptionViewModelTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

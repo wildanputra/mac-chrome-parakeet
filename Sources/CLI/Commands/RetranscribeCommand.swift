@@ -705,6 +705,8 @@ struct RetranscribeCommand: AsyncParsableCommand, CLITelemetryMetadataProviding 
                 printProgressLine("Converting audio...")
             case .downloading(let percent):
                 printProgressLine("Downloading audio... \(percent)%")
+            case .preparingSpeechModel:
+                printProgressLine("Preparing speech model...")
             case .transcribing(let percent):
                 printProgressLine("\(prefix)... \(percent)%")
             case .identifyingSpeakers:
