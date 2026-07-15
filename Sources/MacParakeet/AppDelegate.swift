@@ -842,7 +842,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        meetingRecordingFlowCoordinator?.startRecording(trigger: .manual)
+        meetingRecordingFlowCoordinator?.startRecording(
+            trigger: .manual,
+            presentLivePanelWhenReady: true
+        )
     }
 
     private func presentActiveMeetingQuitAlert() -> NSApplication.TerminateReply {

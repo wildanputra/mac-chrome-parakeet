@@ -789,6 +789,18 @@ final class MeetingRecordingFlowCoordinatorTests: XCTestCase {
         XCTAssertTrue(coordinator.isMeetingRecordingActive)
         XCTAssertTrue(coordinator.testHook_hasFloatingPillController)
         XCTAssertFalse(coordinator.testHook_isFloatingPillVisible)
+        XCTAssertFalse(coordinator.testHook_isMeetingPanelVisible)
+    }
+
+    func testStartRecordingCanPresentLivePanelWhenReady() async throws {
+        let recordingService = MeetingRecordingServiceSpy(output: makeRecordingOutput())
+        let coordinator = makeQuitTeardownCoordinator(recordingService: recordingService)
+
+        XCTAssertNotNil(coordinator.startRecording(presentLivePanelWhenReady: true))
+        try await waitForStartCall(on: recordingService, coordinator: coordinator)
+
+        XCTAssertEqual(coordinator.testHook_state, .recording)
+        XCTAssertTrue(coordinator.testHook_isMeetingPanelVisible)
     }
 
     func testRefreshingFloatingPillVisibilityDoesNotDisturbRecordingFlow() async throws {
