@@ -17,9 +17,10 @@ enum ScreenCaptureStopOutcome: Equatable, Sendable {
     case cancelled
 }
 
-protocol ScreenCaptureLifecycleSession: Sendable {
+protocol ScreenCaptureLifecycleSession: AnyObject, Sendable {
     func startCapture(completionHandler: @escaping (Error?) -> Void)
     func stopCapture(completionHandler: @escaping (Error?) -> Void)
+    func makeLateStartStopAction() -> @Sendable () -> Void
 }
 
 /// Owns the callback-style start/stop boundary for one screen-capture stream.
@@ -63,6 +64,7 @@ final class ScreenCaptureLifecycleController: @unchecked Sendable {
         }
 
         let session = self.session
+        let stopLateStart = session.makeLateStartStopAction()
         session.startCapture { error in
             let result: Result<Void, Error> = error.map(Result.failure) ?? .success(())
             let won = waiter.resolve(.completed(result))
@@ -70,11 +72,10 @@ final class ScreenCaptureLifecycleController: @unchecked Sendable {
 
             // A timeout/cancellation already released the caller. A successful
             // callback means ScreenCaptureKit may now have activated the stream,
-            // so issue a second best-effort stop even if an earlier stop raced
-            // the still-pending start.
-            Task {
-                _ = await self.stop()
-            }
+            // so issue a second non-blocking stop even if an earlier stop raced
+            // the still-pending start. The action weakly targets the underlying
+            // session/stream and does not retain this controller indefinitely.
+            stopLateStart()
         }
 
         switch await waiter.wait(timeoutSeconds: startTimeoutSeconds) {

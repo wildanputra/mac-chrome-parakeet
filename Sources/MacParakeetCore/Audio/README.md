@@ -306,7 +306,9 @@ than launching fire-and-forget teardown. The await has a deadline because the
 framework callback is not trusted to arrive. Startup ownership is checked
 after every suspension, including `SCShareableContent.current`; timeout, Stop,
 or cancellation invalidates that attempt. A callback that reports a late
-successful start triggers another bounded best-effort stop. Keep
+successful start triggers another non-blocking best-effort stop request. Keep
+the stream in `stopping` until output removal and bounded teardown finish so a
+replacement start cannot route an old callback into its new handler. Keep
 `MeetingAudioCaptureService`'s `starting` ownership in sync with this rule:
 Stop during partial startup must stop all sources already created and a late
 start result must never restore the service to running.

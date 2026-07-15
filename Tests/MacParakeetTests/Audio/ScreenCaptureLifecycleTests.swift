@@ -132,6 +132,89 @@ final class ScreenCaptureLifecycleTests: XCTestCase {
 
         gate.release()
     }
+
+    func testTimedOutStartDoesNotRetainLifecycleThroughMissingCallback() async {
+        let session = FakeScreenCaptureLifecycleSession()
+        weak var weakLifecycle: ScreenCaptureLifecycleController?
+
+        do {
+            let lifecycle = ScreenCaptureLifecycleController(
+                session: session,
+                startTimeoutSeconds: 0.02,
+                stopTimeoutSeconds: 0.02
+            )
+            weakLifecycle = lifecycle
+
+            do {
+                try await lifecycle.start()
+                XCTFail("Expected start timeout")
+            } catch CaptureLifecycleDeadlineError.startTimedOut {
+                // Expected.
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertNil(weakLifecycle)
+    }
+
+    func testLateSuccessAfterLifecycleReleaseStillStopsLiveSession() async {
+        let session = FakeScreenCaptureLifecycleSession()
+        var lifecycle: ScreenCaptureLifecycleController? = ScreenCaptureLifecycleController(
+            session: session,
+            startTimeoutSeconds: 0.02,
+            stopTimeoutSeconds: 0.02
+        )
+        weak var weakLifecycle: ScreenCaptureLifecycleController?
+        weakLifecycle = lifecycle
+
+        do {
+            try await lifecycle?.start()
+            XCTFail("Expected start timeout")
+        } catch CaptureLifecycleDeadlineError.startTimedOut {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        lifecycle = nil
+        XCTAssertNil(weakLifecycle)
+
+        session.completeStart()
+        await session.waitForStopCall()
+        XCTAssertEqual(session.stopCallCount, 1)
+    }
+
+    func testSystemAudioStreamLifecycleKeepsRestartClosedUntilStopFinishes() throws {
+        var lifecycle = SystemAudioStreamLifecycleState()
+        let attemptID = try XCTUnwrap(lifecycle.beginStart())
+        XCTAssertTrue(lifecycle.markRunning(attemptID: attemptID))
+
+        XCTAssertEqual(lifecycle.beginStop(), attemptID)
+        XCTAssertEqual(lifecycle.phase, .stopping)
+        XCTAssertNil(lifecycle.beginStart())
+
+        lifecycle.finishStop(attemptID: attemptID)
+        XCTAssertEqual(lifecycle.phase, .idle)
+        XCTAssertNotNil(lifecycle.beginStart())
+    }
+
+    func testStaleFailedStartCannotStopOrSettleReplacementAttempt() throws {
+        var lifecycle = SystemAudioStreamLifecycleState()
+        let staleAttemptID = try XCTUnwrap(lifecycle.beginStart())
+        XCTAssertEqual(
+            lifecycle.beginStop(expectedAttemptID: staleAttemptID),
+            staleAttemptID
+        )
+        lifecycle.finishStop(attemptID: staleAttemptID)
+
+        let replacementAttemptID = try XCTUnwrap(lifecycle.beginStart())
+        XCTAssertNotEqual(replacementAttemptID, staleAttemptID)
+        XCTAssertNil(lifecycle.beginStop(expectedAttemptID: staleAttemptID))
+
+        lifecycle.finishStop(attemptID: staleAttemptID)
+        XCTAssertTrue(lifecycle.ownsStarting(replacementAttemptID))
+    }
 }
 
 private enum TestLifecycleError: Error {
@@ -167,6 +250,12 @@ private final class FakeScreenCaptureLifecycleSession: ScreenCaptureLifecycleSes
             return waiters
         }
         waiters.forEach { $0.resume() }
+    }
+
+    func makeLateStartStopAction() -> @Sendable () -> Void {
+        { [weak self] in
+            self?.stopCapture { _ in }
+        }
     }
 
     func waitForStartCall() async {

@@ -5,6 +5,55 @@ import Foundation
 import OSLog
 @preconcurrency import ScreenCaptureKit
 
+struct SystemAudioStreamLifecycleState {
+    enum Phase: Equatable {
+        case idle
+        case starting
+        case running
+        case stopping
+    }
+
+    private(set) var phase: Phase = .idle
+    private(set) var attemptID = 0
+
+    mutating func beginStart() -> Int? {
+        guard phase == .idle else { return nil }
+        attemptID += 1
+        phase = .starting
+        return attemptID
+    }
+
+    func ownsStarting(_ attemptID: Int) -> Bool {
+        phase == .starting && self.attemptID == attemptID
+    }
+
+    mutating func markRunning(attemptID: Int) -> Bool {
+        guard ownsStarting(attemptID) else { return false }
+        phase = .running
+        return true
+    }
+
+    func ownsRunning(_ attemptID: Int) -> Bool {
+        phase == .running && self.attemptID == attemptID
+    }
+
+    mutating func beginStop(expectedAttemptID: Int? = nil) -> Int? {
+        guard phase != .idle, phase != .stopping else { return nil }
+        if let expectedAttemptID, attemptID != expectedAttemptID { return nil }
+        phase = .stopping
+        return attemptID
+    }
+
+    mutating func finishStop(attemptID: Int) {
+        guard phase == .stopping, self.attemptID == attemptID else { return }
+        phase = .idle
+    }
+
+    mutating func reset() {
+        phase = .idle
+    }
+}
+
 public final class SystemAudioStream: NSObject, @unchecked Sendable {
     public typealias AudioBufferHandler = @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void
     public typealias StallObserver = @Sendable (MeetingAudioError) -> Void
@@ -18,13 +67,6 @@ public final class SystemAudioStream: NSObject, @unchecked Sendable {
     private static let defaultStartTimeoutSeconds: TimeInterval = 10
     private static let defaultStopTimeoutSeconds: TimeInterval = 5
 
-    private enum LifecycleState {
-        case idle
-        case starting
-        case running
-        case stopping
-    }
-
     private let logger = Logger(subsystem: "com.macparakeet.core", category: "SystemAudioStream")
     private let stateQueue = DispatchQueue(label: "com.macparakeet.systemaudiostream.state")
     private let sampleQueue = DispatchQueue(label: "com.macparakeet.systemaudiostream.samples", qos: .userInitiated)
@@ -35,8 +77,7 @@ public final class SystemAudioStream: NSObject, @unchecked Sendable {
     private let startTimeoutSeconds: TimeInterval
     private let stopTimeoutSeconds: TimeInterval
 
-    private var state: LifecycleState = .idle
-    private var startAttemptID = 0
+    private var lifecycleState = SystemAudioStreamLifecycleState()
     private var stream: SCStream?
     private var lifecycleController: ScreenCaptureLifecycleController?
     private var screenOutputAttached = false
@@ -97,15 +138,22 @@ public final class SystemAudioStream: NSObject, @unchecked Sendable {
             AudioCaptureDiagnostics.append(
                 "system_audio_stream_start_failed \(AudioCaptureDiagnostics.errorFields(error))"
             )
-            await tearDownAfterFailedStart()
+            await tearDownAfterFailedStart(attemptID: attemptID)
             throw MeetingAudioError.systemAudioCaptureFailed(error.localizedDescription)
         }
     }
 
     public func stop() async {
-        guard let resources = beginStop() else { return }
-        removeStreamOutputs(from: resources.stream)
-        let outcome = await resources.lifecycleController.stop()
+        guard let stopOperation = beginStop() else { return }
+        defer { finishStop(attemptID: stopOperation.attemptID) }
+        if let stream = stopOperation.stream {
+            removeStreamOutputs(from: stream)
+        }
+        let outcome = if let lifecycleController = stopOperation.lifecycleController {
+            await lifecycleController.stop()
+        } else {
+            ScreenCaptureStopOutcome.completed
+        }
         if outcome == .timedOut {
             let timeout = String(format: "%.3f", stopTimeoutSeconds)
             logger.error("system_audio_stream_stop_timed_out")
@@ -123,16 +171,8 @@ public final class SystemAudioStream: NSObject, @unchecked Sendable {
         handler: @escaping AudioBufferHandler,
         onStall: StallObserver?
     ) throws -> Int {
-        var startError: Error?
-        var attemptID = 0
-        stateQueue.sync {
-            guard state == .idle else {
-                startError = MeetingAudioError.alreadyRunning
-                return
-            }
-            startAttemptID += 1
-            attemptID = startAttemptID
-            state = .starting
+        let attemptID = stateQueue.sync { () -> Int? in
+            guard let attemptID = lifecycleState.beginStart() else { return nil }
             screenOutputAttached = false
             bufferHandler = handler
             watchdogLock.withLock {
@@ -145,10 +185,9 @@ public final class SystemAudioStream: NSObject, @unchecked Sendable {
                 lastBufferAtNanos = 0
                 stallObserver = onStall
             }
+            return attemptID
         }
-        if let startError {
-            throw startError
-        }
+        guard let attemptID else { throw MeetingAudioError.alreadyRunning }
         return attemptID
     }
 
@@ -185,7 +224,7 @@ public final class SystemAudioStream: NSObject, @unchecked Sendable {
 
     private func validateStartStillCurrent(_ attemptID: Int) throws {
         let isCurrent = stateQueue.sync {
-            state == .starting && startAttemptID == attemptID
+            lifecycleState.ownsStarting(attemptID)
         }
         guard isCurrent else {
             throw CancellationError()
@@ -200,7 +239,7 @@ public final class SystemAudioStream: NSObject, @unchecked Sendable {
     ) throws {
         var shouldReject = false
         stateQueue.sync {
-            guard state == .starting, startAttemptID == attemptID else {
+            guard lifecycleState.ownsStarting(attemptID) else {
                 shouldReject = true
                 return
             }
@@ -215,42 +254,49 @@ public final class SystemAudioStream: NSObject, @unchecked Sendable {
     private func markRunning(attemptID: Int) throws {
         var shouldReject = false
         stateQueue.sync {
-            guard state == .starting, startAttemptID == attemptID else {
+            guard lifecycleState.markRunning(attemptID: attemptID) else {
                 shouldReject = true
                 return
             }
-            state = .running
         }
         if shouldReject {
             throw MeetingAudioError.notRunning
         }
     }
 
-    private struct StopResources {
-        let stream: SCStream
-        let lifecycleController: ScreenCaptureLifecycleController
+    private struct StopOperation {
+        let attemptID: Int
+        let stream: SCStream?
+        let lifecycleController: ScreenCaptureLifecycleController?
     }
 
-    private func beginStop() -> StopResources? {
-        let snapshot = stateQueue.sync { () -> (StopResources?, ScreenCaptureLifecycleController?) in
-            guard state != .idle else { return (nil, nil) }
-            state = .stopping
+    private func beginStop(expectedAttemptID: Int? = nil) -> StopOperation? {
+        let snapshot = stateQueue.sync { () -> StopOperation? in
+            guard let stoppingAttemptID = lifecycleState.beginStop(
+                expectedAttemptID: expectedAttemptID
+            ) else {
+                return nil
+            }
             let stream = self.stream
             let lifecycleController = self.lifecycleController
             self.stream = nil
             self.lifecycleController = nil
             bufferHandler = nil
-            state = .idle
             resetDiagnosticsState()
-            let resources: StopResources? = if let stream, let lifecycleController {
-                StopResources(stream: stream, lifecycleController: lifecycleController)
-            } else {
-                nil
-            }
-            return (resources, lifecycleController)
+            return StopOperation(
+                attemptID: stoppingAttemptID,
+                stream: stream,
+                lifecycleController: lifecycleController
+            )
         }
-        snapshot.1?.cancelPendingStart()
-        return snapshot.0
+        snapshot?.lifecycleController?.cancelPendingStart()
+        return snapshot
+    }
+
+    private func finishStop(attemptID: Int) {
+        stateQueue.sync {
+            lifecycleState.finishStop(attemptID: attemptID)
+        }
     }
 
     private func clearStateForDeinit() -> SCStream? {
@@ -260,16 +306,23 @@ public final class SystemAudioStream: NSObject, @unchecked Sendable {
             lifecycleController?.cancelPendingStart()
             lifecycleController = nil
             bufferHandler = nil
-            state = .idle
+            lifecycleState.reset()
             resetDiagnosticsState()
             return stream
         }
     }
 
-    private func tearDownAfterFailedStart() async {
-        guard let resources = beginStop() else { return }
-        removeStreamOutputs(from: resources.stream)
-        let outcome = await resources.lifecycleController.stop()
+    private func tearDownAfterFailedStart(attemptID: Int) async {
+        guard let stopOperation = beginStop(expectedAttemptID: attemptID) else { return }
+        defer { finishStop(attemptID: stopOperation.attemptID) }
+        if let stream = stopOperation.stream {
+            removeStreamOutputs(from: stream)
+        }
+        let outcome = if let lifecycleController = stopOperation.lifecycleController {
+            await lifecycleController.stop()
+        } else {
+            ScreenCaptureStopOutcome.completed
+        }
         if outcome == .timedOut {
             let timeout = String(format: "%.3f", stopTimeoutSeconds)
             logger.error("system_audio_stream_failed_start_teardown_timed_out")
@@ -349,7 +402,7 @@ public final class SystemAudioStream: NSObject, @unchecked Sendable {
 
     private func armSilentBufferWatchdogIfRunning(attemptID: Int) -> Bool {
         stateQueue.sync {
-            guard state == .running, startAttemptID == attemptID else { return false }
+            guard lifecycleState.ownsRunning(attemptID) else { return false }
             let workItem = watchdogLock.withLock { () -> DispatchWorkItem? in
                 guard !firstBufferReceived, !hasReportedStall else { return nil }
                 watchdogWorkItem?.cancel()
@@ -452,6 +505,17 @@ public final class SystemAudioStream: NSObject, @unchecked Sendable {
 }
 
 private final class ScreenCaptureKitLifecycleSession: ScreenCaptureLifecycleSession, @unchecked Sendable {
+    // A late start callback may outlive its controller. Keep only a weak stream
+    // target: if the stream is gone there is no capture left to stop, and if it
+    // is still framework-owned the callback can issue one final stop request.
+    private final class WeakStream: @unchecked Sendable {
+        weak var value: SCStream?
+
+        init(_ value: SCStream) {
+            self.value = value
+        }
+    }
+
     private let stream: SCStream
 
     init(stream: SCStream) {
@@ -464,6 +528,13 @@ private final class ScreenCaptureKitLifecycleSession: ScreenCaptureLifecycleSess
 
     func stopCapture(completionHandler: @escaping (Error?) -> Void) {
         stream.stopCapture(completionHandler: completionHandler)
+    }
+
+    func makeLateStartStopAction() -> @Sendable () -> Void {
+        let target = WeakStream(stream)
+        return {
+            target.value?.stopCapture(completionHandler: nil)
+        }
     }
 }
 

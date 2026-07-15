@@ -87,10 +87,13 @@ bounded and interruption-aware, not to replace it with a fire-and-forget Task.
    cancellation, so every post-await step must re-check attempt ownership.
 4. Use the waiter for `SCStream.startCapture` and `SCStream.stopCapture`.
    Store/cancel the pending start waiter as part of `SystemAudioStream` state.
-   A late start success after timeout/cancellation must run best-effort bounded
-   stop and output removal; it must not merely be ignored.
-5. On stop timeout, keep local state idle, remove outputs, release ownership,
-   emit a sanitized `system_audio_stream_stop_timeout` diagnostic, and return.
+   A late start success after timeout/cancellation must issue another
+   non-blocking stop request after output removal; it must not merely be
+   ignored.
+5. While stopping, reject replacement starts until old outputs are removed and
+   the bounded stop settles. Then publish local idle, release ownership, emit a
+   sanitized `system_audio_stream_stop_timeout` diagnostic on timeout, and
+   return.
    On start timeout/cancellation, run the same bounded teardown path and throw.
 
 Default policy to validate in review: 10 seconds for start completion and

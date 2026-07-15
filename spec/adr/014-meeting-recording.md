@@ -48,7 +48,11 @@ those callback bridges have deadlines because ScreenCaptureKit is not trusted
 to invoke a completion handler. The deadline covers the complete startup
 attempt, including shareable-content discovery. Timeout or cancellation
 invalidates attempt ownership, removes outputs, and runs bounded teardown; a
-late successful start is stopped again and cannot install running state.
+late successful start receives another non-blocking stop request and cannot
+install running state.
+The stream does not publish `idle` until old outputs have been removed and the
+bounded stop has settled, preventing callbacks from crossing into a replacement
+recording.
 `MeetingAudioCaptureService` likewise owns `starting` as a real lifecycle state
 and tears down any microphone/system source already created when Stop arrives.
 
