@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <img src="../icons/icon32.png" alt="" width="20" height="20" />
+      <h1>MacParakeet</h1>
+      <span id="status-pill" class="pill pill-idle">…</span>
+    </header>
+
+    <main>
+      <p id="status-line">Checking the bridge…</p>
+      <p id="meeting-line" class="meeting" hidden></p>
+
+      <div class="actions">
+        <button id="record-btn" class="primary" hidden>Start recording</button>
+        <button id="stop-btn" class="danger" hidden>Stop recording</button>
+        <button id="launch-btn" hidden>Launch MacParakeet</button>
+        <a id="help-link" href="https://github.com/moona3k/macparakeet/tree/main/integrations/chrome-extension#install" target="_blank" rel="noreferrer" hidden>Setup instructions</a>
+      </div>
+
+      <pre id="fix-command" hidden></pre>
+    </main>
+
+    <footer>
+      <label>
+        <input type="checkbox" id="prompt-on-join" />
+        Ask to record when a call starts
+      </label>
+      <label>
+        <input type="checkbox" id="auto-stop" />
+        Stop when I leave a call I recorded from here
+      </label>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

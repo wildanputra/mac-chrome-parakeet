@@ -49,6 +49,7 @@ final class ConfigCommandTests: XCTestCase {
             "meeting-hook-enabled",
             "meeting-hook-path",
             "meeting-hook-timeout",
+            "chrome-extension",
         ])
     }
 
@@ -100,6 +101,15 @@ final class ConfigCommandTests: XCTestCase {
         XCTAssertEqual(try ConfigCommand.read(key: "meeting-hook-enabled", defaults: defaults), "off")
         XCTAssertEqual(try ConfigCommand.read(key: "meeting-hook-path", defaults: defaults), "none")
         XCTAssertEqual(try ConfigCommand.read(key: "meeting-hook-timeout", defaults: defaults), "20")
+        XCTAssertEqual(try ConfigCommand.read(key: "chrome-extension", defaults: defaults), "off")
+    }
+
+    func testChromeExtensionRoundTrip() throws {
+        XCTAssertEqual(try ConfigCommand.write(key: "chrome-extension", value: "on", defaults: defaults), "on")
+        XCTAssertTrue(ChromeBridgeConfiguration.isEnabled(defaults: defaults))
+        XCTAssertEqual(try ConfigCommand.read(key: "chrome-extension", defaults: defaults), "on")
+        XCTAssertEqual(try ConfigCommand.write(key: "chrome-extension", value: "off", defaults: defaults), "off")
+        XCTAssertFalse(ChromeBridgeConfiguration.isEnabled(defaults: defaults))
     }
 
     func testReadCanonicalizesUnderscoreKeys() throws {

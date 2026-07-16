@@ -89,6 +89,18 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
 
 ## [Unreleased]
 
+### Added
+
+- New hidden `chrome-native-host` subcommand: the Chrome native messaging
+  endpoint for the MacParakeet browser extension (ADR-029). Launched by the
+  browser via the host manifest that
+  `integrations/chrome-extension/native-host/install.sh` writes — not intended
+  for interactive use, and deliberately absent from `spec --json`. Speaks
+  length-prefixed JSON frames on stdio and relays start/stop/state meeting
+  commands to the running app over distributed notifications.
+- New `config` key `chrome-extension` (`on|off`, default `off`): opt-in gate
+  the app checks before acting on browser-extension bridge commands.
+
 ### Fixed
 
 - Transcription and retranscription progress now reports

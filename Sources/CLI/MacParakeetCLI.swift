@@ -38,6 +38,7 @@ struct CLI: AsyncParsableCommand {
             CalendarCommand.self,
             MeetingVADSimCommand.self,
             FeedbackCommand.self,
+            ChromeNativeHostCommand.self,
         ],
         defaultSubcommand: nil
     )

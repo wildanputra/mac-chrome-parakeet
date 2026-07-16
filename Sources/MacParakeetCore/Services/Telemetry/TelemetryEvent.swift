@@ -374,6 +374,7 @@ public enum TelemetryMeetingRecordingTrigger: String, Sendable, Equatable {
     case manual
     case hotkey
     case calendarAutoStart = "calendar_auto_start"
+    case chromeExtension = "chrome_extension"
 }
 
 /// Why a full meeting recording operation moved through its lifecycle. This is
@@ -382,6 +383,7 @@ public enum TelemetryMeetingOperationTrigger: String, Sendable, Equatable {
     case manual
     case hotkey
     case calendarAutoStart = "calendar_auto_start"
+    case chromeExtension = "chrome_extension"
     case autoStop = "auto_stop"
 
     public init(_ trigger: TelemetryMeetingRecordingTrigger) {
@@ -392,6 +394,8 @@ public enum TelemetryMeetingOperationTrigger: String, Sendable, Equatable {
             self = .hotkey
         case .calendarAutoStart:
             self = .calendarAutoStart
+        case .chromeExtension:
+            self = .chromeExtension
         }
     }
 }
