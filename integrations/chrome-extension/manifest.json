@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "MacParakeet Meeting Recorder",
+  "version": "1.0.0",
+  "description": "Detects Google Meet, Zoom, Microsoft Teams, and Webex calls in your browser and records them with the local MacParakeet app. No audio leaves your Mac.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApwKW9Kxt6RBxtx+zaCmW1cdzYZqs29lTCosz3Rq++SmwGMu7aJiZE3DrpDhEK/YcRmhwvfdM9ZQW12r24XduPEhslTGnYUOz0A3yzUvCwEmWACIS9jpK1o2qBk+xLLbwLZ4OscriZFW8rJOPPGf0NbiyGJgTb2oVHtFRQ5drsPpo1o68ybkYi4LMlfvKt7HuxND7QrWN2lAfpMYDpWI8vTTxeSM8E7B6khnUh1/V+/yrNtzETOAQBkp+X3AtddJUXGD6gBRjC/H80m9FBVVMy4g8tKuw8DXQU9CGoCqxomqOvvn17Hl5cBc5BEEmguzRXTLdI3VrOrqzkl2vD1h51wIDAQAB",
+  "minimum_chrome_version": "116",
+  "permissions": ["nativeMessaging", "storage", "notifications", "alarms"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*",
+        "https://*.zoom.us/wc/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*",
+        "https://*.webex.com/*"
+      ],
+      "js": ["content/meeting-detector.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "MacParakeet Meeting Recorder",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

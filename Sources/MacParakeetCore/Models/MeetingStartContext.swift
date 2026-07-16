@@ -5,6 +5,7 @@ public struct MeetingStartContext: Codable, Sendable, Equatable {
         case manual
         case hotkey
         case calendarAutoStart = "calendar_auto_start"
+        case chromeExtension = "chrome_extension"
     }
 
     public struct FrontmostApplication: Codable, Sendable, Equatable {
@@ -41,6 +42,8 @@ public extension MeetingStartContext.TriggerKind {
             self = .hotkey
         case .calendarAutoStart:
             self = .calendarAutoStart
+        case .chromeExtension:
+            self = .chromeExtension
         }
     }
 }

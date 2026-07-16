@@ -612,6 +612,11 @@ OpenClaw, Hermes, or another local agent framework.
 
 ## Per-ecosystem entry points
 
+- **Chrome / Chromium browsers:** [`chrome-extension/README.md`](./chrome-extension/README.md)
+  — MV3 extension that detects Google Meet / Zoom web / Teams / Webex calls
+  and starts/stops the app's meeting recording through the
+  `macparakeet-cli chrome-native-host` native messaging bridge (ADR-029).
+  Opt-in via the `chrome-extension` config key; the installer handles it.
 - **OpenClaw:** [`openclaw/README.md`](./openclaw/README.md)
 - **Hermes Agent:** [`hermes/README.md`](./hermes/README.md)
 - **Claude Code / Codex CLI / generic skill consumers:** use the

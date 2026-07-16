@@ -23,6 +23,7 @@ final class AppEnvironmentConfigurer {
         let hotkeyCoordinator: AppHotkeyCoordinator
         let meetingAutoStartCoordinator: MeetingAutoStartCoordinator?
         let meetingAutoStopCoordinator: MeetingAutoStopCoordinator?
+        let chromeBridgeCoordinator: ChromeBridgeCoordinator?
     }
 
     struct Callbacks {
@@ -485,12 +486,43 @@ final class AppEnvironmentConfigurer {
             meetingAutoStopCoordinator = coordinator
         }
 
+        // Chrome extension meeting bridge (ADR-029). The coordinator only
+        // registers one distributed-notification observer; the per-user
+        // opt-in preference (default off) is enforced per command inside the
+        // coordinator, so construction is safe whenever meeting recording
+        // exists at all.
+        var chromeBridgeCoordinator: ChromeBridgeCoordinator?
+        if AppFeatures.meetingRecordingEnabled {
+            let coordinator = ChromeBridgeCoordinator(
+                isRecordingActive: { [weak meetingCoordinator] in
+                    meetingCoordinator?.isMeetingRecordingActive ?? false
+                },
+                flowStateLabel: { [weak meetingCoordinator] in
+                    switch meetingCoordinator?.quitState {
+                    case .none: return "idle"
+                    case .some(.starting): return "starting"
+                    case .some(.recording): return "recording"
+                    case .some(.finishing): return "finishing"
+                    }
+                },
+                onStartRequested: { [weak meetingCoordinator] title in
+                    meetingCoordinator?.startRecording(title: title, trigger: .chromeExtension) != nil
+                },
+                onStopRequested: { [weak meetingCoordinator] in
+                    meetingCoordinator?.stopRecording(trigger: .chromeExtension) ?? false
+                }
+            )
+            coordinator.start()
+            chromeBridgeCoordinator = coordinator
+        }
+
         return Runtime(
             dictationFlowCoordinator: dictationCoordinator,
             meetingRecordingFlowCoordinator: meetingCoordinator,
             hotkeyCoordinator: hotkeyCoordinator,
             meetingAutoStartCoordinator: calendarCoordinator,
-            meetingAutoStopCoordinator: meetingAutoStopCoordinator
+            meetingAutoStopCoordinator: meetingAutoStopCoordinator,
+            chromeBridgeCoordinator: chromeBridgeCoordinator
         )
     }
 

@@ -59,6 +59,7 @@ struct ConfigCommand: ParsableCommand {
           meeting-hook-enabled      on|off                          default: off
           meeting-hook-path         absolute executable path|none    default: none
           meeting-hook-timeout      seconds (1-300)                 default: 20
+          chrome-extension          on|off                          default: off
 
         Full event catalog:
           https://github.com/moona3k/macparakeet/blob/main/docs/telemetry.md
@@ -205,6 +206,12 @@ struct ConfigCommand: ParsableCommand {
             valueSyntax: "seconds 1-300",
             allowedValues: nil,
             summary: "Meeting automation hook timeout in seconds."
+        ),
+        CLIConfigKeySpec(
+            key: "chrome-extension",
+            valueSyntax: "on|off",
+            allowedValues: ["on", "off"],
+            summary: "Allow the MacParakeet browser extension to start and stop meeting recordings (ADR-029)."
         ),
     ]
     static let supportedKeys: [String] = supportedKeySpecs.map(\.key)
@@ -366,6 +373,9 @@ struct ConfigCommand: ParsableCommand {
             let timeout = store.object(forKey: MeetingAutomationHookConfiguration.timeoutSecondsKey) as? Double
                 ?? MeetingAutomationHookConfiguration.defaultTimeoutSeconds
             return displayTimeout(MeetingAutomationHookConfiguration.clampedTimeout(timeout))
+        case "chrome-extension":
+            let on = ChromeBridgeConfiguration.isEnabled(defaults: store)
+            return on ? "on" : "off"
         default:
             throw unknownKeyError(key)
         }
@@ -499,6 +509,10 @@ struct ConfigCommand: ParsableCommand {
             let timeout = try parseMeetingHookTimeout(value)
             store.set(timeout, forKey: MeetingAutomationHookConfiguration.timeoutSecondsKey)
             return displayTimeout(timeout)
+        case "chrome-extension":
+            let parsed = try parseBool(value, key: key)
+            store.set(parsed, forKey: ChromeBridgeConfiguration.enabledKey)
+            return parsed ? "on" : "off"
         default:
             throw unknownKeyError(key)
         }
