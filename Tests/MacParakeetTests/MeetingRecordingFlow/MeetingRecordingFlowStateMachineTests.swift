@@ -50,7 +50,7 @@ final class MeetingRecordingFlowStateMachineTests: XCTestCase {
         )
     }
 
-    func testStopWhileStartingQueuesPendingStop() {
+    func testStopWhileStartingBeginsDurableStopImmediately() {
         var machine = MeetingRecordingFlowStateMachine()
         _ = machine.handle(.startRequested)
         _ = machine.handle(.permissionsGranted(generation: 1))
@@ -58,10 +58,13 @@ final class MeetingRecordingFlowStateMachineTests: XCTestCase {
         let effects = machine.handle(.stopRequested)
 
         XCTAssertEqual(machine.state, .stopping)
-        XCTAssertTrue(effects.isEmpty)
+        XCTAssertEqual(
+            effects,
+            [.showTranscribingState, .updateMenuBar(.processing), .stopRecordingAndTranscribe]
+        )
     }
 
-    func testPendingStopBeginsDurableStopOnceRecordingStarts() {
+    func testLateRecordingStartedAfterStartupStopDoesNotBeginSecondStop() {
         var machine = MeetingRecordingFlowStateMachine()
         _ = machine.handle(.startRequested)
         _ = machine.handle(.permissionsGranted(generation: 1))
@@ -70,10 +73,19 @@ final class MeetingRecordingFlowStateMachineTests: XCTestCase {
         let effects = machine.handle(.recordingStarted(generation: 1))
 
         XCTAssertEqual(machine.state, .stopping)
-        XCTAssertEqual(
-            effects,
-            [.showTranscribingState, .updateMenuBar(.processing), .stopRecordingAndTranscribe]
-        )
+        XCTAssertTrue(effects.isEmpty)
+    }
+
+    func testLateStartFailureAfterStartupStopDoesNotReplaceDurableStop() {
+        var machine = MeetingRecordingFlowStateMachine()
+        _ = machine.handle(.startRequested)
+        _ = machine.handle(.permissionsGranted(generation: 1))
+        _ = machine.handle(.stopRequested)
+
+        let effects = machine.handle(.startFailed(generation: 1, message: "late"))
+
+        XCTAssertEqual(machine.state, .stopping)
+        XCTAssertTrue(effects.isEmpty)
     }
 
     func testRecordingStopBeginsDurableStopAndQueuePreparation() {

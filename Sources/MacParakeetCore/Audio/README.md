@@ -53,9 +53,13 @@ owned by `AppEnvironment`.
 **Meeting-side audio (independent of the mic stream)**
 - `SystemAudioStream.swift` — meeting system audio via
   `ScreenCaptureKit` (`SCStream`). Independent of the
-  `AVAudioEngine`. Has its own first-buffer watchdog.
+  `AVAudioEngine`. The complete startup attempt and callback-style
+  start/stop boundaries have deadlines; late successful starts are stopped
+  again rather than allowed to revive capture. Has its own first-buffer
+  watchdog.
 - `MeetingAudioCaptureService.swift` — composes mic + system audio
-  for meeting recording.
+  for meeting recording. It owns partial startup explicitly, so Stop tears
+  down whichever sources have started even before startup reports success.
 - `MeetingAudioStorageWriter.swift` — fragmented MP4 writer for
   meeting source files (ADR-019 crash recovery).
 - `MeetingAudioError.swift`, `MeetingMicProcessingMode.swift` —
@@ -295,6 +299,19 @@ state that assumes a single consumer at a time.
 `ScreenCaptureKit`, not `AVAudioEngine`. It does not share lifecycle,
 VPIO state, or the fan-out path with the mic stream. Meeting
 recording composes both via `MeetingAudioCaptureService`.
+
+**ScreenCaptureKit callbacks are bounded but still awaited.** Ordered
+start/stop matters, so `SystemAudioStream` awaits `SCStream` completion rather
+than launching fire-and-forget teardown. The await has a deadline because the
+framework callback is not trusted to arrive. Startup ownership is checked
+after every suspension, including `SCShareableContent.current`; timeout, Stop,
+or cancellation invalidates that attempt. A callback that reports a late
+successful start triggers another non-blocking best-effort stop request. Keep
+the stream in `stopping` until output removal and bounded teardown finish so a
+replacement start cannot route an old callback into its new handler. Keep
+`MeetingAudioCaptureService`'s `starting` ownership in sync with this rule:
+Stop during partial startup must stop all sources already created and a late
+start result must never restore the service to running.
 
 **The diagnostic log file is shared across processes.** Both the dev
 app and `swift test` write to

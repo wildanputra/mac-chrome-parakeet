@@ -470,6 +470,16 @@ final class MeetingRecordingFlowCoordinator {
         resumeActiveFlowSettlementWaitersIfNeeded()
     }
 
+    private func ownsPendingStart(generation: Int) -> Bool {
+        stateMachine.generation == generation && stateMachine.state == .starting
+    }
+
+    private func recordIgnoredStartResult(generation: Int, outcome: String) {
+        AudioCaptureDiagnostics.append(
+            "meeting_recording_start_result_ignored generation=\(generation) outcome=\(outcome) state=\(stateMachine.state)"
+        )
+    }
+
     private func resumeActiveFlowSettlementWaitersIfNeeded() {
         guard !isMeetingRecordingActive, !activeFlowSettlementWaiters.isEmpty else { return }
         let waiters = activeFlowSettlementWaiters
@@ -671,13 +681,29 @@ final class MeetingRecordingFlowCoordinator {
                         startContext: startContext,
                         calendarEventSnapshot: calendarEventSnapshot
                     )
+                    guard self.ownsPendingStart(generation: gen) else {
+                        self.recordIgnoredStartResult(generation: gen, outcome: "success")
+                        return
+                    }
                     var activeLiveSpeechEngineSelection = await meetingRecordingService.activeSpeechEngineSelection
+                    guard self.ownsPendingStart(generation: gen) else {
+                        self.recordIgnoredStartResult(generation: gen, outcome: "success")
+                        return
+                    }
                     if activeLiveSpeechEngineSelection == nil,
                         let speechEngineSelectionProvider
                     {
                         activeLiveSpeechEngineSelection = await speechEngineSelectionProvider()
+                        guard self.ownsPendingStart(generation: gen) else {
+                            self.recordIgnoredStartResult(generation: gen, outcome: "success")
+                            return
+                        }
                     }
                     let activeSpeechPlan = await meetingRecordingService.activeMeetingSpeechPlan
+                    guard self.ownsPendingStart(generation: gen) else {
+                        self.recordIgnoredStartResult(generation: gen, outcome: "success")
+                        return
+                    }
                     let previewSpeechEngineSelection = activeSpeechPlan?.preview
                     if let panelViewModel = self.panelViewModel {
                         panelViewModel.configureSpeechRouting(
@@ -705,6 +731,10 @@ final class MeetingRecordingFlowCoordinator {
                         } else {
                             true
                         }
+                    guard self.ownsPendingStart(generation: gen) else {
+                        self.recordIgnoredStartResult(generation: gen, outcome: "success")
+                        return
+                    }
                     switch self.panelViewModel?.liveTranscriptStatus {
                     case .some(.startingAudio) where isSpeechModelReady:
                         self.panelViewModel?.updateLiveTranscriptStatus(.listening)
@@ -722,6 +752,10 @@ final class MeetingRecordingFlowCoordinator {
                     Telemetry.send(.meetingRecordingStarted(trigger: trigger))
                     self.onRecordingBegan()
                 } catch {
+                    guard self.ownsPendingStart(generation: gen) else {
+                        self.recordIgnoredStartResult(generation: gen, outcome: "failure")
+                        return
+                    }
                     Telemetry.send(
                         .meetingRecordingFailed(
                             errorType: TelemetryErrorClassifier.classify(error),

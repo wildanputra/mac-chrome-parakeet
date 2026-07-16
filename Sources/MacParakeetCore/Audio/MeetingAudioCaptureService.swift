@@ -62,8 +62,26 @@ public actor MeetingAudioCaptureService {
     private let eventSink = EventSink()
     private let micHealthObserver: MeetingMicHealthTelemetryObserver
 
+    private enum LifecycleState: Equatable {
+        case idle
+        case starting(Int)
+        case running(Int)
+        case stopping(Int)
+
+        var attemptID: Int? {
+            switch self {
+            case .idle:
+                return nil
+            case .starting(let attemptID), .running(let attemptID), .stopping(let attemptID):
+                return attemptID
+            }
+        }
+    }
+
     private var systemAudioCapture: (any MeetingSystemAudioCapturing)?
-    private var isCapturing = false
+    private var lifecycleState: LifecycleState = .idle
+    private var nextAttemptID = 0
+    private var stopSettlementWaiters: [CheckedContinuation<Void, Never>] = []
 
     private var eventContinuation: AsyncStream<MeetingAudioCaptureEvent>.Continuation?
     private var cachedEvents: AsyncStream<MeetingAudioCaptureEvent>?
@@ -151,19 +169,17 @@ public actor MeetingAudioCaptureService {
         sourceMode sourceModeOverride: MeetingAudioSourceMode? = nil,
         handler: @escaping EventHandler
     ) async throws -> MeetingAudioCaptureStartReport {
-        guard !isCapturing else {
+        guard lifecycleState == .idle else {
             throw MeetingAudioError.alreadyRunning
         }
+        nextAttemptID += 1
+        let attemptID = nextAttemptID
+        lifecycleState = .starting(attemptID)
 
         let sourceMode = sourceModeOverride ?? sourceModeProvider()
         var microphoneStartReport: MeetingMicrophoneCaptureStartReport?
         var attemptedMicrophoneStart = false
-        let systemCapture: (any MeetingSystemAudioCapturing)?
-        if sourceMode.capturesSystemAudio {
-            systemCapture = try systemAudioCaptureFactory()
-        } else {
-            systemCapture = nil
-        }
+        var systemCapture: (any MeetingSystemAudioCapturing)?
         eventSink.setHandler(handler)
         // Mic health compares microphone energy against system audio, so mic-only capture has no reference stream.
         micHealthObserver.start(observing: sourceMode.capturesMicrophone && sourceMode.capturesSystemAudio)
@@ -174,6 +190,11 @@ public actor MeetingAudioCaptureService {
         }
 
         do {
+            if sourceMode.capturesSystemAudio {
+                systemCapture = try systemAudioCaptureFactory()
+                systemAudioCapture = systemCapture
+            }
+
             if sourceMode.capturesMicrophone {
                 attemptedMicrophoneStart = true
                 microphoneStartReport = try await microphoneCapture.start(
@@ -201,6 +222,7 @@ public actor MeetingAudioCaptureService {
                         self?.eventSink.emit(.error(error))
                     }
                 )
+                try validateStartStillCurrent(attemptID)
             }
 
             if let systemCapture {
@@ -228,20 +250,33 @@ public actor MeetingAudioCaptureService {
                         self?.eventSink.emit(systemAudioFailureEvent(error))
                     }
                 )
+                try validateStartStillCurrent(attemptID)
             }
         } catch {
-            if attemptedMicrophoneStart {
-                microphoneCapture.stop()
+            let wasInterrupted = lifecycleState != .starting(attemptID)
+            if lifecycleState == .starting(attemptID) {
+                lifecycleState = .stopping(attemptID)
+                systemAudioCapture = nil
+                if attemptedMicrophoneStart {
+                    microphoneCapture.stop()
+                }
+                await systemCapture?.stop()
+                completeStopIfOwned(attemptID: attemptID)
             }
-            await systemCapture?.stop()
-            finishEventStream()
-            eventSink.setHandler(nil)
-            micHealthObserver.stop()
+            if wasInterrupted {
+                if attemptedMicrophoneStart {
+                    // Stop may have raced the microphone's own async start.
+                    // Repeat the idempotent teardown after that start unwinds
+                    // so a late subscription cannot survive the winning Stop.
+                    microphoneCapture.stop()
+                }
+                throw CancellationError()
+            }
             throw error
         }
 
-        systemAudioCapture = systemCapture
-        isCapturing = true
+        try validateStartStillCurrent(attemptID)
+        lifecycleState = .running(attemptID)
         logger.info(
             "Meeting audio capture started source_mode=\(sourceMode.rawValue, privacy: .public) microphone_started=\(microphoneStartReport != nil, privacy: .public) requested_mic_mode=\(String(describing: microphoneStartReport?.requestedMode), privacy: .public) effective_mic_mode=\(microphoneStartReport?.effectiveMode.rawValue ?? "none", privacy: .public)"
         )
@@ -252,18 +287,55 @@ public actor MeetingAudioCaptureService {
     }
 
     public func stop() async {
-        guard isCapturing else { return }
+        guard let attemptID = lifecycleState.attemptID else { return }
+        if case .stopping = lifecycleState {
+            await waitForStopSettlement()
+            return
+        }
+
+        lifecycleState = .stopping(attemptID)
+        let systemCapture = systemAudioCapture
+        systemAudioCapture = nil
 
         microphoneCapture.stop()
-        await systemAudioCapture?.stop()
-        systemAudioCapture = nil
-        isCapturing = false
+        await systemCapture?.stop()
 
-        eventContinuation?.finish()
+        if completeStopIfOwned(attemptID: attemptID) {
+            logger.info("Meeting audio capture stopped")
+        }
+    }
+
+    private func validateStartStillCurrent(_ attemptID: Int) throws {
+        guard lifecycleState == .starting(attemptID) else {
+            throw CancellationError()
+        }
+        try Task.checkCancellation()
+    }
+
+    @discardableResult
+    private func completeStopIfOwned(attemptID: Int) -> Bool {
+        guard lifecycleState == .stopping(attemptID) else { return false }
         finishEventStream()
         eventSink.setHandler(nil)
         micHealthObserver.stop()
-        logger.info("Meeting audio capture stopped")
+        lifecycleState = .idle
+        let waiters = stopSettlementWaiters
+        stopSettlementWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        return true
+    }
+
+    private func waitForStopSettlement() async {
+        guard case .stopping = lifecycleState else { return }
+        await withCheckedContinuation { continuation in
+            if case .stopping = lifecycleState {
+                stopSettlementWaiters.append(continuation)
+            } else {
+                continuation.resume()
+            }
+        }
     }
 
     private func finishEventStream() {

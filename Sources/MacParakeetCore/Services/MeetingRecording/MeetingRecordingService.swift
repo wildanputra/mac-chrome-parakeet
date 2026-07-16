@@ -273,6 +273,10 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
     /// Keeps replacement starts out while `audioCaptureService.start()` is still
     /// unwinding after cancellation. `currentSession` may already be nil then.
     private var startingSessionID: UUID?
+    /// Once set, the durable Stop path owns this session's settlement. A stale
+    /// start task may still resume from `audioCaptureService.start()`, but its
+    /// catch must not run failed-start deletion over finalized/recoverable data.
+    private var durableStopSessionID: UUID?
     private var writer: MeetingAudioStorageWriter?
     private var processingTask: Task<Void, Never>?
     private var captureOrchestrator = CaptureOrchestrator()
@@ -697,7 +701,13 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
             AudioCaptureDiagnostics.append(
                 "meeting_recording_start_failed session=\(sessionID.uuidString) \(AudioCaptureDiagnostics.errorFields(error))"
             )
-            await cleanupFailedStart(folderURL: folderURL)
+            if durableStopSessionID == sessionID || currentSession?.id != sessionID {
+                AudioCaptureDiagnostics.append(
+                    "meeting_recording_start_cleanup_skipped session=\(sessionID.uuidString) reason=settlement_owned"
+                )
+            } else {
+                await cleanupFailedStart(folderURL: folderURL)
+            }
             throw error
         }
     }
@@ -757,6 +767,7 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
         guard let session = currentSession else {
             throw MeetingAudioError.notRunning
         }
+        durableStopSessionID = session.id
 
         let serviceStopStartedAt = Date()
         var serviceStopOutcome = "success"
@@ -1887,6 +1898,9 @@ public actor MeetingRecordingService: MeetingRecordingServiceProtocol {
     private func cleanupState() {
         let finishedSessionID = currentSession?.id
         currentSession = nil
+        if durableStopSessionID == finishedSessionID {
+            durableStopSessionID = nil
+        }
         currentNotes = nil
         currentLockFile = nil
         paused = false

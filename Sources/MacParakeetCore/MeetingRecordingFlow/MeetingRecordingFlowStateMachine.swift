@@ -99,17 +99,19 @@ public struct MeetingRecordingFlowStateMachine: Equatable, Sendable {
 
         case (.starting, .stopRequested):
             state = .stopping
-            return []
+            return [.showTranscribingState, .updateMenuBar(.processing), .stopRecordingAndTranscribe]
 
         case (.stopping, .recordingStarted(let gen)):
             guard gen == generation else { return [] }
-            state = .stopping
-            return [.showTranscribingState, .updateMenuBar(.processing), .stopRecordingAndTranscribe]
+            // Stop already launched when the flow left `.starting`. A matching
+            // late start completion must not enqueue a second durable stop.
+            return []
 
-        case (.stopping, .startFailed(let gen, let message)):
+        case (.stopping, .startFailed(let gen, _)):
             guard gen == generation else { return [] }
-            state = .finishing(error: message)
-            return [.showError(message), .updateMenuBar(.idle), .startAutoDismissTimer(seconds: 5)]
+            // The durable stop owns settlement now. Its queued/failure event is
+            // authoritative; a stale start error must not cover that outcome.
+            return []
 
         case (.stopping, .recordingQueued(let gen, _)):
             guard gen == generation else { return [] }

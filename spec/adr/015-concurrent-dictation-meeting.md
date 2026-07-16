@@ -10,6 +10,7 @@
 > Amendment note (2026-05-14): shipped meeting mic capture returns to raw by default after live-call testing showed VPIO can muffle the user's outgoing mic for other participants. The shared-engine architecture and VPIO arbitration remain for explicit VPIO experiments.
 > Amendment note (2026-06-02): optional Instant Dictation keeps a passive warm subscriber on `SharedMicrophoneStream` while dictation is idle and stores only a bounded in-memory pre-roll. Passive subscribers do not block VPIO promotion; active dictation and raw meeting capture still do.
 > Amendment note (2026-06-10): Instant Dictation suppresses that idle warm subscriber while the resolved input device is Bluetooth, so AirPods/headsets are not pinned in HFP/SCO mode while idle. Microphone-selection/default-input refreshes are trailing-debounced before warm-engine restart to collapse route-change notification bursts.
+> Amendment note (2026-07-15): meeting ScreenCaptureKit startup/teardown is deadline-bounded and Stop can interrupt partial meeting startup. This does not combine or otherwise change dictation lifecycle ownership.
 
 ## Context
 
@@ -43,6 +44,13 @@ macOS Voice Processing I/O (VPIO) provides built-in echo cancellation, noise sup
 Two independent `AVAudioEngine` instances cannot escape this — VPIO state is process-scoped, not engine-scoped. The shared-engine design accepts this and exploits it: subscribers explicitly request VPIO or raw, the stream resolves the engine's actual mode (sticky once engaged, deferred when a non-VPIO subscriber blocks), and every subscriber that consumes audio while VPIO is engaged extracts channel 0 as mono. See `Sources/MacParakeetCore/Audio/SharedMicrophoneStream.swift` and `extractChannelZero(from:)` in `AudioRecorder.swift` for the implementation.
 
 **Why a shared engine is also fine for lifecycle:** the original ADR worried that a long-running meeting engine would glitch when dictation start/stop touched it. In practice, dictation `subscribe`/`unsubscribe` calls are buffer-fanout list mutations behind a lock — they don't touch the running `AVAudioEngine`, don't reconfigure VPIO, and don't restart the engine. The engine starts on the first subscriber and stops on the last; mid-session subscribers join an already-running engine.
+
+Meeting lifecycle hardening preserves that independence. A meeting Stop owns
+and tears down its partial microphone subscription plus its separate
+ScreenCaptureKit source; attempt-generation checks prevent late meeting startup
+from reviving either source. Dictation keeps its own state machine, readiness
+watchdog, and shared-stream subscription ownership. The two flows do not share
+a combined start/stop state machine.
 
 Instant Dictation keeps that same topology. Its idle warm lease is passive:
 it can keep the engine running and maintain a small RAM-only pre-roll, but it

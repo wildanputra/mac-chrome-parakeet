@@ -84,6 +84,40 @@ final class MeetingRecordingServiceTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(lockStore.deletes.count, 1)
     }
 
+    func testDurableStopDuringAsyncStartOwnsCleanupAndStaleStartDoesNotDeleteAgain() async throws {
+        let captureService = BlockingStartMeetingAudioCaptureService()
+        let lockStore = RecordingLockFileStore()
+        let service = MeetingRecordingService(
+            audioCaptureService: captureService,
+            audioConverter: MockMeetingAudioFileConverter(),
+            sttTranscriber: CountingMeetingSTTClient(),
+            lockFileStore: lockStore
+        )
+
+        let startTask = Task {
+            try await service.startRecording()
+        }
+        await captureService.waitForStartCall()
+
+        do {
+            _ = try await service.stopRecording()
+            XCTFail("Expected an empty partial start to contain no audio")
+        } catch MeetingAudioError.noAudioCaptured {
+            // The durable Stop path owns cleanup.
+        }
+        XCTAssertEqual(lockStore.deletes.count, 1)
+
+        await captureService.releaseStart()
+        do {
+            try await startTask.value
+            XCTFail("The stale start must not report success")
+        } catch is CancellationError {
+            // Expected.
+        }
+
+        XCTAssertEqual(lockStore.deletes.count, 1)
+    }
+
     func testStartWhileCanceledAsyncStartIsUnwindingThrowsAlreadyRunning() async throws {
         let captureService = BlockingStartMeetingAudioCaptureService()
         let lockStore = RecordingLockFileStore()
