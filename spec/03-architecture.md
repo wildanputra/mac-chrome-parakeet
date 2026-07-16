@@ -335,7 +335,7 @@ Saved meeting retranscription from the library:
 Archived meeting source files and metadata
     │
     ▼
-Captured engine is the primary explicit choice; legacy rows default to current Final Transcription
+Captured Final Transcription engine/language is the primary explicit choice; legacy rows default to current Final Transcription
     │
     ▼
 Meeting source reconstruction → per-source `.meetingFinalize` jobs → aligned merge
