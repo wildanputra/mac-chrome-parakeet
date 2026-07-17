@@ -162,10 +162,28 @@ model cache as the app.
 git clone https://github.com/moona3k/macparakeet.git
 cd macparakeet
 swift test
-scripts/dev/run_app.sh    # build, sign, launch
+scripts/dev/run_app.sh    # build, sign, launch the app
 ```
 
 The dev script creates a signed `.app` bundle so macOS grants mic and accessibility permissions. It disables target-level Xcode signing, then signs the finished bundle with the best available local identity. Override with `MACPARAKEET_CODESIGN_IDENTITY="Your Identity"` if needed.
+
+To also build the CLI from source:
+
+```bash
+swift build -c release --product macparakeet-cli
+.build/release/macparakeet-cli --version
+```
+
+`swift build` does not install anything onto your `$PATH` — the binary lives
+in the (hidden) `.build/` directory. Call it by path, prefix commands with
+`swift run macparakeet-cli`, or symlink it:
+`ln -s "$PWD/.build/release/macparakeet-cli" /usr/local/bin/macparakeet-cli`.
+
+**Chrome extension (record browser meetings):** a companion MV3 extension
+detects Google Meet / Zoom web / Teams / Webex calls, starts and stops the
+app's meeting recording, names the recording after the meeting, and labels
+transcript speakers with real participant names. Setup guide:
+[`integrations/chrome-extension/README.md`](integrations/chrome-extension/README.md).
 
 ## Command line and agent automation
 

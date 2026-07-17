@@ -340,12 +340,13 @@ final class AppEnvironmentConfigurer {
             },
             onQueuedTranscriptionReady: { [weak self] transcription, selectTranscription in
                 guard let self else { return }
-                // Chrome bridge speaker attribution (ADR-029): relabel
-                // diarized speakers with browser-observed participant names
-                // before first presentation, so the transcript opens with
-                // real names instead of flashing "Speaker 1" first.
+                // Chrome bridge context (ADR-029): apply the browser-observed
+                // meeting name to fallback-titled recordings and relabel
+                // diarized speakers with participant names before first
+                // presentation, so the transcript opens with the real title
+                // and names instead of flashing defaults first.
                 let transcription =
-                    coordinatorRefs.chromeBridge?.applyPendingSpeakerNames(to: transcription)
+                    coordinatorRefs.chromeBridge?.applyPendingBrowserMeetingContext(to: transcription)
                     ?? transcription
                 self.transcriptionViewModel.presentCompletedTranscription(
                     transcription,
@@ -522,6 +523,9 @@ final class AppEnvironmentConfigurer {
                 },
                 persistSpeakers: { [transcriptionRepo = env.transcriptionRepo] id, speakers in
                     try transcriptionRepo.updateSpeakers(id: id, speakers: speakers)
+                },
+                persistTitle: { [transcriptionRepo = env.transcriptionRepo] id, title in
+                    try transcriptionRepo.updateFileName(id: id, fileName: title)
                 }
             )
             coordinator.start()

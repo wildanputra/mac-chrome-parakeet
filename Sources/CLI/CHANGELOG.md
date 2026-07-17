@@ -102,9 +102,10 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
   the app checks before acting on browser-extension bridge commands.
 - The bridge protocol (schema v1) additionally carries `speaker_activity`
   batches — named active-speaker time spans the extension observes during a
-  recording — which the host relays to the app for transcript speaker naming
-  (ADR-029 §6). Additive; older hosts/apps ignore the new request kind's
-  absence gracefully.
+  recording — and `meeting_title` hints, which the host relays to the app
+  for transcript speaker naming and fallback-title renaming (ADR-029 §6).
+  Additive; older hosts/apps ignore the new request kinds' absence
+  gracefully.
 
 ### Fixed
 

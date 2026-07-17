@@ -17,32 +17,42 @@ content scripts ──▶ service worker ──▶ native messaging host
                                         MacParakeet.app meeting recording
 ```
 
-## Install
-
-### Prerequisite: a bridge-capable build (from source, for now)
+## Install — end to end
 
 Until a tagged release ships the bridge, **both sides must come from this
-branch** — released Homebrew/app-bundle binaries have neither the
-`chrome-native-host` CLI command nor the app-side bridge listener:
+branch**: released Homebrew/app-bundle binaries have neither the
+`chrome-native-host` CLI command nor the app-side bridge listener. Five
+steps from a fresh clone to a recorded browser meeting:
 
-```bash
-git clone <your fork> && cd <checkout>
-swift build -c release --product macparakeet-cli   # → .build/release/macparakeet-cli
-scripts/dev/run_app.sh                             # runs the app from source
-```
+1. **Build the CLI** (from the repo root of this branch):
 
-Note that `swift build` never installs anything onto your `$PATH` — the CLI
-binary lives inside the (hidden) `.build/` directory, which is why a fresh
-clone doesn't appear to "have" `macparakeet-cli`. That's fine here:
-`install.sh` below auto-detects the repo-local build and pins its absolute
-path, preferring it over any older CLI on your `$PATH`. Sanity checks:
+   ```bash
+   swift build -c release --product macparakeet-cli
+   ```
 
-```bash
-.build/release/macparakeet-cli chrome-native-host --help
-.build/release/macparakeet-cli config get chrome-extension
-```
+   `swift build` never installs anything onto your `$PATH` — the binary
+   lives inside the (hidden) `.build/` directory at
+   `.build/release/macparakeet-cli`, which is why a fresh clone doesn't
+   appear to "have" `macparakeet-cli`. That's fine: the installer in step 3
+   finds it there. Sanity checks:
 
-1. **Register the native messaging host** (also enables the opt-in bridge
+   ```bash
+   .build/release/macparakeet-cli chrome-native-host --help
+   .build/release/macparakeet-cli config get chrome-extension
+   ```
+
+2. **Build and launch the app** from the same checkout:
+
+   ```bash
+   scripts/dev/run_app.sh
+   ```
+
+   This creates a locally signed `.app` bundle so macOS grants microphone
+   (and, for meeting capture, system-audio) permissions. An installed
+   MacParakeet.app from a release will *not* answer the extension — the
+   bridge listener only exists in this branch.
+
+3. **Register the native messaging host** (also enables the opt-in bridge
    preference — this is the consent step; the app ignores the extension until
    it runs):
 
@@ -50,21 +60,24 @@ path, preferring it over any older CLI on your `$PATH`. Sanity checks:
    integrations/chrome-extension/native-host/install.sh
    ```
 
-   It walks candidates in order — repo-local `.build/release` then
+   It walks CLI candidates in order — repo-local `.build/release` then
    `.build/debug`, then `$PATH`, then the app bundle — **skipping any CLI
    that predates the bridge** (with a note naming the skipped binary), writes
    a wrapper + host manifest for every Chromium-family browser found (Chrome,
    Edge, Brave, Arc, Vivaldi, Chromium), and runs
    `macparakeet-cli config set chrome-extension on`.
 
-2. **Load the extension**: open `chrome://extensions`, enable *Developer
+4. **Load the extension**: open `chrome://extensions`, enable *Developer
    mode*, click *Load unpacked*, and select this
    `integrations/chrome-extension/` directory. The extension ID is pinned to
    `jeiadfgefgjejfblpgpgiihakgpcebfm` by the `key` field in `manifest.json`,
    so the host manifest's `allowed_origins` matches no matter where the
    directory lives.
 
-3. **Restart the browser** once so it picks up the native messaging host.
+5. **Restart the browser** once so it picks up the native messaging host,
+   then click the parakeet toolbar icon — the popup should say **Ready**
+   while the app is running. (It will say "App not running" or "Not set up"
+   with a fix otherwise.)
 
 To remove everything: `native-host/install.sh --uninstall` and delete the
 extension from `chrome://extensions`.
@@ -87,6 +100,16 @@ extension from `chrome://extensions`.
 
 The toolbar badge shows `REC` while MacParakeet records and `•` when a call is
 detected but not being recorded.
+
+### Meeting names as recording titles
+
+Recordings started from the extension are named after the meeting from the
+start. Recordings started any other way (app menu, hotkey) during a browser
+call — or started before the page title resolved — are renamed to the
+meeting's name when transcription completes, **but only if the title is
+still a default** ("Meeting Jun 17, 2026 at 09:59" or a platform label).
+Titles you set yourself, calendar-derived names, and LLM auto-titles are
+never overwritten.
 
 ### Speaker names in transcripts
 

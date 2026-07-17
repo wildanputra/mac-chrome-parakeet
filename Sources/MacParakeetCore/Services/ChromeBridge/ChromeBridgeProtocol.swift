@@ -77,6 +77,7 @@ public struct ChromeBridgeRequest: Codable, Sendable, Equatable {
         case startRecording = "start_recording"
         case stopRecording = "stop_recording"
         case speakerActivity = "speaker_activity"
+        case meetingTitle = "meeting_title"
         case launchApp = "launch_app"
     }
 
@@ -84,8 +85,10 @@ public struct ChromeBridgeRequest: Codable, Sendable, Equatable {
     /// Extension-generated correlation id echoed back as `replyTo`.
     public let id: String
     public let type: Kind
-    /// Meeting title scraped from the page (best effort). Only meaningful for
-    /// `.startRecording`. Meeting URLs deliberately never cross the bridge.
+    /// Meeting title scraped from the page (best effort). Meaningful for
+    /// `.startRecording` (pre-names the recording) and `.meetingTitle`
+    /// (renames a fallback-titled recording once the page title resolves).
+    /// Meeting URLs deliberately never cross the bridge.
     public let title: String?
     /// Coarse platform label ("google_meet", "zoom", "teams", "webex") for
     /// title fallbacks and logging. Free-form by design — new platforms must

@@ -147,6 +147,27 @@ final class MeetingSpeakerNameMapperTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    func testOverlappingDuplicateSpansDoNotDoubleVote() {
+        // The same 12s span reported twice (extension reload re-report) plus
+        // an overlapping tail merge into one [0, 24s] span: 24s of 100s
+        // speech is under the 25% coverage floor, so no relabel. Un-merged,
+        // the duplicates would sum to 36s (36%) and wrongly pass.
+        let result = MeetingSpeakerNameMapper.relabeledSpeakers(
+            speakers: speakers([("system:S1", "Speaker 1")]),
+            diarizationSegments: [
+                DiarizationSegmentRecord(speakerId: "system:S1", startMs: 0, endMs: 100_000)
+            ],
+            events: [
+                event("Alice", 0, 12_000),
+                event("Alice", 0, 12_000),
+                event("Alice", 11_000, 24_000),
+            ],
+            recordingStartedAt: recordingStart
+        )
+
+        XCTAssertNil(result)
+    }
+
     func testNoEventsReturnsNil() {
         let result = MeetingSpeakerNameMapper.relabeledSpeakers(
             speakers: speakers([("system:S1", "Speaker 1")]),

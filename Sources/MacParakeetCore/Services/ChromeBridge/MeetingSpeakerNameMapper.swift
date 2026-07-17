@@ -95,7 +95,11 @@ public enum MeetingSpeakerNameMapper {
     /// Converts wall-clock event spans to recording-relative milliseconds,
     /// dropping malformed spans, empty names, and self-referential names the
     /// page renders for the local user (their words are already labeled by
-    /// the microphone source).
+    /// the microphone source). Same-name spans that touch or overlap are
+    /// merged: the extension splits long monologues into ~15 s chunks and can
+    /// re-report overlapping ranges after a reload, and un-merged overlaps
+    /// would double-vote in the overlap sums (merging also keeps the
+    /// segments × spans join small).
     private static func normalizedSpans(
         events: [ChromeBridgeSpeakerEvent],
         recordingStartedAt: Date
@@ -118,7 +122,34 @@ public enum MeetingSpeakerNameMapper {
                 endMs: Int(clamping: relEnd)
             ))
         }
-        return spans
+        return mergedByName(spans)
+    }
+
+    /// Merge gap between consecutive same-name spans: the detector samples at
+    /// ~1 s, so sub-sample gaps are artifacts of chunked reporting, not real
+    /// pauses.
+    private static let mergeGapMs = 1000
+
+    private static func mergedByName(_ spans: [Span]) -> [Span] {
+        let sorted = spans.sorted {
+            $0.name == $1.name ? $0.startMs < $1.startMs : $0.name < $1.name
+        }
+        var merged: [Span] = []
+        merged.reserveCapacity(sorted.count)
+        for span in sorted {
+            if let last = merged.last,
+               last.name == span.name,
+               span.startMs <= last.endMs + mergeGapMs {
+                merged[merged.count - 1] = Span(
+                    name: last.name,
+                    startMs: last.startMs,
+                    endMs: max(last.endMs, span.endMs)
+                )
+            } else {
+                merged.append(span)
+            }
+        }
+        return merged
     }
 
     /// Meeting pages label the local participant's own tile "You" (localized).

@@ -148,7 +148,26 @@ saved meetings record that they were started from the browser. These are
 property *values* on existing allowlisted events, not new event names, so no
 website-allowlist deploy is required. No new telemetry events ship in v1.
 
-### 6. Speaker attribution — naming diarized voices
+### 6. Browser context enrichment — meeting titles and speaker names
+
+Beyond start/stop control, the page holds two facts the app cannot hear:
+the meeting's **name** and **who** is speaking. Both flow over the same
+channel and both apply at transcription completion under a shared
+"never overwrite something better" rule.
+
+**Meeting titles.** Bridge-started recordings are pre-named from the tab.
+For every other start (manual, hotkey, calendar-less ad-hoc) — and for pages
+whose title resolves only after joining — the extension sends the current
+meeting name (`meeting_title` requests, ≤1/min, only while a recording is
+verified running). At completion the recording is renamed **only when its
+title is still a fallback**: the date-stamped "Meeting …" default or a
+platform label ("Google Meet") the bridge itself substituted. The rule
+reuses `MeetingTitleGenerator`'s own fallback detector
+(`MeetingBrowserTitlePolicy`), so user renames, calendar names, and LLM
+auto-titles are never clobbered; if the LLM auto-titler already produced a
+topic title, it wins by having run first.
+
+#### Speaker attribution — naming diarized voices
 
 Diarization (ADR-010) clusters remote voices but can only call them
 "Speaker 1", "Speaker 2". The meeting page knows *who* is highlighted as
