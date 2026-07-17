@@ -19,8 +19,28 @@ content scripts ──▶ service worker ──▶ native messaging host
 
 ## Install
 
-Prerequisites: MacParakeet.app (or the standalone `macparakeet-cli`) with the
-`chrome-native-host` command (CLI ≥ the version in this checkout).
+### Prerequisite: a bridge-capable build (from source, for now)
+
+Until a tagged release ships the bridge, **both sides must come from this
+branch** — released Homebrew/app-bundle binaries have neither the
+`chrome-native-host` CLI command nor the app-side bridge listener:
+
+```bash
+git clone <your fork> && cd <checkout>
+swift build -c release --product macparakeet-cli   # → .build/release/macparakeet-cli
+scripts/dev/run_app.sh                             # runs the app from source
+```
+
+Note that `swift build` never installs anything onto your `$PATH` — the CLI
+binary lives inside the (hidden) `.build/` directory, which is why a fresh
+clone doesn't appear to "have" `macparakeet-cli`. That's fine here:
+`install.sh` below auto-detects the repo-local build and pins its absolute
+path, preferring it over any older CLI on your `$PATH`. Sanity checks:
+
+```bash
+.build/release/macparakeet-cli chrome-native-host --help
+.build/release/macparakeet-cli config get chrome-extension
+```
 
 1. **Register the native messaging host** (also enables the opt-in bridge
    preference — this is the consent step; the app ignores the extension until
@@ -30,8 +50,10 @@ Prerequisites: MacParakeet.app (or the standalone `macparakeet-cli`) with the
    integrations/chrome-extension/native-host/install.sh
    ```
 
-   It auto-detects `macparakeet-cli` on `$PATH` or in the app bundle, writes a
-   wrapper + host manifest for every Chromium-family browser found (Chrome,
+   It walks candidates in order — repo-local `.build/release` then
+   `.build/debug`, then `$PATH`, then the app bundle — **skipping any CLI
+   that predates the bridge** (with a note naming the skipped binary), writes
+   a wrapper + host manifest for every Chromium-family browser found (Chrome,
    Edge, Brave, Arc, Vivaldi, Chromium), and runs
    `macparakeet-cli config set chrome-extension on`.
 
@@ -66,22 +88,37 @@ extension from `chrome://extensions`.
 The toolbar badge shows `REC` while MacParakeet records and `•` when a call is
 detected but not being recorded.
 
+### Speaker names in transcripts
+
+While a recording runs, the extension also watches the meeting page's
+active-speaker indicators and reports *named speaking spans* to the app. After
+transcription, MacParakeet matches those spans against its diarized voices and
+— when the overlap is confident — replaces "Speaker 1"-style labels with the
+real participant names. This works for Google Meet, Teams, and Zoom web
+(best-effort; Webex not yet). Low-confidence matches, missed page markup, or
+meetings recorded without the extension simply keep today's anonymous labels,
+and you can still rename speakers manually in the app.
+
 ## Troubleshooting
 
 | Popup says | Fix |
 |---|---|
 | "The native bridge isn’t installed yet" | Run `native-host/install.sh`, restart the browser. |
-| "MacParakeet isn’t running" | Click *Launch MacParakeet* (or open the app). |
+| "MacParakeet isn’t running" | Click *Launch MacParakeet* (or open the app). Make sure the running app is built from this branch. |
 | "The Chrome bridge is switched off" | `macparakeet-cli config set chrome-extension on` |
+| Installer: "no bridge-capable macparakeet-cli found" (or it skips your installed CLI) | Your installed CLI predates the bridge. Build from this checkout: `swift build -c release --product macparakeet-cli`, then re-run the installer. |
 | Call not detected | Vendors change their DOM without notice; detection selectors live in `content/meeting-detector.js`. Manual record from the popup always works. |
+| Speakers still say "Speaker 1" | Name mapping is confidence-gated and selector-dependent (Meet/Teams/Zoom web only for now). Rename speakers manually in the transcript view as before. |
 
 ## Privacy
 
 - No `host_permissions` beyond the four meeting domains; no `tabs`
   permission; no analytics; no remote code; no network access of any kind.
 - What crosses the bridge to the app: a platform label ("google_meet"…), the
-  tab title, and start/stop/state commands. Meeting URLs never leave the
-  browser.
+  tab title, start/stop/state commands, and — only while a recording is
+  running — participant names with speaking time spans, used solely to label
+  speakers in your local transcript. Meeting URLs never leave the browser,
+  and nothing ever leaves your Mac.
 - The app acts on bridge commands only while the `chrome-extension` config
   key is `on` (default `off`).
 

@@ -100,6 +100,11 @@ by checking exit code first: `2` = misuse, `1` = runtime, `0` = success.
   commands to the running app over distributed notifications.
 - New `config` key `chrome-extension` (`on|off`, default `off`): opt-in gate
   the app checks before acting on browser-extension bridge commands.
+- The bridge protocol (schema v1) additionally carries `speaker_activity`
+  batches — named active-speaker time spans the extension observes during a
+  recording — which the host relays to the app for transcript speaker naming
+  (ADR-029 §6). Additive; older hosts/apps ignore the new request kind's
+  absence gracefully.
 
 ### Fixed
 

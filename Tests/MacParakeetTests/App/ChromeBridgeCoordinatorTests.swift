@@ -16,6 +16,7 @@ final class ChromeBridgeCoordinatorTests: XCTestCase {
         var startedTitles: [String?] = []
         var stopCount = 0
         var replies: [ChromeBridgeReply] = []
+        var persistedSpeakers: [(id: UUID, speakers: [SpeakerInfo])] = []
     }
 
     private func makeCoordinator(_ harness: Harness) -> ChromeBridgeCoordinator {
@@ -36,6 +37,9 @@ final class ChromeBridgeCoordinatorTests: XCTestCase {
                 harness.recordingActive = false
                 harness.flowState = "stopping"
                 return true
+            },
+            persistSpeakers: { id, speakers in
+                harness.persistedSpeakers.append((id: id, speakers: speakers))
             },
             postReply: { harness.replies.append($0) }
         )
@@ -179,5 +183,126 @@ final class ChromeBridgeCoordinatorTests: XCTestCase {
         XCTAssertTrue(harness.replies.isEmpty)
         XCTAssertTrue(harness.startedTitles.isEmpty)
         XCTAssertEqual(harness.stopCount, 0)
+    }
+
+    // MARK: - Speaker attribution (ADR-029)
+
+    private func meetingTranscription(id: UUID = UUID()) -> Transcription {
+        Transcription(
+            id: id,
+            fileName: "Weekly sync",
+            speakers: [
+                SpeakerInfo(id: "microphone", label: "Me"),
+                SpeakerInfo(id: "system:S1", label: "Speaker 1"),
+            ],
+            diarizationSegments: [
+                DiarizationSegmentRecord(speakerId: "system:S1", startMs: 0, endMs: 10_000)
+            ],
+            transcriptSegments: [
+                TranscriptSegmentRecord(
+                    startMs: 0,
+                    endMs: 10_000,
+                    speakerId: "system:S1",
+                    speakerLabel: "Speaker 1",
+                    text: "Hello from the browser",
+                    wordRange: TranscriptSegmentWordRange(startIndex: 0, endIndexExclusive: 4)
+                )
+            ],
+            status: .completed,
+            sourceType: .meeting
+        )
+    }
+
+    func testSpeakerActivityCollectedDuringRecordingAndAppliedOnCompletion() throws {
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        harness.recordingActive = true
+        coordinator.recordingDidStart()
+
+        // recordingDidStart() captured the real wall clock, so the event's
+        // wall-clock span [now, now+10s] lands on the transcription's
+        // [0, 10_000] diarization segment (± a few ms of test execution).
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let payload = try ChromeBridgeCodec.encodeString(ChromeBridgeRequest(
+            id: "sa1",
+            type: .speakerActivity,
+            events: [ChromeBridgeSpeakerEvent(name: "Dana", startMs: nowMs, endMs: nowMs + 10_000)]
+        ))
+        coordinator.handleCommand(payloadString: payload)
+        XCTAssertEqual(harness.replies.last?.type, .state)
+
+        harness.recordingActive = false
+        let transcription = meetingTranscription()
+        let updated = try XCTUnwrap(coordinator.applyPendingSpeakerNames(to: transcription))
+
+        XCTAssertEqual(updated.speakers?.first { $0.id == "system:S1" }?.label, "Dana")
+        XCTAssertEqual(updated.transcriptSegments?.first?.speakerLabel, "Dana")
+        XCTAssertEqual(harness.persistedSpeakers.count, 1)
+        XCTAssertEqual(harness.persistedSpeakers.first?.id, transcription.id)
+
+        // Harvest is one-shot: a second completion finds nothing.
+        XCTAssertNil(coordinator.applyPendingSpeakerNames(to: transcription))
+    }
+
+    func testSpeakerActivityIgnoredWhileNotRecording() throws {
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        coordinator.recordingDidStart()
+        harness.recordingActive = false
+
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let payload = try ChromeBridgeCodec.encodeString(ChromeBridgeRequest(
+            id: "sa2",
+            type: .speakerActivity,
+            events: [ChromeBridgeSpeakerEvent(name: "Dana", startMs: nowMs, endMs: nowMs + 10_000)]
+        ))
+        coordinator.handleCommand(payloadString: payload)
+
+        XCTAssertEqual(harness.replies.last?.type, .state)
+        XCTAssertNil(coordinator.applyPendingSpeakerNames(to: meetingTranscription()))
+        XCTAssertTrue(harness.persistedSpeakers.isEmpty)
+    }
+
+    func testApplySkipsWhileAnotherRecordingIsActive() throws {
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        harness.recordingActive = true
+        coordinator.recordingDidStart()
+
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let payload = try ChromeBridgeCodec.encodeString(ChromeBridgeRequest(
+            id: "sa3",
+            type: .speakerActivity,
+            events: [ChromeBridgeSpeakerEvent(name: "Dana", startMs: nowMs, endMs: nowMs + 10_000)]
+        ))
+        coordinator.handleCommand(payloadString: payload)
+
+        // A back-to-back recording is still active when the earlier meeting's
+        // transcription completes — the events belong to the live recording,
+        // so nothing may be applied.
+        XCTAssertNil(coordinator.applyPendingSpeakerNames(to: meetingTranscription()))
+        XCTAssertTrue(harness.persistedSpeakers.isEmpty)
+    }
+
+    func testApplySkipsNonMeetingTranscriptions() throws {
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        harness.recordingActive = true
+        coordinator.recordingDidStart()
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let payload = try ChromeBridgeCodec.encodeString(ChromeBridgeRequest(
+            id: "sa4",
+            type: .speakerActivity,
+            events: [ChromeBridgeSpeakerEvent(name: "Dana", startMs: nowMs, endMs: nowMs + 10_000)]
+        ))
+        coordinator.handleCommand(payloadString: payload)
+        harness.recordingActive = false
+
+        var fileTranscription = meetingTranscription()
+        fileTranscription.sourceType = .file
+        XCTAssertNil(coordinator.applyPendingSpeakerNames(to: fileTranscription))
+        // Events survive a non-meeting completion — the meeting harvest can
+        // still happen afterwards.
+        XCTAssertNotNil(coordinator.applyPendingSpeakerNames(to: meetingTranscription()))
     }
 }

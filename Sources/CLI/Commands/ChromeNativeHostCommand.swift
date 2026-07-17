@@ -200,7 +200,7 @@ final class ChromeNativeHost: @unchecked Sendable {
         switch request.type {
         case .launchApp:
             launchAppAndProbe(request)
-        case .hello, .getState, .startRecording, .stopRecording:
+        case .hello, .getState, .startRecording, .stopRecording, .speakerActivity:
             relayToApp(request)
         }
     }

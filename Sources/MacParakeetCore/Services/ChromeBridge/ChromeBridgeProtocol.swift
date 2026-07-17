@@ -49,6 +49,24 @@ public enum ChromeBridgeConfiguration {
     }
 }
 
+/// One observed span of a named participant actively speaking, as reported by
+/// the extension's in-page detection (ADR-029 speaker attribution). Times are
+/// wall-clock epoch **milliseconds** (`Date.now()` in the page) — the browser
+/// and the app share the machine clock, and the app converts to
+/// recording-relative offsets using the recording's start instant.
+public struct ChromeBridgeSpeakerEvent: Codable, Sendable, Equatable {
+    /// Participant display name as the meeting page renders it.
+    public let name: String
+    public let startMs: Int64
+    public let endMs: Int64
+
+    public init(name: String, startMs: Int64, endMs: Int64) {
+        self.name = name
+        self.startMs = startMs
+        self.endMs = endMs
+    }
+}
+
 /// A request originating from the extension. `launchApp` is handled entirely
 /// by the native host (the app cannot launch itself); all other kinds are
 /// relayed to the app.
@@ -58,6 +76,7 @@ public struct ChromeBridgeRequest: Codable, Sendable, Equatable {
         case getState = "get_state"
         case startRecording = "start_recording"
         case stopRecording = "stop_recording"
+        case speakerActivity = "speaker_activity"
         case launchApp = "launch_app"
     }
 
@@ -72,19 +91,24 @@ public struct ChromeBridgeRequest: Codable, Sendable, Equatable {
     /// title fallbacks and logging. Free-form by design — new platforms must
     /// not require a schema bump.
     public let platform: String?
+    /// Active-speaker spans batched by the extension. Only meaningful for
+    /// `.speakerActivity`.
+    public let events: [ChromeBridgeSpeakerEvent]?
 
     public init(
         v: Int = ChromeBridgeChannel.schemaVersion,
         id: String,
         type: Kind,
         title: String? = nil,
-        platform: String? = nil
+        platform: String? = nil,
+        events: [ChromeBridgeSpeakerEvent]? = nil
     ) {
         self.v = v
         self.id = id
         self.type = type
         self.title = title
         self.platform = platform
+        self.events = events
     }
 }
 

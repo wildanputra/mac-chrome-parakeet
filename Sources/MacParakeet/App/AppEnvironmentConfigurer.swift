@@ -15,6 +15,7 @@ final class AppEnvironmentConfigurer {
     private final class CoordinatorRefs {
         weak var dictation: DictationFlowCoordinator?
         weak var meeting: MeetingRecordingFlowCoordinator?
+        weak var chromeBridge: ChromeBridgeCoordinator?
     }
 
     struct Runtime {
@@ -339,6 +340,13 @@ final class AppEnvironmentConfigurer {
             },
             onQueuedTranscriptionReady: { [weak self] transcription, selectTranscription in
                 guard let self else { return }
+                // Chrome bridge speaker attribution (ADR-029): relabel
+                // diarized speakers with browser-observed participant names
+                // before first presentation, so the transcript opens with
+                // real names instead of flashing "Speaker 1" first.
+                let transcription =
+                    coordinatorRefs.chromeBridge?.applyPendingSpeakerNames(to: transcription)
+                    ?? transcription
                 self.transcriptionViewModel.presentCompletedTranscription(
                     transcription,
                     autoSave: true,
@@ -362,6 +370,7 @@ final class AppEnvironmentConfigurer {
                 coordinatorRefs.dictation?.hideIdlePill()
                 isMeetingAutoStopObservingRecording = true
                 meetingAutoStopCoordinator?.recordingDidStart()
+                coordinatorRefs.chromeBridge?.recordingDidStart()
             },
             onRecordingStopping: {
                 endMeetingAutoStopObservation()
@@ -510,10 +519,14 @@ final class AppEnvironmentConfigurer {
                 },
                 onStopRequested: { [weak meetingCoordinator] in
                     meetingCoordinator?.stopRecording(trigger: .chromeExtension) ?? false
+                },
+                persistSpeakers: { [transcriptionRepo = env.transcriptionRepo] id, speakers in
+                    try transcriptionRepo.updateSpeakers(id: id, speakers: speakers)
                 }
             )
             coordinator.start()
             chromeBridgeCoordinator = coordinator
+            coordinatorRefs.chromeBridge = coordinator
         }
 
         return Runtime(

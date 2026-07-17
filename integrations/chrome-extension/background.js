@@ -195,6 +195,50 @@ async function launchApp() {
   return state;
 }
 
+// Forward active-speaker spans (ADR-029 speaker attribution) to the app,
+// but only while a recording is actually running — otherwise participant
+// names would leave the page for no benefit. The app applies them to the
+// finished transcript by overlap voting; dropped batches only mean some
+// speakers keep anonymous labels.
+async function forwardSpeakerActivity(events) {
+  const valid = (Array.isArray(events) ? events : [])
+    .filter(
+      (event) =>
+        event &&
+        typeof event.name === "string" &&
+        event.name.trim() !== "" &&
+        Number.isFinite(event.startMs) &&
+        Number.isFinite(event.endMs) &&
+        event.endMs > event.startMs
+    )
+    .slice(0, 200)
+    .map((event) => ({
+      name: event.name.trim().slice(0, 100),
+      startMs: Math.round(event.startMs),
+      endMs: Math.round(event.endMs),
+    }));
+  if (valid.length === 0) return;
+
+  // The cached state can be stale (it only refreshes on polls/actions);
+  // re-probe when old so recordings started from the app still get names.
+  let { lastState = null } = await getSession({ lastState: null });
+  if (!lastState || Date.now() - lastState.at > 30000) {
+    try {
+      lastState = await fetchState();
+      await updateBadge();
+    } catch {
+      return; // host/app unreachable — drop the batch
+    }
+  }
+  if (!lastState.recording) return;
+
+  try {
+    await sendNative({ type: "speaker_activity", events: valid });
+  } catch {
+    // App went away mid-recording; later batches will re-probe.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Badge
 // ---------------------------------------------------------------------------
@@ -310,6 +354,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (sender.tab && sender.tab.id != null) {
             await handleMeetingReport(sender.tab.id, message);
           }
+          sendResponse({ ok: true });
+          break;
+        }
+        case "speakerActivity": {
+          await forwardSpeakerActivity(message.events);
           sendResponse({ ok: true });
           break;
         }

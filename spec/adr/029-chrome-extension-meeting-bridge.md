@@ -148,12 +148,50 @@ saved meetings record that they were started from the browser. These are
 property *values* on existing allowlisted events, not new event names, so no
 website-allowlist deploy is required. No new telemetry events ship in v1.
 
+### 6. Speaker attribution — naming diarized voices
+
+Diarization (ADR-010) clusters remote voices but can only call them
+"Speaker 1", "Speaker 2". The meeting page knows *who* is highlighted as
+speaking at every instant — the one signal blind diarization can never
+recover. The bridge carries it:
+
+- Content scripts sample per-platform active-speaker indicators (~1 Hz while
+  in a call) and emit named wall-clock spans `{name, startMs, endMs}`,
+  batched every ~5 s. Long monologues are split (~15 s) so spans flow during
+  the call.
+- The service worker forwards batches over the existing channel
+  (`speaker_activity` request kind, additive within schema v1) **only while
+  a recording is running** — verified against app state, so names never
+  leave the page without a recording to serve.
+- `ChromeBridgeCoordinator` buffers spans for the current recording window
+  (opened by the flow's `onRecordingBegan`, so manual/hotkey/calendar starts
+  are covered too, not just bridge starts).
+- When the meeting's transcription completes, the pure
+  `MeetingSpeakerNameMapper` joins the two timelines by **overlap voting**:
+  for each diarized speaker, the name whose spans dominate its segments wins
+  the label — but only past confidence guardrails (≥3 s dominant overlap,
+  ≥60 % share of name-overlapped time, ≥25 % of the speaker's speech).
+  Localized "You" self-tiles are ignored (the mic source already labels the
+  local user). Persistence rides the existing
+  `TranscriptionRepository.updateSpeakers`, the same path as manual speaker
+  renames, which also refreshes stored segment labels.
+
+Failure direction is always "keep the anonymous label": missed selectors, a
+recording with no browser meeting, low-confidence overlap, or a back-to-back
+recording racing the queue (ADR-015) all degrade to exactly today's
+"Speaker N" transcript. Spans are held in memory only and discarded once
+harvested; nothing about who spoke is persisted unless it changed a label in
+the user's own database.
+
 ## Consequences
 
 ### Positive
 
 - One-click (or prompted) recording for Meet/Zoom/Teams/Webex in any
   Chromium browser, with the real meeting title on the saved artifact.
+- Diarized speakers get real participant names when the browser's
+  active-speaker signal confidently overlaps their voice — something no
+  audio-only pipeline can do (§6).
 - Closes ADR-024's browser blind spot via explicit user opt-in instead of
   screen scraping.
 - Zero new capture/transcription code paths — the extension is a thin

@@ -32,9 +32,24 @@ final class ChromeBridgeCoordinator {
     private let onStartRequested: @MainActor (_ title: String?) -> Bool
     /// Returns `true` when a stop was actually issued.
     private let onStopRequested: @MainActor () -> Bool
+    /// Persists a relabeled speaker roster for a saved transcription —
+    /// `TranscriptionRepository.updateSpeakers` in production (which also
+    /// refreshes stored segment labels), a spy in tests.
+    private let persistSpeakers: @MainActor (UUID, [SpeakerInfo]) throws -> Void
     /// Reply transport — the distributed notification post in production,
     /// a capture array in tests.
     private let postReply: @MainActor (ChromeBridgeReply) -> Void
+
+    /// Active-speaker spans reported by the extension during the current
+    /// (or most recently ended) recording, wall-clock epoch ms. Cleared when
+    /// a new recording starts and when a meeting transcription harvests them.
+    private var speakerActivityEvents: [ChromeBridgeSpeakerEvent] = []
+    /// Wall-clock instant the current recording window began, set from the
+    /// flow's `onRecordingBegan` callback so manual/hotkey/calendar starts
+    /// are windowed just as precisely as bridge-initiated ones.
+    private var speakerActivityRecordingStartedAt: Date?
+    /// Hard cap so a runaway page can't grow memory: ~8h of one-second spans.
+    private static let maxSpeakerActivityEvents = 30_000
 
     // `nonisolated(unsafe)` so the nonisolated `deinit` can read it to
     // unregister the observer. Write-only after start()/stop(); mutation
@@ -47,6 +62,7 @@ final class ChromeBridgeCoordinator {
         flowStateLabel: @escaping @MainActor () -> String,
         onStartRequested: @escaping @MainActor (_ title: String?) -> Bool,
         onStopRequested: @escaping @MainActor () -> Bool,
+        persistSpeakers: @escaping @MainActor (UUID, [SpeakerInfo]) throws -> Void = { _, _ in },
         postReply: (@MainActor (ChromeBridgeReply) -> Void)? = nil
     ) {
         self.isBridgeEnabled = isBridgeEnabled
@@ -54,6 +70,7 @@ final class ChromeBridgeCoordinator {
         self.flowStateLabel = flowStateLabel
         self.onStartRequested = onStartRequested
         self.onStopRequested = onStopRequested
+        self.persistSpeakers = persistSpeakers
         self.postReply = postReply ?? { reply in
             guard let payload = try? ChromeBridgeCodec.encodeString(reply) else { return }
             DistributedNotificationCenter.default().postNotificationName(
@@ -156,11 +173,90 @@ final class ChromeBridgeCoordinator {
             }
             replyState(to: request.id, enabled: enabled)
 
+        case .speakerActivity:
+            guard enabled else {
+                replyDisabled(to: request.id)
+                return
+            }
+            if isRecordingActive(), let events = request.events, !events.isEmpty {
+                appendSpeakerActivity(events)
+            }
+            replyState(to: request.id, enabled: enabled)
+
         case .launchApp:
             // Host-side concern; if it ever leaks through, answering with
             // state is harmless and keeps the extension's promise resolved.
             replyState(to: request.id, enabled: enabled)
         }
+    }
+
+    // MARK: - Speaker attribution (ADR-029)
+
+    /// Called from the meeting flow's `onRecordingBegan` callback: opens a
+    /// fresh speaker-activity window for this recording and discards spans
+    /// from any prior meeting.
+    func recordingDidStart() {
+        speakerActivityRecordingStartedAt = Date()
+        speakerActivityEvents = []
+    }
+
+    private func appendSpeakerActivity(_ events: [ChromeBridgeSpeakerEvent]) {
+        // A recording that started before the app launched (crash recovery)
+        // or before this coordinator existed has no window; without a start
+        // instant the spans can't be placed on the recording's axis.
+        guard speakerActivityRecordingStartedAt != nil else { return }
+        let headroom = Self.maxSpeakerActivityEvents - speakerActivityEvents.count
+        guard headroom > 0 else { return }
+        speakerActivityEvents.append(contentsOf: events.prefix(headroom))
+    }
+
+    /// Relabels a just-completed meeting transcription's diarized speakers
+    /// with participant names observed by the extension, when the overlap
+    /// evidence is confident (`MeetingSpeakerNameMapper`). Persists through
+    /// `persistSpeakers` (which also refreshes stored segment labels) and
+    /// returns the updated in-memory transcription for immediate
+    /// presentation, or `nil` when nothing changed.
+    ///
+    /// Back-to-back guard: while another recording is already active, its
+    /// window has replaced the completed meeting's window (ADR-015 queues
+    /// transcriptions behind live recordings), so applying would attribute
+    /// the wrong meeting's names — skip instead. The completed meeting keeps
+    /// anonymous labels, which is today's behavior.
+    func applyPendingSpeakerNames(to transcription: Transcription) -> Transcription? {
+        guard transcription.sourceType == .meeting else { return nil }
+        guard !isRecordingActive() else { return nil }
+        guard let startedAt = speakerActivityRecordingStartedAt, !speakerActivityEvents.isEmpty else {
+            return nil
+        }
+        // Harvest exactly once: this meeting is finished with these spans
+        // whether or not the mapper finds a confident match.
+        let events = speakerActivityEvents
+        speakerActivityEvents = []
+        speakerActivityRecordingStartedAt = nil
+
+        guard let speakers = transcription.speakers,
+              let relabeled = MeetingSpeakerNameMapper.relabeledSpeakers(
+                  speakers: speakers,
+                  diarizationSegments: transcription.diarizationSegments ?? [],
+                  events: events,
+                  recordingStartedAt: startedAt
+              )
+        else { return nil }
+
+        do {
+            try persistSpeakers(transcription.id, relabeled)
+        } catch {
+            logger.error("Failed to persist speaker names: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        var updated = transcription
+        updated.speakers = relabeled
+        updated.transcriptSegments = TranscriptSegmentRecord.updatingSpeakerLabels(
+            in: updated.transcriptSegments,
+            using: relabeled
+        )
+        logger.info("Chrome bridge attributed speaker names to meeting transcription")
+        return updated
     }
 
     // MARK: - Replies
