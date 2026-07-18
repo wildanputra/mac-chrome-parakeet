@@ -124,8 +124,25 @@ async function getMeetings() {
   return meetings;
 }
 
-async function setMeetings(meetings) {
-  await chrome.storage.session.set({ meetings });
+// All writes to the meetings map run through one promise chain: concurrent
+// handlers (two tabs reporting, a tab close racing a heartbeat) would
+// otherwise interleave their read→modify→write cycles across awaits and drop
+// updates — in the worst case losing the inCall=false report that auto-stop
+// keys off. `fn` must be synchronous over the passed map; its return value
+// is forwarded to the caller after the write commits.
+let meetingsMutationChain = Promise.resolve();
+function mutateMeetings(fn) {
+  const run = meetingsMutationChain.then(async () => {
+    const meetings = await getMeetings();
+    const result = fn(meetings);
+    await chrome.storage.session.set({ meetings });
+    return result;
+  });
+  meetingsMutationChain = run.then(
+    () => {},
+    () => {}
+  );
+  return run;
 }
 
 async function rememberState(reply) {
@@ -195,6 +212,75 @@ async function launchApp() {
   return state;
 }
 
+// Forward active-speaker spans (ADR-029 speaker attribution) to the app,
+// but only while a recording is actually running — otherwise participant
+// names would leave the page for no benefit. The app applies them to the
+// finished transcript by overlap voting; dropped batches only mean some
+// speakers keep anonymous labels.
+async function forwardSpeakerActivity(events) {
+  const valid = (Array.isArray(events) ? events : [])
+    .filter(
+      (event) =>
+        event &&
+        typeof event.name === "string" &&
+        event.name.trim() !== "" &&
+        Number.isFinite(event.startMs) &&
+        Number.isFinite(event.endMs) &&
+        event.endMs > event.startMs
+    )
+    .slice(0, 200)
+    .map((event) => ({
+      name: event.name.trim().slice(0, 100),
+      startMs: Math.round(event.startMs),
+      endMs: Math.round(event.endMs),
+    }));
+  if (valid.length === 0) return;
+
+  if (!(await isRecordingNow())) return;
+
+  try {
+    await sendNative({ type: "speaker_activity", events: valid });
+  } catch {
+    // App went away mid-recording; later batches will re-probe.
+  }
+}
+
+// The cached state can be stale (it only refreshes on polls/actions);
+// re-probe when old so recordings started from the app still get context.
+async function isRecordingNow() {
+  let { lastState = null } = await getSession({ lastState: null });
+  if (!lastState || Date.now() - lastState.at > 30000) {
+    try {
+      lastState = await fetchState();
+      await updateBadge();
+    } catch {
+      return false; // host/app unreachable
+    }
+  }
+  return !!lastState.recording;
+}
+
+// Forward the page-reported meeting name so a recording that started with a
+// fallback title (manual start, or the page title resolved late) gets the
+// real meeting name at transcription time. The app only ever renames
+// fallback-titled recordings, so re-sends are harmless.
+async function forwardMeetingTitle(title) {
+  const cleaned = String(title || "").trim().slice(0, 120);
+  if (!cleaned) return;
+  const { lastTitleSent = null } = await getSession({ lastTitleSent: null });
+  const now = Date.now();
+  if (lastTitleSent && lastTitleSent.title === cleaned && now - lastTitleSent.at < 60000) {
+    return; // unchanged and recent — don't re-probe state every heartbeat
+  }
+  if (!(await isRecordingNow())) return;
+  try {
+    await sendNative({ type: "meeting_title", title: cleaned });
+    await chrome.storage.session.set({ lastTitleSent: { title: cleaned, at: now } });
+  } catch {
+    // App went away; a later heartbeat retries.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Badge
 // ---------------------------------------------------------------------------
@@ -214,18 +300,16 @@ async function updateBadge() {
   }
 }
 
-async function pruneStaleMeetings() {
-  const meetings = await getMeetings();
-  const now = Date.now();
-  let changed = false;
-  for (const [tabId, meeting] of Object.entries(meetings)) {
-    if (now - meeting.updatedAt > MEETING_REPORT_STALE_MS) {
-      delete meetings[tabId];
-      changed = true;
+function pruneStaleMeetings() {
+  return mutateMeetings((meetings) => {
+    const now = Date.now();
+    for (const [tabId, meeting] of Object.entries(meetings)) {
+      if (now - meeting.updatedAt > MEETING_REPORT_STALE_MS) {
+        delete meetings[tabId];
+      }
     }
-  }
-  if (changed) await setMeetings(meetings);
-  return meetings;
+    return { ...meetings };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -233,21 +317,25 @@ async function pruneStaleMeetings() {
 // ---------------------------------------------------------------------------
 
 async function handleMeetingReport(tabId, report) {
-  const meetings = await getMeetings();
-  const previous = meetings[tabId];
-  const wasInCall = !!(previous && previous.inCall);
-  meetings[tabId] = {
+  const entry = {
     platform: report.platform,
     title: report.title || "",
     inCall: !!report.inCall,
     updatedAt: Date.now(),
   };
-  await setMeetings(meetings);
+  const { wasInCall } = await mutateMeetings((meetings) => {
+    const previous = meetings[tabId];
+    meetings[tabId] = entry;
+    return { wasInCall: !!(previous && previous.inCall) };
+  });
 
   if (!wasInCall && report.inCall) {
-    await onCallJoined(tabId, meetings[tabId]);
+    await onCallJoined(tabId, entry);
   } else if (wasInCall && !report.inCall) {
     await onCallLeft(tabId);
+  }
+  if (report.inCall && report.title) {
+    await forwardMeetingTitle(report.title);
   }
   await updateBadge();
 }
@@ -310,6 +398,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (sender.tab && sender.tab.id != null) {
             await handleMeetingReport(sender.tab.id, message);
           }
+          sendResponse({ ok: true });
+          break;
+        }
+        case "speakerActivity": {
+          await forwardSpeakerActivity(message.events);
           sendResponse({ ok: true });
           break;
         }
@@ -394,14 +487,15 @@ function startFromJoinNotification(notificationId) {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   (async () => {
-    const meetings = await getMeetings();
-    if (meetings[tabId]) {
-      const wasInCall = meetings[tabId].inCall;
+    const { existed, wasInCall } = await mutateMeetings((meetings) => {
+      const entry = meetings[tabId];
+      if (!entry) return { existed: false, wasInCall: false };
       delete meetings[tabId];
-      await setMeetings(meetings);
-      if (wasInCall) await onCallLeft(tabId);
-      await updateBadge();
-    }
+      return { existed: true, wasInCall: entry.inCall };
+    });
+    if (!existed) return;
+    if (wasInCall) await onCallLeft(tabId);
+    await updateBadge();
   })();
 });
 

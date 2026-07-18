@@ -133,8 +133,18 @@ function renderError(error) {
 }
 
 async function refresh() {
-  const status = await send({ kind: "getStatus" });
+  let status;
+  try {
+    status = await send({ kind: "getStatus" });
+  } catch (error) {
+    // sendMessage rejects when the service worker can't be reached (e.g. the
+    // extension was just updated) — without this the popup would sit on
+    // "Checking the bridge…" forever.
+    renderError({ code: "unknown", message: "Could not reach the extension. Close and reopen this popup." });
+    return;
+  }
   if (status && status.ok) render(status);
+  else if (status && status.error) renderError(status.error);
 }
 
 async function act(button, message) {
@@ -146,6 +156,8 @@ async function act(button, message) {
       return;
     }
     await refresh();
+  } catch (error) {
+    renderError({ code: "unknown", message: String((error && error.message) || error) });
   } finally {
     button.disabled = false;
   }

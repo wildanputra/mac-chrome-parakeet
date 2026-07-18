@@ -44,6 +44,32 @@ final class ChromeBridgeProtocolTests: XCTestCase {
         XCTAssertEqual(decoded, request)
     }
 
+    func testDecodesSpeakerActivityRequestWithEvents() throws {
+        let json = """
+            {"v":1,"id":"sa-1","type":"speaker_activity","events":[\
+            {"name":"Alice","startMs":1800000000000,"endMs":1800000004000},\
+            {"name":"Bob","startMs":1800000005000,"endMs":1800000009000}]}
+            """
+        let request = try ChromeBridgeCodec.decodeRequest(payloadString: json)
+
+        XCTAssertEqual(request.type, .speakerActivity)
+        XCTAssertEqual(request.events, [
+            ChromeBridgeSpeakerEvent(name: "Alice", startMs: 1_800_000_000_000, endMs: 1_800_000_004_000),
+            ChromeBridgeSpeakerEvent(name: "Bob", startMs: 1_800_000_005_000, endMs: 1_800_000_009_000),
+        ])
+    }
+
+    func testSpeakerActivityRoundTripsThroughCodec() throws {
+        let request = ChromeBridgeRequest(
+            id: "sa-2",
+            type: .speakerActivity,
+            events: [ChromeBridgeSpeakerEvent(name: "Dana", startMs: 10, endMs: 5_010)]
+        )
+        let decoded = try ChromeBridgeCodec.decodeRequest(try ChromeBridgeCodec.encode(request))
+
+        XCTAssertEqual(decoded, request)
+    }
+
     // MARK: - Reply codec
 
     func testStateReplyEncodesWireFieldNames() throws {

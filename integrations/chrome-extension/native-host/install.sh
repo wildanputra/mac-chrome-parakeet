@@ -56,23 +56,56 @@ if [ "${1:-}" = "--uninstall" ]; then
   exit 0
 fi
 
-# --- Locate macparakeet-cli --------------------------------------------------
+# --- Locate a bridge-capable macparakeet-cli ---------------------------------
+#
+# Candidate order matters for from-source users: released Homebrew/app-bundle
+# binaries predate the bridge, so a repo-local `swift build` output (this
+# script lives inside the repo) is preferred over PATH. Every candidate is
+# verified to actually support `chrome-native-host`; unsupported ones are
+# skipped with a note instead of aborting the walk.
 
-CLI="${1:-}"
-if [ -z "$CLI" ]; then
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+supports_bridge() {
+  [ -n "$1" ] && [ -x "$1" ] && "$1" chrome-native-host --help >/dev/null 2>&1
+}
+
+cli_version() {
+  "$1" --version 2>/dev/null || echo "unknown version"
+}
+
+CLI=""
+if [ -n "${1:-}" ]; then
+  # An explicit path is a promise — verify it, but never silently substitute.
+  supports_bridge "$1" || fail "$1 does not support 'chrome-native-host'. Build the CLI from this branch: swift build -c release --product macparakeet-cli (binary: .build/release/macparakeet-cli)"
+  CLI="$1"
+else
+  candidates=(
+    "$REPO_ROOT/.build/release/macparakeet-cli"
+    "$REPO_ROOT/.build/debug/macparakeet-cli"
+  )
   if command -v macparakeet-cli >/dev/null 2>&1; then
-    CLI="$(command -v macparakeet-cli)"
-  elif [ -x "/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli" ]; then
-    CLI="/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli"
-  else
-    fail "macparakeet-cli not found. Install it (brew install moona3k/tap/macparakeet-cli) or pass its path: ./install.sh /path/to/macparakeet-cli"
+    candidates+=("$(command -v macparakeet-cli)")
+  fi
+  candidates+=("/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli")
+
+  for candidate in "${candidates[@]}"; do
+    [ -x "$candidate" ] || continue
+    if supports_bridge "$candidate"; then
+      CLI="$candidate"
+      break
+    fi
+    log "skipping $candidate ($(cli_version "$candidate")): no chrome-native-host support (built before this feature)"
+  done
+  if [ -z "$CLI" ]; then
+    fail "no bridge-capable macparakeet-cli found. Build it from this checkout:
+    cd $REPO_ROOT && swift build -c release --product macparakeet-cli
+  (binary lands at .build/release/macparakeet-cli — this script will find it),
+  or pass a path explicitly: ./install.sh /path/to/macparakeet-cli"
   fi
 fi
-[ -x "$CLI" ] || fail "$CLI is not executable"
-
-if ! "$CLI" chrome-native-host --help >/dev/null 2>&1; then
-  fail "$CLI does not support 'chrome-native-host' — update macparakeet-cli and retry"
-fi
+log "using $CLI ($(cli_version "$CLI"))"
 
 # --- Wrapper (manifests cannot pass argv) ------------------------------------
 
@@ -116,8 +149,14 @@ done
 log "enabled the chrome-extension bridge preference"
 
 log ""
-log "Done. Next steps:"
+log "Done. The host wrapper pins this exact CLI path:"
+log "  $CLI"
+log "Re-run this script after cleaning or moving .build/, or after switching"
+log "to a different macparakeet-cli install."
+log ""
+log "Next steps:"
 log "  1. Open chrome://extensions, enable Developer mode, and Load unpacked"
-log "     from: $(cd "$(dirname "$0")/.." && pwd)"
+log "     from: $SCRIPT_DIR/.."
 log "  2. Restart the browser so it picks up the new native messaging host."
-log "  3. Open MacParakeet, join a meeting, and click the parakeet icon."
+log "  3. Run the MacParakeet app FROM THIS SAME BRANCH (released builds have"
+log "     no bridge listener), join a meeting, and click the parakeet icon."

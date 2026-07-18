@@ -16,6 +16,8 @@ final class ChromeBridgeCoordinatorTests: XCTestCase {
         var startedTitles: [String?] = []
         var stopCount = 0
         var replies: [ChromeBridgeReply] = []
+        var persistedSpeakers: [(id: UUID, speakers: [SpeakerInfo])] = []
+        var persistedTitles: [(id: UUID, title: String)] = []
     }
 
     private func makeCoordinator(_ harness: Harness) -> ChromeBridgeCoordinator {
@@ -36,6 +38,12 @@ final class ChromeBridgeCoordinatorTests: XCTestCase {
                 harness.recordingActive = false
                 harness.flowState = "stopping"
                 return true
+            },
+            persistSpeakers: { id, speakers in
+                harness.persistedSpeakers.append((id: id, speakers: speakers))
+            },
+            persistTitle: { id, title in
+                harness.persistedTitles.append((id: id, title: title))
             },
             postReply: { harness.replies.append($0) }
         )
@@ -179,5 +187,217 @@ final class ChromeBridgeCoordinatorTests: XCTestCase {
         XCTAssertTrue(harness.replies.isEmpty)
         XCTAssertTrue(harness.startedTitles.isEmpty)
         XCTAssertEqual(harness.stopCount, 0)
+    }
+
+    // MARK: - Speaker attribution (ADR-029)
+
+    private func meetingTranscription(id: UUID = UUID()) -> Transcription {
+        Transcription(
+            id: id,
+            fileName: "Weekly sync",
+            speakers: [
+                SpeakerInfo(id: "microphone", label: "Me"),
+                SpeakerInfo(id: "system:S1", label: "Speaker 1"),
+            ],
+            diarizationSegments: [
+                DiarizationSegmentRecord(speakerId: "system:S1", startMs: 0, endMs: 10_000)
+            ],
+            transcriptSegments: [
+                TranscriptSegmentRecord(
+                    startMs: 0,
+                    endMs: 10_000,
+                    speakerId: "system:S1",
+                    speakerLabel: "Speaker 1",
+                    text: "Hello from the browser",
+                    wordRange: TranscriptSegmentWordRange(startIndex: 0, endIndexExclusive: 4)
+                )
+            ],
+            status: .completed,
+            sourceType: .meeting
+        )
+    }
+
+    func testSpeakerActivityCollectedDuringRecordingAndAppliedOnCompletion() throws {
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        harness.recordingActive = true
+        coordinator.recordingDidStart()
+
+        // recordingDidStart() captured the real wall clock, so the event's
+        // wall-clock span [now, now+10s] lands on the transcription's
+        // [0, 10_000] diarization segment (± a few ms of test execution).
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let payload = try ChromeBridgeCodec.encodeString(ChromeBridgeRequest(
+            id: "sa1",
+            type: .speakerActivity,
+            events: [ChromeBridgeSpeakerEvent(name: "Dana", startMs: nowMs, endMs: nowMs + 10_000)]
+        ))
+        coordinator.handleCommand(payloadString: payload)
+        XCTAssertEqual(harness.replies.last?.type, .state)
+
+        harness.recordingActive = false
+        let transcription = meetingTranscription()
+        let updated = try XCTUnwrap(coordinator.applyPendingBrowserMeetingContext(to: transcription))
+
+        XCTAssertEqual(updated.speakers?.first { $0.id == "system:S1" }?.label, "Dana")
+        XCTAssertEqual(updated.transcriptSegments?.first?.speakerLabel, "Dana")
+        XCTAssertEqual(harness.persistedSpeakers.count, 1)
+        XCTAssertEqual(harness.persistedSpeakers.first?.id, transcription.id)
+
+        // Harvest is one-shot: a second completion finds nothing.
+        XCTAssertNil(coordinator.applyPendingBrowserMeetingContext(to: transcription))
+    }
+
+    func testSpeakerActivityIgnoredWhileNotRecording() throws {
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        coordinator.recordingDidStart()
+        harness.recordingActive = false
+
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let payload = try ChromeBridgeCodec.encodeString(ChromeBridgeRequest(
+            id: "sa2",
+            type: .speakerActivity,
+            events: [ChromeBridgeSpeakerEvent(name: "Dana", startMs: nowMs, endMs: nowMs + 10_000)]
+        ))
+        coordinator.handleCommand(payloadString: payload)
+
+        XCTAssertEqual(harness.replies.last?.type, .state)
+        XCTAssertNil(coordinator.applyPendingBrowserMeetingContext(to: meetingTranscription()))
+        XCTAssertTrue(harness.persistedSpeakers.isEmpty)
+    }
+
+    func testApplySkipsWhileAnotherRecordingIsActive() throws {
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        harness.recordingActive = true
+        coordinator.recordingDidStart()
+
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let payload = try ChromeBridgeCodec.encodeString(ChromeBridgeRequest(
+            id: "sa3",
+            type: .speakerActivity,
+            events: [ChromeBridgeSpeakerEvent(name: "Dana", startMs: nowMs, endMs: nowMs + 10_000)]
+        ))
+        coordinator.handleCommand(payloadString: payload)
+
+        // A back-to-back recording is still active when the earlier meeting's
+        // transcription completes — the events belong to the live recording,
+        // so nothing may be applied.
+        XCTAssertNil(coordinator.applyPendingBrowserMeetingContext(to: meetingTranscription()))
+        XCTAssertTrue(harness.persistedSpeakers.isEmpty)
+    }
+
+    func testApplySkipsNonMeetingTranscriptions() throws {
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        harness.recordingActive = true
+        coordinator.recordingDidStart()
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let payload = try ChromeBridgeCodec.encodeString(ChromeBridgeRequest(
+            id: "sa4",
+            type: .speakerActivity,
+            events: [ChromeBridgeSpeakerEvent(name: "Dana", startMs: nowMs, endMs: nowMs + 10_000)]
+        ))
+        coordinator.handleCommand(payloadString: payload)
+        harness.recordingActive = false
+
+        var fileTranscription = meetingTranscription()
+        fileTranscription.sourceType = .file
+        XCTAssertNil(coordinator.applyPendingBrowserMeetingContext(to: fileTranscription))
+        // Events survive a non-meeting completion — the meeting harvest can
+        // still happen afterwards.
+        XCTAssertNotNil(coordinator.applyPendingBrowserMeetingContext(to: meetingTranscription()))
+    }
+
+    // MARK: - Meeting-name title enrichment (ADR-029 §6)
+
+    private func sendMeetingTitle(_ title: String, to coordinator: ChromeBridgeCoordinator) throws {
+        coordinator.handleCommand(payloadString: try request(.meetingTitle, id: "mt", title: title))
+    }
+
+    func testFallbackTitleIsRenamedFromMeetingName() throws {
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        harness.recordingActive = true
+        coordinator.recordingDidStart()
+        try sendMeetingTitle("Quarterly planning", to: coordinator)
+        harness.recordingActive = false
+
+        var transcription = meetingTranscription()
+        transcription.fileName = "Meeting Jun 17, 2026 at 09:59"
+        let updated = try XCTUnwrap(coordinator.applyPendingBrowserMeetingContext(to: transcription))
+
+        XCTAssertEqual(updated.fileName, "Quarterly planning")
+        XCTAssertEqual(harness.persistedTitles.first?.id, transcription.id)
+        XCTAssertEqual(harness.persistedTitles.first?.title, "Quarterly planning")
+    }
+
+    func testPlatformLabelTitleIsUpgradedToRealMeetingName() throws {
+        // A bridge start before the page title resolved names the recording
+        // "Google Meet"; the later hint should upgrade it.
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        harness.recordingActive = true
+        coordinator.recordingDidStart()
+        try sendMeetingTitle("Design review", to: coordinator)
+        harness.recordingActive = false
+
+        var transcription = meetingTranscription()
+        transcription.fileName = "Google Meet"
+        let updated = try XCTUnwrap(coordinator.applyPendingBrowserMeetingContext(to: transcription))
+
+        XCTAssertEqual(updated.fileName, "Design review")
+    }
+
+    func testRealTitleIsNeverOverwritten() throws {
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        harness.recordingActive = true
+        coordinator.recordingDidStart()
+        try sendMeetingTitle("Some other meeting", to: coordinator)
+        harness.recordingActive = false
+
+        // "Weekly sync" is a real (calendar/user/LLM) title — must survive.
+        XCTAssertNil(coordinator.applyPendingBrowserMeetingContext(to: meetingTranscription()))
+        XCTAssertTrue(harness.persistedTitles.isEmpty)
+    }
+
+    func testTitleHintIgnoredWhileNotRecording() throws {
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        coordinator.recordingDidStart()
+        harness.recordingActive = false
+        try sendMeetingTitle("Quarterly planning", to: coordinator)
+
+        var transcription = meetingTranscription()
+        transcription.fileName = "Meeting Jun 17, 2026 at 09:59"
+        XCTAssertNil(coordinator.applyPendingBrowserMeetingContext(to: transcription))
+        XCTAssertTrue(harness.persistedTitles.isEmpty)
+    }
+
+    func testTitleAndSpeakersApplyTogether() throws {
+        let harness = Harness()
+        let coordinator = makeCoordinator(harness)
+        harness.recordingActive = true
+        coordinator.recordingDidStart()
+        try sendMeetingTitle("Quarterly planning", to: coordinator)
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let payload = try ChromeBridgeCodec.encodeString(ChromeBridgeRequest(
+            id: "mt-sa",
+            type: .speakerActivity,
+            events: [ChromeBridgeSpeakerEvent(name: "Dana", startMs: nowMs, endMs: nowMs + 10_000)]
+        ))
+        coordinator.handleCommand(payloadString: payload)
+        harness.recordingActive = false
+
+        var transcription = meetingTranscription()
+        transcription.fileName = "Meeting Jun 17, 2026 at 09:59"
+        let updated = try XCTUnwrap(coordinator.applyPendingBrowserMeetingContext(to: transcription))
+
+        XCTAssertEqual(updated.fileName, "Quarterly planning")
+        XCTAssertEqual(updated.speakers?.first { $0.id == "system:S1" }?.label, "Dana")
+        XCTAssertEqual(harness.persistedTitles.count, 1)
+        XCTAssertEqual(harness.persistedSpeakers.count, 1)
     }
 }

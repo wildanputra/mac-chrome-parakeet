@@ -16,8 +16,31 @@
 (() => {
   const POLL_INTERVAL_MS = 2000;
   const HEARTBEAT_MS = 5000; // unchanged-state report cadence; SW prunes at 20s
+  const SPEAKER_POLL_MS = 1000; // active-speaker sampling while in a call
+  const SPEAKER_FLUSH_MS = 5000; // batch cadence for closed speaking spans
+  const MAX_OPEN_SPAN_MS = 15000; // split long monologues so data flows live
 
   const host = location.host;
+
+  // Strips decorations meeting pages attach to participant names
+  // ("Alice (Host)", "Bob is speaking", trailing device/mute hints on the
+  // next line). Returns "" when the result doesn't look like a name.
+  function cleanName(raw) {
+    if (!raw) return "";
+    let name = String(raw).split("\n")[0].trim();
+    name = name.replace(/\s*is speaking.*$/i, "");
+    name = name.replace(/\s*\((you|me|host|co-host|presenter|guest|organizer)\)\s*$/i, "");
+    name = name.trim();
+    if (!name || name.length > 60) return "";
+    return name;
+  }
+
+  // Shared fallback: walk up from a speaking indicator to the nearest
+  // labeled ancestor and clean its aria-label into a name.
+  function nameFromContext(el) {
+    const labeled = el.closest("[aria-label]");
+    return labeled ? cleanName(labeled.getAttribute("aria-label")) : "";
+  }
 
   /** @type {{platform: string, isInCall: () => boolean, title: () => string} | null} */
   const platform = detectPlatform();
@@ -47,6 +70,23 @@
             .trim();
           return cleaned === "Google Meet" || cleaned === "Meet" ? "" : cleaned;
         },
+        activeSpeakers() {
+          const names = new Set();
+          for (const tile of document.querySelectorAll("[data-participant-id]")) {
+            const speaking = tile.querySelector(
+              "[class*='speaking' i], [data-is-speaking='true'], [aria-label*='is speaking' i]"
+            );
+            if (!speaking) continue;
+            const name =
+              cleanName(tile.getAttribute("data-participant-name")) ||
+              cleanName(tile.getAttribute("data-self-name")) ||
+              cleanName(tile.querySelector("[data-self-name]")?.getAttribute("data-self-name")) ||
+              cleanName(tile.querySelector(".notranslate")?.textContent) ||
+              nameFromContext(speaking);
+            if (name) names.add(name);
+          }
+          return [...names];
+        },
       };
     }
     if (host.endsWith(".zoom.us") && location.pathname.startsWith("/wc/")) {
@@ -60,6 +100,19 @@
         title() {
           const cleaned = document.title.replace(/\s*[–—-]\s*Zoom\s*$/i, "").trim();
           return cleaned === "Zoom" ? "" : cleaned;
+        },
+        activeSpeakers() {
+          const names = new Set();
+          const indicators = document.querySelectorAll(
+            "[class*='is-speaking' i], [class*='speaking-active' i], [class*='active-speaker' i]"
+          );
+          for (const indicator of indicators) {
+            const container = indicator.closest("[class*='video-avatar' i], [class*='participant' i]") || indicator;
+            const nameEl = container.querySelector("[class*='name' i]");
+            const name = cleanName(nameEl ? nameEl.textContent : "") || nameFromContext(indicator);
+            if (name) names.add(name);
+          }
+          return [...names];
         },
       };
     }
@@ -78,6 +131,21 @@
             .trim();
           return cleaned === "Microsoft Teams" || cleaned === "Calendar" || cleaned === "Chat" ? "" : cleaned;
         },
+        activeSpeakers() {
+          const names = new Set();
+          const indicators = document.querySelectorAll(
+            "[data-tid*='speaking' i], [class*='is-speaking' i], [class*='speaking-indicator' i], [aria-label*='is speaking' i]"
+          );
+          for (const indicator of indicators) {
+            const tile = indicator.closest("[data-tid*='participant' i], [data-cid*='participant' i]");
+            const name =
+              cleanName(tile ? tile.getAttribute("aria-label") : "") ||
+              cleanName(tile ? tile.querySelector("[class*='name' i]")?.textContent : "") ||
+              nameFromContext(indicator);
+            if (name) names.add(name);
+          }
+          return [...names];
+        },
       };
     }
     if (host.endsWith(".webex.com")) {
@@ -91,6 +159,11 @@
         title() {
           const cleaned = document.title.replace(/\s*[–—-]\s*(Cisco\s+)?Webex.*$/i, "").trim();
           return cleaned === "Webex" ? "" : cleaned;
+        },
+        activeSpeakers() {
+          // Webex active-speaker markup is too volatile to chase in v1; the
+          // recording still works, transcripts just keep anonymous labels.
+          return [];
         },
       };
     }
@@ -132,9 +205,78 @@
   evaluateAndReport();
   setInterval(evaluateAndReport, POLL_INTERVAL_MS);
 
+  // --- Active-speaker tracking (ADR-029 speaker attribution) ---------------
+  //
+  // While in a call, sample which participant tiles are marked as speaking
+  // and turn the samples into named time spans (wall-clock epoch ms). Spans
+  // are batched to the service worker, which forwards them to the app only
+  // while a MacParakeet recording is running. Selector misses degrade to "no
+  // spans", which leaves transcripts with today's anonymous speaker labels.
+
+  const openSpans = new Map(); // name -> span start (epoch ms)
+  let closedSpans = [];
+  let lastSpeakerFlushAt = 0;
+
+  function sampleActiveSpeakers() {
+    const now = Date.now();
+    let names = [];
+    if (lastInCall) {
+      try {
+        names = platform.activeSpeakers() || [];
+      } catch {
+        names = [];
+      }
+    }
+    const speaking = new Set(names);
+
+    for (const [name, startMs] of openSpans) {
+      if (!speaking.has(name)) {
+        closedSpans.push({ name, startMs, endMs: now });
+        openSpans.delete(name);
+      } else if (now - startMs >= MAX_OPEN_SPAN_MS) {
+        // Split long monologues so spans reach the app during the call, not
+        // only after the speaker finally pauses.
+        closedSpans.push({ name, startMs, endMs: now });
+        openSpans.set(name, now);
+      }
+    }
+    for (const name of speaking) {
+      if (!openSpans.has(name)) openSpans.set(name, now);
+    }
+
+    if (now - lastSpeakerFlushAt >= SPEAKER_FLUSH_MS) {
+      flushSpeakerSpans();
+    }
+  }
+
+  function flushSpeakerSpans() {
+    lastSpeakerFlushAt = Date.now();
+    if (closedSpans.length === 0) return;
+    const events = closedSpans;
+    closedSpans = [];
+    try {
+      chrome.runtime.sendMessage(
+        { kind: "speakerActivity", events },
+        () => void chrome.runtime.lastError
+      );
+    } catch {
+      // Extension reloaded — drop the batch.
+    }
+  }
+
+  setInterval(sampleActiveSpeakers, SPEAKER_POLL_MS);
+
   // Leaving the page (navigation or close) while in a call: try to flag the
   // call as ended so auto-stop doesn't wait for the 20s staleness prune.
   addEventListener("pagehide", () => {
+    // Close and flush any speaking spans first so the tail of the meeting
+    // still reaches the app.
+    const now = Date.now();
+    for (const [name, startMs] of openSpans) {
+      closedSpans.push({ name, startMs, endMs: now });
+    }
+    openSpans.clear();
+    flushSpeakerSpans();
     if (!lastInCall) return;
     try {
       chrome.runtime.sendMessage(

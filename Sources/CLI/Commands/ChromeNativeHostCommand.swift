@@ -86,10 +86,7 @@ final class ChromeNativeHost: @unchecked Sendable {
 
         if Thread.isMainThread {
             while !isShutdownRequested() {
-                _ = RunLoop.current.run(
-                    mode: .default,
-                    before: Date(timeIntervalSinceNow: Self.shutdownPollSeconds)
-                )
+                pumpRunLoopOnce()
             }
         } else {
             while !isShutdownRequested() {
@@ -99,6 +96,20 @@ final class ChromeNativeHost: @unchecked Sendable {
         // Drain hostQueue so a reply that raced shutdown still reaches Chrome
         // (best effort — Chrome may already have closed the pipe).
         hostQueue.sync {}
+    }
+
+    /// Pump the current thread's run loop for one shutdown-poll interval.
+    /// `run(mode:before:)` returns `false` *immediately* when the run loop has
+    /// no attached sources or timers — on macOS versions where distributed
+    /// delivery does not schedule a source on this particular thread, a bare
+    /// pump loop would busy-spin at 100% CPU. Sleeping out the remainder of
+    /// the interval bounds the loop to ~4 wakes/second either way.
+    private func pumpRunLoopOnce() {
+        let deadline = Date(timeIntervalSinceNow: Self.shutdownPollSeconds)
+        let processed = RunLoop.current.run(mode: .default, before: deadline)
+        if !processed {
+            Thread.sleep(forTimeInterval: Self.shutdownPollSeconds)
+        }
     }
 
     // MARK: - Shutdown flag
@@ -134,10 +145,7 @@ final class ChromeNativeHost: @unchecked Sendable {
                 self?.handleAppReply(payloadString)
             }
             while !self.isShutdownRequested() {
-                _ = RunLoop.current.run(
-                    mode: .default,
-                    before: Date(timeIntervalSinceNow: Self.shutdownPollSeconds)
-                )
+                self.pumpRunLoopOnce()
             }
             DistributedNotificationCenter.default().removeObserver(observer)
         }
@@ -200,7 +208,7 @@ final class ChromeNativeHost: @unchecked Sendable {
         switch request.type {
         case .launchApp:
             launchAppAndProbe(request)
-        case .hello, .getState, .startRecording, .stopRecording:
+        case .hello, .getState, .startRecording, .stopRecording, .speakerActivity, .meetingTitle:
             relayToApp(request)
         }
     }
